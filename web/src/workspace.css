@@ -1311,7 +1311,10 @@ progress::-moz-progress-bar {
     height: calc(66px + env(safe-area-inset-bottom));
     padding: 7px 8px calc(7px + env(safe-area-inset-bottom));
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: none;
+    grid-template-rows: minmax(0, 1fr);
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
     background: rgb(var(--card));
     border-right: none;
     border-top: 1px solid rgb(var(--border));
@@ -1559,3 +1562,22 @@ progress::-moz-progress-bar {
 .setting-action { flex-wrap: wrap; }
 .setting-action > div { min-width: 0; flex: 1 1 220px; }
 .button, .ios-btn-primary, .ios-btn-secondary { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+
+@media (max-width: 650px) {
+  .sidebar .primary-navigation button,
+  .sidebar .sidebar-utility {
+    min-width: 0;
+    height: 100%;
+    overflow: hidden;
+    font-size: 8px;
+    line-height: 1.25;
+  }
+  .sidebar .primary-navigation button > span,
+  .sidebar .sidebar-utility > span {
+    display: block;
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
