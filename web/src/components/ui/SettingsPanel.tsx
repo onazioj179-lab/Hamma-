@@ -131,14 +131,6 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
               </p>
             </div>
             <SettingSwitch
-              label="Local performance learning"
-              description="Learn typical throughput and size savings from completed compressions. Only aggregate sizes and times are kept on this browser. No file names, contents, or network uploads."
-              checked={privacyChoice === 'learning'}
-              onChange={(enabled) =>
-                setPrivacyChoice(enabled ? 'learning' : 'essential')
-              }
-            />
-            <SettingSwitch
               label="Remember SPK history"
               description="Keep the last 20 completed operation records, including file names, on this browser. Turning this off stops new records; existing records can be cleared in Storage."
               checked={rememberHistory}
@@ -151,8 +143,7 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
               <p>
                 A temporary session cookie protects local processing jobs.
                 Essential browser storage remembers appearance, download
-                preferences, and your privacy choice. History and optional
-                learning have separate controls.
+                preferences, and your privacy choice. History has separate retention controls.
               </p>
             </div>
             <button
@@ -189,16 +180,6 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
                 setMessage(
                   'History cleared. Downloaded files were not changed.',
                 );
-              }}
-            />
-            <SettingAction
-              title="Local learning"
-              description={`${learning.samples} observations. Aggregate measurements only.`}
-              label="Reset learning"
-              disabled={!learning.samples}
-              onClick={() => {
-                clearLearning();
-                setMessage('Local learning data cleared.');
               }}
             />
             <SettingAction

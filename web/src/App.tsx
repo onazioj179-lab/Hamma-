@@ -28,9 +28,7 @@ import { UniversalWorkspace } from './components/workspace/UniversalWorkspace';
 type View = 'process' | 'compress' | 'files' | 'history' | 'overview' | 'settings';
 const navigation = [
   { key: 'process', label: 'Workspace', icon: LayoutGrid },
-  { key: 'compress', label: 'SPK archives', icon: FileArchive },
-  { key: 'files', label: 'My files', icon: FolderOpen },
-  { key: 'history', label: 'History', icon: History },
+  { key: 'files', label: 'Files & History', icon: FolderOpen },
   { key: 'overview', label: 'Overview', icon: Files },
 ] as const;
 
@@ -45,6 +43,7 @@ export default function App() {
   const inputRef = useRef<HTMLInputElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const [announcement, setAnnouncement] = useState('');
+  const [termsAccepted, setTermsAccepted] = useState(() => localStorage.getItem('hamma-terms-v1') === 'accepted');
   const openSettings = (next: SettingsSection) => {
     setSection(next);
     setView('settings');
@@ -139,10 +138,10 @@ export default function App() {
             >
               <Icon size={17} strokeWidth={1.7} />
               <span>{label}</span>
-              {key === 'history' && recent.length > 0 && (
+              {key === 'files' && recent.length > 0 && (
                 <small>{recent.length}</small>
               )}
-              {key === 'compress' && isProcessing && (
+              {key === 'process' && isProcessing && (
                 <span className="running-dot" />
               )}
             </button>
@@ -198,15 +197,16 @@ export default function App() {
           </span>
         </header>
         <main
+          {...(!termsAccepted && view !== 'settings' ? { inert: '' } : {})}
           id="workspace-main"
           ref={mainRef}
           tabIndex={-1}
           className="workspace-main"
         >
           <UniversalWorkspace
-            visible={view === 'process' || view === 'files' || view === 'history'}
-            screen={view === 'history' ? 'history' : view === 'files' ? 'files' : 'workspace'}
-            onHistory={() => setView('history')}
+            visible={view === 'process' || view === 'compress' || view === 'files' || view === 'history'}
+            screen={view === 'history' || view === 'files' ? 'history' : 'workspace'}
+            onHistory={() => setView('files')}
           />
           {!workerReady ? (
             <section hidden={view !== 'compress'} className="splash-screen" role="status">
@@ -220,12 +220,13 @@ export default function App() {
             </section>
           ) : (
             <>
-              {view === 'compress' && (
+              {(view === 'process' || view === 'compress') && (
+                <details className="spk-tools" open={view === 'compress'}><summary>SPK tools</summary>
                 <CompressionWorkspace
                   controller={controller}
                   onSelect={selectFiles}
-                  onHistory={() => setView('history')}
-                />
+                  onHistory={() => setView('files')}
+                /></details>
               )}
               {view === 'history' && <details className="processing-options"><summary>SPK history</summary><ActivityHistory /></details>}
               {view === 'files' && (
@@ -271,44 +272,7 @@ export default function App() {
           void selectFiles(files);
         }}
       />
-      {privacyChoice === null && workerReady && (
-        <aside className="privacy-banner" aria-label="Privacy choices">
-          <span className="privacy-symbol">
-            <ShieldCheck size={19} />
-          </span>
-          <div>
-            <strong>Your files. Your choice.</strong>
-            <p>
-              No tracking or third-party uploads. Allow optional local learning of
-              sizes and times, or keep essential settings only.
-            </p>
-          </div>
-          <div className="button-row">
-            <button
-              className="button secondary"
-              onClick={() => {
-                setPrivacyChoice('essential');
-                setAnnouncement(
-                  'Essential settings only. Local learning is off.',
-                );
-              }}
-            >
-              Essential only
-            </button>
-            <button
-              className="button primary"
-              onClick={() => {
-                setPrivacyChoice('learning');
-                setAnnouncement(
-                  'Local performance learning enabled. Nothing is uploaded.',
-                );
-              }}
-            >
-              Allow local learning
-            </button>
-          </div>
-        </aside>
-      )}
+      {!termsAccepted && <aside className="privacy-banner" aria-label="First use agreement"><div><strong>Before you begin</strong><p>Files are processed on this device. Temporary files and job metadata are retained until expiry. No file contents or usage data are sent to us.</p><a href="#" onClick={event => { event.preventDefault(); openSettings('privacy'); }}>Privacy & terms</a></div><button className="button primary" onClick={() => { localStorage.setItem('hamma-terms-v1', 'accepted'); setTermsAccepted(true); setPrivacyChoice('essential'); }}>Agree & continue</button></aside>}
       <span className="sr-only" role="status">
         {announcement}
       </span>
