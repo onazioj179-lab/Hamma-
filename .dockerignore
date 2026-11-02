@@ -1,0 +1,14 @@
+.git
+**/.git
+.worktrees
+**/.worktrees
+node_modules
+**/node_modules
+target
+**/target
+.hamma-data
+.env*
+**/__pycache__
+web/dist
+validation
+.conda

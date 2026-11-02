@@ -28,6 +28,7 @@ export default defineConfig({
     open: false,
     cors: true,
     proxy: {
+      '/api/process': { target: 'http://127.0.0.1:5010', changeOrigin: false },
       '/api': { target: process.env.SPK_API_TARGET || 'http://127.0.0.1:3000', changeOrigin: true },
     },
     headers: {

@@ -48,3 +48,4 @@ buildlogs/
 *.tsbuildinfo
 /mobile-web/assets/zip.js
 /validation/fixtures/
+/.hamma-data/

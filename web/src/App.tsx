@@ -23,12 +23,14 @@ import { ActivityHistory } from './components/files/ActivityHistory';
 import { CompressionWorkspace } from './components/workspace/CompressionWorkspace';
 import { LocalFiles } from './components/workspace/LocalFiles';
 import { LocalOverview } from './components/workspace/LocalOverview';
+import { UniversalWorkspace } from './components/workspace/UniversalWorkspace';
 
-type View = 'compress' | 'files' | 'history' | 'overview' | 'settings';
+const remoteServer = !['localhost', '127.0.0.1', '::1'].includes(location.hostname);
+
+type View = 'process' | 'compress' | 'files' | 'history' | 'overview' | 'settings';
 const navigation = [
-  { key: 'compress', label: 'Workspace', icon: LayoutGrid },
-  { key: 'files', label: 'My files', icon: FolderOpen },
-  { key: 'history', label: 'History', icon: History },
+  { key: 'process', label: 'Workspace', icon: LayoutGrid },
+  { key: 'files', label: 'Files & History', icon: FolderOpen },
   { key: 'overview', label: 'Overview', icon: Files },
 ] as const;
 
@@ -38,11 +40,13 @@ export default function App() {
     controller;
   const recent = useAppStore((state) => state.recentArchives);
   const { privacyChoice, setPrivacyChoice } = usePreferences();
-  const [view, setView] = useState<View>('compress');
+  const [view, setView] = useState<View>('process');
+  useEffect(() => { if (privacyChoice === 'learning') setPrivacyChoice('essential'); }, [privacyChoice, setPrivacyChoice]);
   const [section, setSection] = useState<SettingsSection>('general');
   const inputRef = useRef<HTMLInputElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const [announcement, setAnnouncement] = useState('');
+  const [termsAccepted, setTermsAccepted] = useState(() => localStorage.getItem('hamma-terms-v1') === 'accepted');
   const openSettings = (next: SettingsSection) => {
     setSection(next);
     setView('settings');
@@ -78,11 +82,12 @@ export default function App() {
       if (
         (event.ctrlKey || event.metaKey) &&
         event.key.toLowerCase() === 'o' &&
-        workerReady &&
+        (view === 'process' || workerReady) &&
         !isProcessing
       ) {
         event.preventDefault();
-        inputRef.current?.click();
+        if (view === 'process') document.querySelector<HTMLInputElement>('input[aria-label="Add files to queue"]')?.click();
+        else inputRef.current?.click();
       }
       if (event.key === 'Escape' && isProcessing) {
         event.preventDefault();
@@ -99,7 +104,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [workerReady, isProcessing, result, cancel, download]);
+  }, [view, workerReady, isProcessing, result, cancel, download]);
 
   const selectedTitle =
     view === 'settings'
@@ -115,7 +120,7 @@ export default function App() {
       <aside className="sidebar" aria-label="Application sidebar">
         <button
           className="brand"
-          onClick={() => setView('compress')}
+          onClick={() => setView('process')}
           aria-label="HAMMA workspace"
         >
           <span className="brand-symbol">
@@ -136,10 +141,10 @@ export default function App() {
             >
               <Icon size={17} strokeWidth={1.7} />
               <span>{label}</span>
-              {key === 'history' && recent.length > 0 && (
+              {key === 'files' && recent.length > 0 && (
                 <small>{recent.length}</small>
               )}
-              {key === 'compress' && isProcessing && (
+              {key === 'process' && isProcessing && (
                 <span className="running-dot" />
               )}
             </button>
@@ -149,7 +154,7 @@ export default function App() {
           <div className="local-note">
             <ShieldCheck size={17} />
             <span>
-              <strong>Yours. On your device.</strong>
+              <strong>{remoteServer ? 'Private server session' : 'Yours. On your device.'}</strong>
               <small>Free, with no account needed.</small>
             </span>
           </div>
@@ -186,7 +191,7 @@ export default function App() {
             <span
               className={workerReady ? 'status-dot' : 'status-dot pending'}
             />
-            {isProcessing
+            {view !== 'compress' ? (remoteServer ? 'Wi-Fi server' : 'On this device') : isProcessing
               ? 'Processing locally'
               : workerReady
                 ? 'Local engine ready'
@@ -195,13 +200,19 @@ export default function App() {
           </span>
         </header>
         <main
+          {...(!termsAccepted && view !== 'settings' ? { inert: '' } : {})}
           id="workspace-main"
           ref={mainRef}
           tabIndex={-1}
           className="workspace-main"
         >
+          <UniversalWorkspace
+            visible={view === 'process' || view === 'compress' || view === 'files' || view === 'history'}
+            screen={view === 'history' || view === 'files' ? 'history' : 'workspace'}
+            onHistory={() => setView('files')}
+          />
           {!workerReady ? (
-            <section className="splash-screen" role="status">
+            <section hidden={view !== 'compress'} className="splash-screen" role="status">
               <span className="splash-symbol">
                 <FileArchive size={26} />
               </span>
@@ -212,19 +223,22 @@ export default function App() {
             </section>
           ) : (
             <>
-              {view === 'compress' && (
+              {(view === 'process' || view === 'compress') && (
+                <details className="spk-tools" open={view === 'compress'}><summary>SPK tools</summary>
                 <CompressionWorkspace
                   controller={controller}
                   onSelect={selectFiles}
-                  onHistory={() => setView('history')}
-                />
+                  onHistory={() => setView('files')}
+                /></details>
               )}
-              {view === 'history' && <ActivityHistory />}
+              {view === 'history' && <details className="processing-options"><summary>SPK history</summary><ActivityHistory /></details>}
               {view === 'files' && (
+                <details className="processing-options"><summary>SPK result</summary>
                 <LocalFiles
                   controller={controller}
                   onWorkspace={() => setView('compress')}
                 />
+                </details>
               )}
               {view === 'overview' && (
                 <LocalOverview
@@ -261,44 +275,7 @@ export default function App() {
           void selectFiles(files);
         }}
       />
-      {privacyChoice === null && workerReady && (
-        <aside className="privacy-banner" aria-label="Privacy choices">
-          <span className="privacy-symbol">
-            <ShieldCheck size={19} />
-          </span>
-          <div>
-            <strong>Your files. Your choice.</strong>
-            <p>
-              No tracking cookies or uploads. Allow optional local learning of
-              sizes and times, or keep essential settings only.
-            </p>
-          </div>
-          <div className="button-row">
-            <button
-              className="button secondary"
-              onClick={() => {
-                setPrivacyChoice('essential');
-                setAnnouncement(
-                  'Essential settings only. Local learning is off.',
-                );
-              }}
-            >
-              Essential only
-            </button>
-            <button
-              className="button primary"
-              onClick={() => {
-                setPrivacyChoice('learning');
-                setAnnouncement(
-                  'Local performance learning enabled. Nothing is uploaded.',
-                );
-              }}
-            >
-              Allow local learning
-            </button>
-          </div>
-        </aside>
-      )}
+      {!termsAccepted && <aside className="privacy-banner" aria-label="First use agreement"><div><strong>Before you begin</strong><p>Files are processed on the computer running HAMMA. On Wi-Fi, uploads travel to that computer over your local network. Temporary files and job metadata remain until expiry. No AI service receives your contents.</p><a href="#" onClick={event => { event.preventDefault(); openSettings('privacy'); }}>Privacy & terms</a></div><button className="button primary" onClick={() => { localStorage.setItem('hamma-terms-v1', 'accepted'); setTermsAccepted(true); setPrivacyChoice('essential'); }}>Agree & continue</button></aside>}
       <span className="sr-only" role="status">
         {announcement}
       </span>

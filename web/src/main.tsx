@@ -9,6 +9,7 @@ import App from './App';
 import { MotionConfig } from 'framer-motion';
 import './index.css';
 import './workspace.css';
+import './processing/controls.css';
 
 // ============================================================================
 // ERROR BOUNDARY - Prevents app crashes from propagating
@@ -70,25 +71,15 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
               The application encountered an unexpected error. Your files are safe.
             </p>
             
-            {this.state.error && (
-              <details className="mb-6 text-left">
-                <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-700 dark:hover:text-gray-300">
-                  Technical details
-                </summary>
-                <pre className="mt-2 p-3 bg-gray-100 dark:bg-gray-900 rounded-lg text-xs 
-                              text-red-600 dark:text-red-400 overflow-auto max-h-32">
-                  {this.state.error.message}
-                </pre>
-              </details>
-            )}
-            
+            <p className="recovery-note">Reopen the workspace to reconnect to saved jobs. Jobs on a running processor continue in the background.</p>
+
             <div className="flex gap-3">
               <button
                 onClick={this.handleReset}
                 className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-600 text-white 
                          rounded-xl font-semibold transition-colors"
               >
-                Try Again
+                Reopen workspace
               </button>
               <button
                 onClick={() => window.location.reload()}

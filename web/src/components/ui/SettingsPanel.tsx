@@ -103,17 +103,17 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
           </section>
           <section className="surface settings-group">
             <SettingSwitch
-              label="Automatic downloads"
+              label="Automatic SPK downloads"
               description="Download a result as soon as compression or restoration finishes."
               checked={autoDownload}
               onChange={setAutoDownload}
             />
             <div className="setting-detail">
-              <span>Local processing</span>
-              <strong>One job at a time</strong>
+              <span>SPK processing</span>
+              <strong>One SPK job at a time</strong>
               <p>
                 Prevents overlapping operations from replacing your result.
-                There are no account or subscription limits.
+                Standard file jobs use a separate background queue.
               </p>
             </div>
           </section>
@@ -125,20 +125,13 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
             <div className="section-heading">
               <h2>Your files stay with you.</h2>
               <p>
-                The free workspace processes files on your device. It does not
-                upload files, set tracking cookies, or send analytics.
+                The workspace processes files on the computer running HAMMA. It does not
+                send files to third parties or send analytics. Standard archive
+                and media jobs use temporary storage on this device.
               </p>
             </div>
             <SettingSwitch
-              label="Local performance learning"
-              description="Learn typical throughput and size savings from completed compressions. Only aggregate sizes and times are kept on this browser. No file names, contents, or network uploads."
-              checked={privacyChoice === 'learning'}
-              onChange={(enabled) =>
-                setPrivacyChoice(enabled ? 'learning' : 'essential')
-              }
-            />
-            <SettingSwitch
-              label="Remember history"
+              label="Remember SPK history"
               description="Keep the last 20 completed operation records, including file names, on this browser. Turning this off stops new records; existing records can be cleared in Storage."
               checked={rememberHistory}
               onChange={setRememberHistory}
@@ -148,10 +141,9 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
             <div className="section-heading">
               <h2>Cookies & local storage</h2>
               <p>
-                No cookies are required by this workspace. Essential local
-                storage remembers appearance, download preferences, and your
-                privacy choice. History and optional learning have separate
-                controls.
+                A temporary session cookie protects local processing jobs.
+                Essential browser storage remembers appearance, download
+                preferences, and your privacy choice. History has separate retention controls.
               </p>
             </div>
             <button
@@ -179,7 +171,7 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
               </p>
             </div>
             <SettingAction
-              title="Operation history"
+              title="SPK operation history"
               description={`${recentArchives.length} of 20 records stored. File contents are never saved in history.`}
               label="Clear history"
               disabled={!recentArchives.length}
@@ -191,16 +183,6 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
               }}
             />
             <SettingAction
-              title="Local learning"
-              description={`${learning.samples} observations. Aggregate measurements only.`}
-              label="Reset learning"
-              disabled={!learning.samples}
-              onClick={() => {
-                clearLearning();
-                setMessage('Local learning data cleared.');
-              }}
-            />
-            <SettingAction
               title="Application cache"
               description="Clear only HAMMA-owned Cache Storage entries. This does not clear your browser cache or other sites."
               label={clearing ? 'Clearing…' : 'Clear app cache'}
@@ -209,8 +191,8 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
             />
           </section>
           <p className="footnote">
-            The current result stays available until you start another job,
-            reset it, or close this page. Download it before leaving.
+            SPK results stay available until you start another job or close the
+            page. Standard file jobs use the retention controls in History.
           </p>
         </>
       )}
@@ -226,8 +208,8 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
               <br />A lot more intention.
             </h2>
             <p>
-              A free, local workspace for compressing files and restoring SPK
-              archives. Built to make a technical task feel simple.
+              A free, local workspace for compression, extraction, and media
+              conversion. Built to make a technical task feel simple.
             </p>
             <div className="creator-credit">
               <span>CREATED BY</span>
@@ -246,10 +228,9 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
             <div className="section-heading">
               <h2>How it works</h2>
               <p>
-                The browser uses the available local engine and may fall back to
-                JavaScript. Rust powers the native core and optional API. The
-                separate Python research service is not required for this
-                workspace. Compression savings depend on the file.
+                Files are processed on this device. Standard jobs continue while
+                you move between screens, and results remain available until
+                their expiry. Compression savings depend on the file.
               </p>
             </div>
             <p className="footnote">Free to use · Open source · MIT license</p>

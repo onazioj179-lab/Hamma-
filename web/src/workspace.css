@@ -1563,6 +1563,7 @@ progress::-moz-progress-bar {
 .setting-action > div { min-width: 0; flex: 1 1 220px; }
 .button, .ios-btn-primary, .ios-btn-secondary { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 
+/* One mobile navigation column per visible item, including Settings. */
 @media (max-width: 650px) {
   .sidebar .primary-navigation button,
   .sidebar .sidebar-utility {
@@ -1572,7 +1573,7 @@ progress::-moz-progress-bar {
     font-size: 8px;
     line-height: 1.25;
   }
-  .sidebar .primary-navigation button > span,
+  .sidebar .primary-navigation button > span:not(.running-dot),
   .sidebar .sidebar-utility > span {
     display: block;
     max-width: 100%;
@@ -1581,3 +1582,23 @@ progress::-moz-progress-bar {
     text-overflow: ellipsis;
   }
 }
+
+/* Quiet, compact application surfaces. */
+.spk-tools{margin:20px 0;border-top:1px solid rgb(var(--border));padding-top:16px}.spk-tools>summary{cursor:pointer;font-size:12px;color:rgb(var(--muted))}
+.universal-drop{border:0;background:transparent;padding:22px 0}.universal-drop-icon{width:40px;height:40px;border-radius:10px}.universal-drop h2{font-size:16px}.universal-heading h1{font-size:36px}.universal-heading .eyebrow,.workbench-aside,.page-heading .eyebrow{display:none}.page-description{font-size:12px}.surface{box-shadow:none}.workspace-footer{display:none}
+input[type=checkbox]{appearance:none;width:16px;height:16px;border:1px solid rgb(var(--muted));border-radius:4px;background:rgb(var(--card-elevated));display:inline-grid;place-content:center;cursor:pointer}input[type=checkbox]:checked{background:rgb(var(--accent));border-color:rgb(var(--accent))}input[type=checkbox]:checked:after{content:'';width:8px;height:5px;border-left:2px solid rgb(var(--background));border-bottom:2px solid rgb(var(--background));transform:rotate(-45deg) translateY(-1px)}
+a{color:rgb(var(--accent));text-underline-offset:3px}button,input,a{touch-action:manipulation}.settings-group,.about-card{box-shadow:none}.appearance-preview{height:65px}.settings-page .page-description{display:none}.privacy-banner p{max-width:600px}.processing-options{border-radius:8px}.processing-job{padding-block:12px}
+
+/* Quiet surfaces and accessible controls across workspace screens. */
+.hamma-shell .surface { box-shadow:none; border-color:transparent; background:transparent; }
+.hamma-shell .settings-group { border-top:1px solid rgb(var(--border)); border-radius:0; }
+.hamma-shell .job-list, .hamma-shell .source-panel { border-top:1px solid rgb(var(--border)); border-bottom:1px solid rgb(var(--border)); border-radius:0; }
+.hamma-shell input[type=checkbox]:not([role=switch]) { appearance:none; width:17px; height:17px; border:1px solid rgb(var(--muted)); border-radius:4px; background:rgb(var(--card)); display:inline-grid; place-content:center; vertical-align:middle; flex-shrink:0; }
+.hamma-shell input[type=checkbox]:not([role=switch]):checked { background:rgb(var(--accent)); border-color:rgb(var(--accent)); }
+.hamma-shell input[type=checkbox]:not([role=switch]):checked:after { content:''; width:8px; height:4px; border-left:2px solid white; border-bottom:2px solid white; transform:rotate(-45deg) translateY(-1px); }
+.hamma-shell :is(button,a,input,summary):focus-visible { outline:2px solid rgb(var(--accent)); outline-offset:4px; }
+.hamma-shell a { text-underline-offset:4px; }
+.splash-symbol { animation:workspace-breathe 1.8s ease-in-out infinite; }
+@keyframes workspace-breathe { 50% { transform:translateY(-5px); opacity:.55; } }
+.recovery-note { font-size:13px; line-height:1.7; margin-bottom:24px; color:inherit; }
+@media(prefers-reduced-motion:reduce) { .splash-symbol { animation:none; } }
