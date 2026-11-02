@@ -4,6 +4,7 @@
  */
 
 import { create } from 'zustand';
+import { usePreferences } from './preferences';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { DEFAULT_CHUNK_SIZE } from '../engine/wasm/types';
 import type { DetailedProgress, LaneState } from '../engine/performance/types';
@@ -411,6 +412,7 @@ export const useAppStore = create<AppState>()(
       // Recent archives
       recentArchives: [],
       addRecentArchive: (archive) => {
+        if (!usePreferences.getState().rememberHistory) return;
         const newArchive: RecentArchive = {
           ...archive,
           id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -423,11 +425,12 @@ export const useAppStore = create<AppState>()(
       removeRecentArchive: (id) => set((state) => ({
         recentArchives: state.recentArchives.filter(a => a.id !== id),
       })),
-      clearRecentArchives: () => set({ recentArchives: [] }),
+      clearRecentArchives: () => set({ recentArchives: [], history: [] }),
       
       // Compression history (V43)
       history: [],
       addHistoryEntry: (entry) => {
+        if (!usePreferences.getState().rememberHistory) return;
         const newEntry: HistoryEntry = {
           ...entry,
           id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -516,7 +519,7 @@ export const useAppStore = create<AppState>()(
       },
       isProcessing: () => {
         const status = get().operationStatus;
-        return status === 'preparing' || status === 'processing' || status === 'finalizing';
+        return status === 'initializing' || status === 'preparing' || status === 'processing' || status === 'finalizing';
       },
       getProgressPercent: () => {
         const { bytesProcessed, totalBytes } = get().progress;

@@ -1,7 +1,7 @@
 {
   "name": "spk-web",
   "version": "25.0.0",
-  "description": "Singularity Pack V25 - Production Streaming WASM Compression Engine",
+  "description": "HAMMA local compression workspace built with React and TypeScript.",
   "type": "module",
   "scripts": {
     "dev": "vite --host",

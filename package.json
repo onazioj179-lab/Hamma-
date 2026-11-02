@@ -1,7 +1,7 @@
 {
   "name": "singularity-pack",
   "version": "1.0.0",
-  "description": "High-performance file compression tool with custom SPK format",
+  "description": "HAMMA: free local file compression and SPK archive restoration, with an optional Rust API.",
   "private": true,
   "workspaces": [
     "web"

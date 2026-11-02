@@ -11,6 +11,7 @@
 
 import { useCallback, useRef, useEffect, useState } from 'react';
 import { useAppStore, type FileInfo } from '../store/app';
+import { usePreferences } from '../store/preferences';
 import { restoreFileArchive, validateFilePaths } from '../utils/archiveFiles';
 import { 
   AdaptiveEngine, 
@@ -143,8 +144,11 @@ export function useCompression() {
     };
   }, [updateProgress]);
 
+  const hasActiveJob = () => ['initializing', 'preparing', 'processing', 'finalizing'].includes(useAppStore.getState().operationStatus);
+
   // Start compression using AdaptiveEngine
   const compress = useCallback(async (file: File) => {
+    if (hasActiveJob()) return;
     if (!engineRef.current) {
       setError('Engine not initialized', 'ENGINE_NOT_READY');
       return;
@@ -175,6 +179,8 @@ export function useCompression() {
       if (!result.success || !result.data) {
         throw new Error(result.error || 'Compression failed');
       }
+
+      setCurrentStrategy(result.strategy);
 
       // Get data from result (could be Uint8Array or Blob)
       let blob: Blob;
@@ -209,6 +215,8 @@ export function useCompression() {
         duration: result.duration,
       });
 
+      usePreferences.getState().recordOutcome(result.originalSize, result.compressedSize, result.duration);
+
       // Add to recent archives
       addRecentArchive({
         fileName: fileName,
@@ -237,6 +245,7 @@ export function useCompression() {
   }, [startOperation, setError, completeOperation, setResult, addRecentArchive, autoDownload]);
 
   const decompress = useCallback(async (file: File) => {
+    if (hasActiveJob()) return;
     const engine = engineRef.current;
     if (!engine) { setError('Engine not initialized', 'ENGINE_NOT_READY'); return; }
     const jobId = `restore_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -266,6 +275,10 @@ export function useCompression() {
         duration, speedMbps: file.size / 1024 / 1024 / (duration / 1000) * 8, outputName, downloadUrl: url });
       addRecentArchive({ fileName: file.name, originalSize: output.length, compressedSize: file.size,
         ratio: file.size / Math.max(1, output.length), type: 'decompress', mode: 'extreme' });
+      if (useAppStore.getState().autoDownload) {
+        const link = document.createElement('a'); link.href = url; link.download = outputName;
+        document.body.appendChild(link); link.click(); link.remove();
+      }
     } catch (err) {
       if (jobIdRef.current === jobId) setError(err instanceof Error ? err.message : 'Restoration failed', 'DECOMPRESSION_FAILED');
     }
@@ -274,6 +287,7 @@ export function useCompression() {
   // Compress multiple files into a single archive
   // Uses streaming approach to avoid memory issues with 200+ files
   const compressMultiple = useCallback(async (files: File[]) => {
+    if (hasActiveJob()) return;
     if (!engineRef.current) {
       setError('Engine not initialized', 'ENGINE_NOT_READY');
       return;
@@ -525,7 +539,7 @@ export function useCompression() {
       bytesWritten += footer.length;
       if (jobIdRef.current !== jobId) return;
 
-      const duration = Date.now() - startTime;
+      const duration = Math.max(1, Date.now() - startTime);
       
       const resultData = {
         originalSize: totalSize,
@@ -537,6 +551,7 @@ export function useCompression() {
         downloadUrl: '',
       };
       
+      usePreferences.getState().recordOutcome(totalSize, bytesWritten, duration);
       setResult(resultData);
       completeOperation();
 
@@ -679,6 +694,7 @@ export function useCompression() {
     }
     
     const url = URL.createObjectURL(blob);
+    if (downloadUrlRef.current) URL.revokeObjectURL(downloadUrlRef.current);
     downloadUrlRef.current = url;
     
     completeOperation();
@@ -687,12 +703,12 @@ export function useCompression() {
       resultSize: result.compressedSize,
       ratio: result.ratio,
       duration: result.duration,
-      speedMbps: ((totalSize / 1024 / 1024) / (result.duration / 1000)) * 8,
+      speedMbps: ((totalSize / 1024 / 1024) / (Math.max(1, result.duration) / 1000)) * 8,
       outputName: `${archiveName}.spk`,
       downloadUrl: url,
     });
 
-    console.log(`[useCompression] Multi-file compression completed`, { files: files.length, totalSize });
+    usePreferences.getState().recordOutcome(totalSize, result.compressedSize, result.duration);
 
     addRecentArchive({
       fileName: `${archiveName}.spk`,
@@ -818,7 +834,7 @@ export function useCompression() {
     
     // Computed
     isIdle: operationStatus === 'idle',
-    isProcessing: operationStatus === 'preparing' || operationStatus === 'processing',
+    isProcessing: ['initializing', 'preparing', 'processing', 'finalizing'].includes(operationStatus),
     isComplete: operationStatus === 'completed',
     isError: operationStatus === 'error',
     

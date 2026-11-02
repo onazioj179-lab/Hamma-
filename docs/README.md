@@ -7,6 +7,7 @@ Complete technical documentation for the SPK compression platform and HAMMA EXTR
 - [Main README](../README.md) - Project overview and quick start
 - [HAMMA Documentation](../hamma/README.md) - HAMMA EXTREME API and self-learning system
 - [SPK Format Specification](SPK_Format_v1.md) - Binary format details
+- [Professional workspace UI](ui-workspace.md) - Active controls, layout, and remaining work
 - [Maintenance notes](maintenance.md) - Active paths, checks, and legacy limitations
 - [Functionality validation](functionality-validation.md) - Verified workflows, fixes, and remaining gaps
 

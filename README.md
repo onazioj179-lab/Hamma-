@@ -1,150 +1,118 @@
-# HAMMA - Singularity Pack (SPK)
+# HAMMA
 
-Created by **Onazi Treasure Oj**.
+**Make space. Keep everything.**
 
-See [native Windows packaging and runtime roadmap](docs/native-roadmap.md).
+HAMMA is a free workspace for compressing files and restoring SPK archives on
+your own device. Created by **Onazi Treasure Oj**.
 
-High-performance SPK compression platform with Rust core, WebAssembly bindings, modern React frontend, and HAMMA EXTREME self-learning optimizer.
+No account, subscription, or Python service is needed for the browser workspace.
+Choose files or a folder to create an archive. Choose an `.spk` file to restore
+it. Multi-file archives restore as a ZIP so you can use your usual file manager.
+Compression savings depend on the input; already compressed files can grow.
 
-## Current Status
+## What you can use
 
-The table below records historical feature claims, not a current production certification.
-See [maintenance notes](docs/maintenance.md) for verified checks, active code paths, and known limitations.
+- **Workspace:** file and folder selection, drag and drop, measured progress,
+  cancellation, compression, restoration, and result downloads.
+- **My files:** the current result available in this session. Large jobs saved
+  directly to disk are identified as saved. This is not cloud storage.
+- **History:** the last 20 completed local records, with search, filtering, and
+  deletion. History stores file names and size metadata, not file contents.
+- **Overview:** counts and savings calculated from recorded operations. Optional
+  local learning shows observed throughput; no sample data is invented.
+- **Settings:** light/dark/system appearance, automatic downloads, history and
+  privacy preferences, app cache cleanup, local learning reset, and About.
 
-| Area | Status | Notes |
-|------|--------|-------|
-| Core compression (Rust) | ✅ Stable | Multi-codec, streaming |
-| Web frontend (React/Vite) | ✅ Stable | Drag-and-drop, WASM-backed |
-| WebAssembly bindings | ✅ Stable | wasm-pack builds |
-| HAMMA EXTREME (AI optimizer) | ✅ Stable | 66/66 tests passing |
-| Account System | ✅ Stable | Wallet-style auth with recovery phrase |
-| File Catalog | ✅ Stable | Serial numbers, tagging, search |
+The interface uses solid surfaces without blurred popups. Settings and creator
+information are at the bottom of the desktop sidebar. All main views work on
+narrow screens as well.
 
-## Project Structure
+## Privacy and learning
 
-```
-singularity-pack/
-├── core/           # Rust compression engine (account.rs, catalog.rs, hamma.rs, etc.)
-├── wasm/           # WebAssembly bindings
-├── web/            # TypeScript/React frontend
-│   └── src/
-│       ├── components/
-│       │   ├── auth/       # Login, recovery phrase modals
-│       │   ├── files/      # File manager with serial numbers
-│       │   ├── dashboard/  # Storage dashboard, HAMMA settings
-│       │   └── compression/
-│       └── store/          # Zustand state (account.ts, app.ts)
-├── hamma/          # HAMMA EXTREME FastAPI + self-learning layer
-├── backend/        # Optional API server (Rust)
-├── mobile/         # Flutter mobile app
-├── mobile-web/     # Progressive web app
-├── docs/           # All documentation and specs
-└── scripts/        # Shell scripts (run-server, etc.)
-```
+File processing stays on the device in the free workspace. It does not upload
+files, send analytics, or set tracking cookies. Essential local storage remembers
+your settings and privacy choice. History can be turned off or cleared.
 
-## Quick Start
+Local performance learning is **off until you opt in**. When enabled, it keeps
+rolling totals of input bytes, output bytes, and elapsed time. It keeps no file
+names or contents and sends nothing to a server. Opting out clears those totals.
+The current implementation learns local performance measurements; it does not
+train a shared model across users or change compression strategies from those
+measurements.
 
-### Prerequisites
-- Rust 1.70+
-- Node.js 18+
-- wasm-pack (for wasm build)
-- Python 3.12+ (for HAMMA)
+Cache cleanup deletes only HAMMA/SPK Cache Storage entries. It cannot clear the
+browser's HTTP cache, other sites, or downloaded files. Download results before
+closing or resetting the page: output bytes are not retained in history.
 
-### Build & Run
+## Run the browser workspace
 
-Core (Rust):
-```bash
-cd core
-cargo build --release
-```
+Use a current Node.js LTS release that supports the checked-in dependencies.
+From this repository directory:
 
-WASM bindings:
-```bash
-cd wasm
-wasm-pack build --target web --out-dir ../web/src/wasm/generated
-```
-
-Web frontend (from the repository root):
-```bash
-npm install
+```sh
+npm ci
 npm run dev
 ```
 
-Use `npm run test:web` for non-interactive frontend tests, `npm run typecheck`
-for TypeScript validation, and `npm run build` for production output in `web/dist`.
+Open the local URL printed by Vite. To create a production build:
 
-HAMMA EXTREME API:
-```bash
-cd hamma
-python -m uvicorn hamma.api.fastapi_app:app --host 0.0.0.0 --port 8777
+```sh
+npm run typecheck
+npm run test:web
+npm run build
 ```
 
-Tests (HAMMA):
-```bash
-cd hamma
-python -m pytest tests/ -v
+Build output is in `web/dist/`. The browser selects an available engine and can
+fall back to JavaScript; a WebAssembly-capable browser does not by itself prove
+that native WASM ran. If building the WASM bindings, install Rust and wasm-pack:
+
+```sh
+npm run build:wasm
 ```
 
-## Key Features
+## Optional Rust backend
 
-- **Custom SPK Format**: header + manifest + chunk table + data chunks
-- **High Performance**: Rust codecs (ZSTD/LZ4/Brotli/None) with streaming
-- **Browser Support**: WASM bindings for client-side compression
-- **Modern UI**: React/Vite interface with drag-and-drop and progress
-- **Integrity**: SHA-256 checksums across chunks
-- **HAMMA EXTREME**: Self-learning optimizer that pushes compression toward theoretical limits (metadata-only learning)
+The native core and optional HTTP API are Rust. Python is retained as a separate
+research service under `hamma/`; it is not in the free workspace's runtime path.
+That research code has not been represented as a completed Rust port.
 
-## SPK Format (tl;dr)
-
-1) Header (64 bytes) — magic, version, flags, offsets
-2) Manifest — JSON metadata and directory layout
-3) Chunk Table — offsets/sizes of compressed chunks
-4) Data Chunks — compressed payloads with checksums
-
-Full spec: [docs/SPK_Format_v1.md](docs/SPK_Format_v1.md)
-
-All technical documentation is in [docs/](docs/) including implementation notes, API references, and feature evolution (V22-V53).
-
-## HAMMA EXTREME Overview
-
-- FastAPI service on port 8777
-- Self-learning modules in hamma/self_learning/:
-  - model_state.py — entropy distributions, redundancy fingerprints
-  - trainer.py — online training with adaptive gradients
-  - persistence.py — state save/load, checkpoints, export/import
-  - extreme_ratio.py — extreme compression targeting and recommendations
-  - stability_engine.py — smoothing, overfit detection, oscillation damping
-- Tests: 66/66 passing (41 EXTREME + 25 core)
-
-## API Usage (Core)
-
-### Rust
-```rust
-use spk_core::{Compressor, CompressorOptions};
-
-let options = CompressorOptions::default();
-let mut compressor = Compressor::new(options);
-compressor.add_file("path/to/file.txt")?;
-compressor.write_to("output.spk")?;
+```sh
+cargo run -p spk-backend --bin spk-server
 ```
 
-### TypeScript (WASM)
-```typescript
-import { compress, decompress } from 'spk-wasm';
+The API binds to `127.0.0.1:3000` by default. `PORT` and `SPK_BIND_HOST` override
+that address. `SPK_WEB_DIR` selects built static web assets. See the backend code
+and [maintenance documentation](docs/maintenance.md) before deploying it publicly.
 
-const compressed = await compress(fileData, { codec: 'zstd' });
-const decompressed = await decompress(compressedData);
-```
+API admission is enforced in Rust: by default, 120 API requests per peer IP per
+minute, with a stricter 10/minute allowance for account creation, login, and
+recovery. Rejected calls receive HTTP 429 and `Retry-After`. Configure positive
+limits using `SPK_API_RPM` and `SPK_AUTH_RPM`. Health checks remain available.
+The limiter is bounded and process-local: multiple instances need a shared edge
+limiter. Behind a reverse proxy, peers share that proxy's quota; forwarding
+headers are not trusted. Browser compression does not call this API or consume
+its request allowance. Local processing admits one active job at a time.
 
-## Contributing
+## Project layout
 
-Contributions welcome! Please:
-- Open issues with clear descriptions and repro steps
-- Include tests for new features
-- Follow existing code style and patterns
-- Check [docs/](docs/) for implementation guides and API docs
+| Directory | Purpose |
+| --- | --- |
+| `web/` | Active React/TypeScript browser workspace |
+| `core/` | Rust compression and archive implementation |
+| `wasm/` | WebAssembly bindings |
+| `backend/` | Optional Rust HTTP API |
+| `hamma/` | Separate Python optimizer research service |
+| `mobile/`, `mobile-web/` | Separate mobile clients |
+| `docs/` | Specifications, maintenance notes, and historical designs |
+| `scripts/`, `validation/` | Development and verification tooling |
 
-## License
+See [workspace behavior and verification](docs/ui-workspace.md),
+[archive format](docs/SPK_Format_v1.md), and [native roadmap](docs/native-roadmap.md).
+Historical design targets in older documents are not current performance
+guarantees. Server storage, account hardening, billing, sharing, and all native
+worker paths are not certified by this UI rebuild.
 
-MIT License - see LICENSE.
+## License and creator
 
+[MIT](LICENSE). Created by **Onazi Treasure Oj**. The interface includes a small
+creator watermark and an About panel linking to this repository.

@@ -4,6 +4,7 @@
 
 mod routes;
 mod services;
+mod rate_limit;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -168,11 +169,15 @@ async fn main() {
             std::env::var_os("SPK_WEB_DIR").map(std::path::PathBuf::from)
                 .unwrap_or_else(|| std::env::current_exe().unwrap_or_default().parent().unwrap_or(std::path::Path::new(".")).join("web"))
         ))
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::new(rate_limit::RequestLimiter::from_environment()), rate_limit::enforce,
+        ))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
                 .allow_methods(Any)
-                .allow_headers(Any),
+                .allow_headers(Any)
+                .expose_headers([axum::http::header::RETRY_AFTER]),
         )
         .layer(TraceLayer::new_for_http());
 
@@ -189,7 +194,7 @@ async fn main() {
 
     // Start server
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap();
 }
 
 /// Health check endpoint
