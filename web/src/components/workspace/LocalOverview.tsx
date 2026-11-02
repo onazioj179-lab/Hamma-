@@ -53,38 +53,7 @@ export function LocalOverview({
           }
         />
       </div>
-      <section className="surface settings-group">
-        <div className="section-heading">
-          <h2>Local performance learning</h2>
-          <p>
-            {privacyChoice === 'learning'
-              ? 'Enabled on this browser. Only aggregate sizes and times are retained.'
-              : 'Off by default. You choose whether HAMMA remembers aggregate performance.'}
-          </p>
-        </div>
-        {learning.samples > 0 ? (
-          <div className="learning-grid">
-            <Metric
-              label="Observations"
-              value={String(learning.samples)}
-              detail="Most recent rolling measurements"
-            />
-            <Metric
-              label="Typical throughput"
-              value={`${formatFileSize((learning.inputBytes / Math.max(1, learning.durationMs)) * 1000)}/s`}
-              detail="Input bytes divided by measured time"
-            />
-          </div>
-        ) : (
-          <p className="footnote">
-            No local measurements yet. Enable learning to see observed
-            performance.
-          </p>
-        )}
-        <button className="button secondary" onClick={onPrivacy}>
-          Manage privacy <ArrowRight size={14} />
-        </button>
-      </section>
+
       <section className="surface settings-group">
         <div className="section-heading">
           <h2>This device</h2>
