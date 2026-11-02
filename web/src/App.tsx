@@ -25,6 +25,8 @@ import { LocalFiles } from './components/workspace/LocalFiles';
 import { LocalOverview } from './components/workspace/LocalOverview';
 import { UniversalWorkspace } from './components/workspace/UniversalWorkspace';
 
+const remoteServer = !['localhost', '127.0.0.1', '::1'].includes(location.hostname);
+
 type View = 'process' | 'compress' | 'files' | 'history' | 'overview' | 'settings';
 const navigation = [
   { key: 'process', label: 'Workspace', icon: LayoutGrid },
@@ -152,7 +154,7 @@ export default function App() {
           <div className="local-note">
             <ShieldCheck size={17} />
             <span>
-              <strong>Yours. On your device.</strong>
+              <strong>{remoteServer ? 'Private server session' : 'Yours. On your device.'}</strong>
               <small>Free, with no account needed.</small>
             </span>
           </div>
@@ -189,7 +191,7 @@ export default function App() {
             <span
               className={workerReady ? 'status-dot' : 'status-dot pending'}
             />
-            {view !== 'compress' ? 'On this device' : isProcessing
+            {view !== 'compress' ? (remoteServer ? 'Wi-Fi server' : 'On this device') : isProcessing
               ? 'Processing locally'
               : workerReady
                 ? 'Local engine ready'
@@ -273,7 +275,7 @@ export default function App() {
           void selectFiles(files);
         }}
       />
-      {!termsAccepted && <aside className="privacy-banner" aria-label="First use agreement"><div><strong>Before you begin</strong><p>Files are processed on this device. Temporary files and job metadata are retained until expiry. No file contents or usage data are sent to us.</p><a href="#" onClick={event => { event.preventDefault(); openSettings('privacy'); }}>Privacy & terms</a></div><button className="button primary" onClick={() => { localStorage.setItem('hamma-terms-v1', 'accepted'); setTermsAccepted(true); setPrivacyChoice('essential'); }}>Agree & continue</button></aside>}
+      {!termsAccepted && <aside className="privacy-banner" aria-label="First use agreement"><div><strong>Before you begin</strong><p>Files are processed on the computer running HAMMA. On Wi-Fi, uploads travel to that computer over your local network. Temporary files and job metadata remain until expiry. No AI service receives your contents.</p><a href="#" onClick={event => { event.preventDefault(); openSettings('privacy'); }}>Privacy & terms</a></div><button className="button primary" onClick={() => { localStorage.setItem('hamma-terms-v1', 'accepted'); setTermsAccepted(true); setPrivacyChoice('essential'); }}>Agree & continue</button></aside>}
       <span className="sr-only" role="status">
         {announcement}
       </span>

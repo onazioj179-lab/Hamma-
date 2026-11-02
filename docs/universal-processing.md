@@ -22,7 +22,9 @@ preserving browser Host/Origin checks. The optional Rust API has its own `/api`
 proxy. The new service does not expose that API's historical experimental routes.
 
 Options: `python -m processor.server --port 5010 --data <directory> --web web/dist`.
-Only numeric loopback addresses are accepted for `--host`. Use one service per
+By default only numeric loopback addresses are accepted for `--host`. Explicit
+private-network testing is available through `--lan` and named private hosts;
+see [the Wi-Fi testing guide](lan-testing.md). Use one service per
 data directory; an OS file lock enforces this, including across different ports.
 Windows listeners also use exclusive address binding. Stop with Ctrl+C. Keep it running for work to continue after
 closing the browser.

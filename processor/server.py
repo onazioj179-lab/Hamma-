@@ -189,8 +189,9 @@ def run_job(root, owner, job_id, limits, isolated=False):
 
 
 class Service:
-    def __init__(self, root, web=None, limits=None):
+    def __init__(self, root, web=None, limits=None, lan_hosts=()):
         self.store = Store(root)
+        self.lan_hosts = frozenset(lan_hosts)
         self.instance_lock = (self.store.root / ".server.lock").open("a+b")
         self.instance_lock.write(b"\0")
         self.instance_lock.flush()
@@ -424,9 +425,12 @@ def handler(service):
 
         def identity(self):
             self.new_cookie = None
+            peer = ipaddress.ip_address(self.client_address[0])
+            if service.lan_hosts and not (peer.is_private or peer.is_loopback):
+                raise HTTPError(403, "Private network only")
             host = self.headers.get("Host", "")
             parsed = urlsplit("http://" + host)
-            if parsed.hostname not in ("localhost", "127.0.0.1", "::1"):
+            if parsed.hostname not in ("localhost", "127.0.0.1", "::1", *service.lan_hosts):
                 raise HTTPError(403, "Invalid host")
             origin = self.headers.get("Origin")
             if origin and origin not in ("http://" + host, "https://" + host):
@@ -775,11 +779,19 @@ def main():
     parser.add_argument("--port", type=int, default=5010)
     parser.add_argument("--data", default=os.environ.get("HAMMA_DATA", ".hamma-data"))
     parser.add_argument("--web", default="web/dist")
+    parser.add_argument("--lan", action="store_true", help="Allow explicitly named private-network addresses")
+    parser.add_argument("--allow-host", action="append", default=[], help="Private IPv4 address used by phones")
     args = parser.parse_args()
-    if not ipaddress.ip_address(args.host).is_loopback:
-        parser.error("Only loopback binding is supported")
+    if not ipaddress.ip_address(args.host).is_loopback and not args.lan:
+        parser.error("Use --lan with explicit --allow-host addresses for private-network testing")
+    if args.lan and not args.allow_host:
+        parser.error("LAN mode requires at least one --allow-host private address")
+    for hostname in args.allow_host:
+        address = ipaddress.ip_address(hostname)
+        if address.version != 4 or not address.is_private or address.is_loopback or address.is_unspecified or address.is_link_local:
+            parser.error("LAN hosts must be private IPv4 addresses")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    service = Service(args.data, args.web)
+    service = Service(args.data, args.web, lan_hosts=args.allow_host if args.lan else ())
     server = LocalHTTPServer((args.host, args.port), handler(service))
     thread = threading.Thread(target=service.loop, daemon=True)
     thread.start()

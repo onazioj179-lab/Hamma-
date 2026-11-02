@@ -1,7 +1,7 @@
 import { SelectField } from '../ui/SelectField';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowDownToLine, ArrowRightLeft, Check, ChevronLeft, ChevronRight, Download, File, FileArchive, FolderPlus, History, Loader2, Pause, Play, Plus, RefreshCw, Search, ShieldCheck, Trash2, X } from 'lucide-react';
-import { activeJob, droppedSources, jsonRequest, request, requestId, upload, type Capability, type Job, type Retention, type Source } from '../../processing/client';
+import { activeJob, droppedSources, jsonRequest, request, requestId, randomId, upload, type Capability, type Job, type Retention, type Source } from '../../processing/client';
 import { formatFileSize } from '../../utils/fileHelpers';
 import '../../processing/processing.css';
 
@@ -85,7 +85,7 @@ export function UniversalWorkspace({ visible, screen, onHistory }: Props) {
     setError(''); setSources(previous => [...previous, ...incoming]);
     setSelected(previous => new Set([...previous, ...incoming.map(s => s.id)]));
   };
-  const choose = (files: File[]) => add(files.map(file => ({ id: crypto.randomUUID(), file, name: file.webkitRelativePath || file.name, size: file.size, directory: false })));
+  const choose = (files: File[]) => add(files.map(file => ({ id: randomId(), file, name: file.webkitRelativePath || file.name, size: file.size, directory: false })));
   const chosen = sources.filter(source => selected.has(source.id));
   const submit = async (operation: 'compress' | 'extract' | 'convert') => {
     if (submitting.current || !chosen.length || !capability) return;
@@ -163,7 +163,7 @@ export function UniversalWorkspace({ visible, screen, onHistory }: Props) {
   };
 
   return <section hidden={!visible} className="universal-workspace" aria-label="Universal file processing">
-    <div className="page-heading universal-heading"><div><p className="eyebrow">HAMMA</p><h1>{screen === 'workspace' ? <>Files, simplified.</> : screen === 'history' ? 'Files & History' : 'Your downloads'}</h1><p className="page-description">{screen === 'workspace' ? 'Compress. Extract. Convert.' : screen === 'history' ? 'Find past jobs and manage what stays on this device.' : 'Download completed jobs saved on this device.'}</p></div><span className="subtle-label"><ShieldCheck size={14} /> On this device</span></div>
+    <div className="page-heading universal-heading"><div><p className="eyebrow">HAMMA</p><h1>{screen === 'workspace' ? <>Files, simplified.</> : screen === 'history' ? 'Files & History' : 'Your downloads'}</h1><p className="page-description">{screen === 'workspace' ? 'Compress. Extract. Convert.' : screen === 'history' ? 'Find past jobs and manage what stays on this device.' : 'Download completed jobs saved on this device.'}</p></div><span className="subtle-label"><ShieldCheck size={14} /> {location.hostname === 'localhost' || location.hostname === '127.0.0.1' ? 'On this device' : 'Private server'}</span></div>
     {offline && <div className="processor-notice" role="status"><div><strong>Local processor unavailable</strong><p>Reconnect to check saved jobs.</p></div><button className="button secondary" onClick={() => void connect()}><RefreshCw size={15} /> Reconnect</button></div>}
     {error && <div className="processor-notice" role="alert"><span>{error}</span><button className="icon-button" aria-label="Dismiss error" onClick={() => setError('')}><X size={16} /></button></div>}
     {screen === 'workspace' && <>

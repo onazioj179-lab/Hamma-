@@ -1,6 +1,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import * as processingClient from '../processing/client';
 import { UniversalWorkspace } from '../components/workspace/UniversalWorkspace';
 
 let root: Root;
@@ -13,7 +14,7 @@ beforeEach(() => {
   fetchMock = vi.fn(async (url: string) => ({ ok: true, json: async () => url.endsWith('/capabilities') ? caps : url.endsWith('/settings') ? { fileRetention: '24h', historyRetention: '30d' } : { jobs: [], total: 0 } }));
   vi.stubGlobal('fetch', fetchMock);
 });
-afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
+afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 const render = async (screen: 'workspace' | 'history' | 'files' = 'workspace') => { await act(async () => root.render(<UniversalWorkspace visible screen={screen} onHistory={() => {}} />)); };
 const button = (text: string) => Array.from(host.querySelectorAll('button')).find(b => b.textContent?.trim() === text)!;
 const select = async (files: File[]) => {
@@ -56,4 +57,19 @@ it('keeps file deletion distinct from history deletion and exposes retention cho
   expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/history') && init.method === 'DELETE')).toBe(true);
   await act(async () => button('Delete all files').click());
   expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/files') && init.method === 'DELETE')).toBe(true);
+});
+
+it('shows newly submitted jobs instead of retaining a Completed-only queue filter', async () => {
+  await render();
+  await act(async () => host.querySelector<HTMLButtonElement>('[role=combobox][aria-label="Filter processing history"]')!.click());
+  const completed=Array.from(document.querySelectorAll<HTMLElement>('[role=option]')).find(option=>option.textContent==='Completed')!;
+  await act(async () => completed.click());
+  expect(host.querySelector('[aria-label="Filter processing history"]')?.textContent).toBe('Completed');
+  vi.spyOn(processingClient,'upload').mockResolvedValue('fixture-upload');
+  vi.spyOn(processingClient,'requestId').mockResolvedValue('fixture-request');
+  vi.spyOn(processingClient,'jsonRequest').mockResolvedValue({ id:'fixture-job' });
+  await select([new File(['test'],'queue-check.txt')]);
+  await act(async () => button('Compress').click());
+  expect(host.querySelector('[aria-label="Filter processing history"]')?.textContent).toBe('All statuses');
+  expect(host.querySelector('[aria-label="Sort processing history"]')?.textContent).toBe('Newest first');
 });

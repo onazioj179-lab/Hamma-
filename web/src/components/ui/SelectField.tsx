@@ -71,7 +71,10 @@ export function SelectField({
     const place = () => {
       const rect = trigger.current?.getBoundingClientRect();
       if (!rect) return;
-      const below = window.innerHeight - rect.bottom - 16;
+      const navigation = document.querySelector('.sidebar')?.getBoundingClientRect();
+      const bottom = navigation && navigation.top > 0 && navigation.width > window.innerWidth * .8
+        ? Math.min(window.innerHeight, navigation.top) : window.innerHeight;
+      const below = bottom - rect.bottom - 16;
       const above = rect.top - 16;
       const upward = below < 180 && above > below;
       const maxHeight = Math.min(280, Math.max(60, upward ? above : below));

@@ -125,7 +125,7 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
             <div className="section-heading">
               <h2>Your files stay with you.</h2>
               <p>
-                The free workspace processes files on your device. It does not
+                The workspace processes files on the computer running HAMMA. It does not
                 send files to third parties or send analytics. Standard archive
                 and media jobs use temporary storage on this device.
               </p>

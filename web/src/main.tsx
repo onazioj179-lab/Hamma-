@@ -9,6 +9,7 @@ import App from './App';
 import { MotionConfig } from 'framer-motion';
 import './index.css';
 import './workspace.css';
+import './processing/controls.css';
 
 // ============================================================================
 // ERROR BOUNDARY - Prevents app crashes from propagating

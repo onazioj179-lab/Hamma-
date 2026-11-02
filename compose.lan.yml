@@ -1,0 +1,28 @@
+# Optional Docker LAN deployment; requires Docker and HAMMA_LAN_IP.
+# Example: HAMMA_LAN_IP=192.168.0.103 docker compose -f compose.lan.yml up --build -d
+services:
+  hamma:
+    build:
+      context: .
+      dockerfile: processor/Dockerfile
+    command: [python, -m, processor.server, --lan, --host, 0.0.0.0, --allow-host, "${HAMMA_LAN_IP:?Set HAMMA_LAN_IP to the computer private Wi-Fi IPv4 address}", --port, "5014"]
+    ports:
+      - "${HAMMA_LAN_IP}:5014:5014"
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 3g
+    cpus: 2
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    volumes:
+      - hamma-lan-data:/data
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5014/api/process/capabilities',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+volumes:
+  hamma-lan-data:

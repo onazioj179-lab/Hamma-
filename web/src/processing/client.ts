@@ -28,9 +28,15 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
 export const jsonRequest = <T>(path: string, data: unknown, method = 'POST') =>
   request<T>(path, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
 
+export const randomId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
+const requestKeys = new Map<string, string>();
 export async function requestId(parts: unknown[]): Promise<string> {
-  const data = new TextEncoder().encode(JSON.stringify(parts));
-  return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', data)), byte => byte.toString(16).padStart(2, '0')).join('');
+  const key = JSON.stringify(parts);
+  if (!requestKeys.has(key)) {
+    if (requestKeys.size >= 32) requestKeys.delete(requestKeys.keys().next().value!);
+    requestKeys.set(key, randomId() + randomId());
+  }
+  return requestKeys.get(key)!;
 }
 
 /** Chunk retries reconcile the server's committed offset before sending more bytes. */
@@ -65,7 +71,7 @@ export async function upload(source: Source, signal: AbortSignal, update: (offse
 export async function droppedSources(transfer: DataTransfer, max = 5000): Promise<Source[]> {
   const sources: Source[] = [];
   const append = (name: string, file: File | null) => {
-    sources.push({ id: crypto.randomUUID(), name, file, size: file?.size || 0, directory: file === null });
+    sources.push({ id: randomId(), name, file, size: file?.size || 0, directory: file === null });
     if (sources.length > max) throw new Error(`Choose at most ${max.toLocaleString()} files. Nothing was added.`);
   };
   async function walk(entry: FileSystemEntry, depth = 0): Promise<void> {

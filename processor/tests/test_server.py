@@ -1,4 +1,5 @@
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from http.cookiejar import CookieJar
 from http.server import ThreadingHTTPServer
 import io
@@ -223,6 +224,41 @@ class ServerTests(unittest.TestCase):
     def test_second_scheduler_cannot_share_the_same_data_directory(self):
         with self.assertRaisesRegex(RuntimeError, "Another processor"):
             Service(self.temp.name, limits=LIMITS)
+
+    def test_explicit_lan_host_keeps_origin_and_host_protection(self):
+        self.service.lan_hosts = frozenset({"192.168.0.103"})
+        host = f"192.168.0.103:{self.server.server_port}"
+        self.assertEqual(self.call("/capabilities", headers={"Host": host})["processing"], "local")
+        self.assert_status(403, lambda: self.call("/capabilities", headers={"Host": "192.168.0.104"}))
+        self.assert_status(403, lambda: self.call("/settings", {"historyRetention": "7d", "fileRetention": "24h"}, "PUT", {"Host": host, "Origin": "http://untrusted.example"}))
+
+    def test_four_simultaneous_sessions_complete_with_isolated_verified_downloads(self):
+        clients = [build_opener(HTTPCookieProcessor(CookieJar())) for _ in range(4)]
+        payloads = [(f"session-{i}\n" * 4096).encode() for i in range(4)]
+
+        def enqueue(index):
+            client = clients[index]
+            source = self.call("/uploads", {"name": "shared.txt", "size": len(payloads[index])}, "POST", client=client)
+            self.call("/uploads/" + source["id"], payloads[index], "PUT", {"Upload-Offset": "0"}, client=client, raw=True)
+            return self.call("/jobs", {"uploads": [source["id"]], "operation": "compress", "target": "zip"}, "POST", client=client)
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            jobs = list(executor.map(enqueue, range(4)))
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            self.service.tick()
+            self.assertLessEqual(len(self.service.running), 2)
+            current = [self.call("/jobs/" + job["id"], client=client) for job, client in zip(jobs, clients)]
+            if all(job["state"] == "completed" for job in current):
+                break
+            time.sleep(.1)
+        for index, (job, client) in enumerate(zip(current, clients)):
+            self.assertEqual(job["state"], "completed", job)
+            self.assertEqual(self.call("/jobs", client=client)["total"], 1)
+            output = self.call(job["download"].removeprefix("/api/process"), raw=True, client=client)
+            with zipfile.ZipFile(io.BytesIO(output)) as archive:
+                self.assertEqual(archive.read("shared.txt"), payloads[index])
+            self.assert_status(404, lambda: self.call("/jobs/" + current[(index + 1) % 4]["id"], client=client))
 
 
 if __name__ == "__main__":

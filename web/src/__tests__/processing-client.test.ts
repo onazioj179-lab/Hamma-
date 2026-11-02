@@ -1,8 +1,17 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { droppedSources, upload, type Source } from '../processing/client';
+import { droppedSources, randomId, requestId, upload, type Source } from '../processing/client';
 
 afterEach(() => vi.unstubAllGlobals());
 const response = (value: unknown, ok = true) => ({ ok, json: async () => value });
+
+it('creates stable retry keys on HTTP phones without subtle crypto or randomUUID', async () => {
+  vi.stubGlobal('crypto', { getRandomValues: (data: Uint8Array) => { for (let i = 0; i < data.length; i++) data[i] = (i + Math.floor(Math.random() * 256)) % 256; return data; } });
+  expect(randomId()).toMatch(/^[a-f0-9]{32}$/);
+  const key = await requestId(['phone', 'zip']);
+  expect(key).toMatch(/^[a-f0-9]{64}$/);
+  expect(await requestId(['phone', 'zip'])).toBe(key);
+  expect(await requestId(['other-phone', 'zip'])).not.toBe(key);
+});
 
 it('reconciles a committed chunk after the response is lost without duplicating bytes', async () => {
   const file = new File([new Uint8Array(8)], 'input');

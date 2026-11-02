@@ -1,4 +1,7 @@
 .git
+**/.git
+.worktrees
+**/.worktrees
 node_modules
 **/node_modules
 target

@@ -24,6 +24,11 @@ encryption at rest, distributed workers or validated multi-terabyte processing.
 
 ## Use the SPK browser workflow
 
+For phones on the same Wi-Fi, build the app and run
+`powershell -File scripts/start-lan.ps1`. This computer processes the files;
+each phone has a separate browser session. See [Wi-Fi setup and testing](docs/lan-testing.md).
+Docker is optional; Kubernetes is not needed for this single-computer setup.
+
 1. Open HAMMA and choose **Select Files** or **Select Folder**. You can also drag files into the workspace.
 2. Wait for the operation to finish.
 3. Choose **Download** to save your result.
