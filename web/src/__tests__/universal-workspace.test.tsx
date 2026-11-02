@@ -4,6 +4,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import * as processingClient from '../processing/client';
 import { UniversalWorkspace } from '../components/workspace/UniversalWorkspace';
 
+vi.hoisted(() => { Object.defineProperty(window, 'matchMedia', { configurable: true, value: vi.fn(() => ({ matches: false, addEventListener: vi.fn() })) }); });
+
 let root: Root;
 let host: HTMLDivElement;
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -72,4 +74,18 @@ it('shows newly submitted jobs instead of retaining a Completed-only queue filte
   await act(async () => button('Compress').click());
   expect(host.querySelector('[aria-label="Filter processing history"]')?.textContent).toBe('All statuses');
   expect(host.querySelector('[aria-label="Sort processing history"]')?.textContent).toBe('Newest first');
+});
+
+it('announces newly completed jobs once after reconnecting', async () => {
+  let state = 'processing';
+  fetchMock.mockImplementation(async (url: string) => ({ ok: true, json: async () => url.endsWith('/capabilities') ? caps : url.endsWith('/settings') ? { fileRetention: '24h', historyRetention: '30d' } : { jobs: [{ id: 'job-one', name: 'example.zip', state, operation: 'compress', inputSize: 100, outputSize: null, processed: 20, created: 1, fileExpires: 2, historyExpires: 3, fileCount: 1, format: 'zip', entries: 1, downloadAvailable: false }], total: 1 } }));
+  const notice = vi.fn(); window.addEventListener('hamma-job-notice', notice);
+  try {
+    await render(); expect(notice).not.toHaveBeenCalled();
+    state = 'completed';
+    await act(async () => window.dispatchEvent(new Event('online')));
+    expect(notice).toHaveBeenCalledTimes(1);
+    await act(async () => window.dispatchEvent(new Event('online')));
+    expect(notice).toHaveBeenCalledTimes(1);
+  } finally { window.removeEventListener('hamma-job-notice', notice); }
 });

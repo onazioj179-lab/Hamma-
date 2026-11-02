@@ -44,6 +44,21 @@ export default function App() {
   const inputRef = useRef<HTMLInputElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const [announcement, setAnnouncement] = useState('');
+  const [jobCount, setJobCount] = useState(0);
+  const [notice, setNotice] = useState('');
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    const notify = (event: Event) => {
+      const message = (event as CustomEvent<{message: string}>).detail.message;
+      setAnnouncement(message); setNotice(message);
+      clearTimeout(timer); timer = setTimeout(() => setNotice(''), 8000);
+    };
+    const count = (event: Event) => setJobCount((event as CustomEvent<number>).detail);
+    window.addEventListener('hamma-job-notice', notify);
+    window.addEventListener('hamma-job-count', count);
+    return () => { clearTimeout(timer); window.removeEventListener('hamma-job-notice', notify); window.removeEventListener('hamma-job-count', count); };
+  }, []);
+
   const [termsAccepted, setTermsAccepted] = useState(() => localStorage.getItem('hamma-terms-v1') === 'accepted');
   const openSettings = (next: SettingsSection) => {
     setSection(next);
@@ -139,8 +154,8 @@ export default function App() {
             >
               <Icon size={17} strokeWidth={1.7} />
               <span>{label}</span>
-              {key === 'files' && recent.length > 0 && (
-                <small>{recent.length}</small>
+              {key === 'files' && recent.length + jobCount > 0 && (
+                <small>{recent.length + jobCount}</small>
               )}
               {key === 'process' && isProcessing && (
                 <span className="running-dot" />
@@ -267,6 +282,7 @@ export default function App() {
         }}
       />
       {!termsAccepted && <aside className="privacy-banner" aria-label="First use agreement"><div><strong>Before you begin</strong><p>Files are processed on the computer running HAMMA. On Wi-Fi, uploads travel to that computer over your local network. Temporary files and job metadata remain until expiry. No AI service receives your contents.</p><a href="#" onClick={event => { event.preventDefault(); openSettings('privacy'); }}>Privacy & terms</a></div><button className="button primary" onClick={() => { localStorage.setItem('hamma-terms-v1', 'accepted'); setTermsAccepted(true); setPrivacyChoice('essential'); }}>Agree & continue</button></aside>}
+      {notice && <aside className="job-toast" aria-label="Job update"><span>{notice}</span><button className="button secondary" onClick={() => { setView('files'); setNotice(''); }}>View files</button><button className="text-button" aria-label="Dismiss job update" onClick={() => setNotice('')}>Dismiss</button></aside>}
       <span className="sr-only" role="status">
         {announcement}
       </span>

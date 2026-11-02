@@ -1629,3 +1629,21 @@ a{color:rgb(var(--accent));text-underline-offset:3px}button,input,a{touch-action
 .dark .tag-extract { color:#9ce3bb; background:#102d20; }
 .dark .tag-convert { color:#d9b4ff; background:#2c173e; }
 @media(max-width:650px) { .hamma-shell .workspace-main { padding:16px 12px; } .hamma-shell .page-heading h1 { font-size:26px; } .hamma-shell .button { min-height:44px; } }
+
+/* Consistent navigation and feedback throughout the application. */
+.hamma-shell .settings-tabs { display:flex; gap:6px; flex-wrap:wrap; border:0; padding:0; margin-bottom:18px; }
+.hamma-shell .settings-tabs button { min-height:40px; padding:8px 16px; border:1px solid rgb(var(--border)); font-weight:600; }
+.hamma-shell .settings-tabs button[aria-current=page] { background:rgb(var(--foreground)); color:rgb(var(--background)); border-color:rgb(var(--foreground)); }
+.hamma-shell .appearance-options { display:flex; flex-wrap:wrap; gap:8px; }
+.hamma-shell .appearance-options > button { flex:1; min-width:95px; border-radius:999px; padding:10px 14px; }
+.hamma-shell .appearance-preview { display:none; }
+.hamma-shell .appearance-label { justify-content:center; padding:0; }
+.hamma-shell .preference-row, .hamma-shell .setting-action { padding:16px 0; gap:20px; border-bottom:1px solid rgb(var(--border)); }
+.hamma-shell .setting-detail { margin-top:16px; }
+.hamma-shell .settings-group .section-heading { margin-bottom:14px; }
+.hamma-shell .workspace-main { min-width:0; overflow-wrap:anywhere; }
+.hamma-shell :is(.primary-navigation button,.sidebar-utility,.button,.icon-button) { min-height:40px; }
+.queue-loading { display:flex; align-items:center; gap:10px; padding:16px; color:rgb(var(--muted)); font-size:13px; }
+.job-toast { position:fixed; bottom:24px; right:24px; z-index:100; display:flex; align-items:center; flex-wrap:wrap; gap:12px; max-width:min(520px,calc(100vw - 24px)); padding:14px 18px; background:rgb(var(--card-elevated)); color:rgb(var(--foreground)); border:1px solid rgb(var(--border)); border-radius:18px; box-shadow:0 8px 32px #0003; }
+.job-toast > span { flex:1; min-width:150px; font-size:13px; overflow-wrap:anywhere; }
+@media(max-width:650px) { .job-toast { bottom:16px; right:12px; left:12px; } .hamma-shell .setting-action { flex-wrap:wrap; } .hamma-shell .settings-tabs button { flex:1; } }

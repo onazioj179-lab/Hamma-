@@ -49,9 +49,9 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
       <div className="page-heading">
         <div>
           <p className="eyebrow">MAKE IT YOURS</p>
-          <h1>{section === 'about' ? 'Made with purpose.' : 'Settings'}</h1>
+          <h1>{section === 'about' ? 'About HAMMA' : 'Settings'}</h1>
           <p className="page-description">
-            Simple controls. Clear choices. Everything in one place.
+            Appearance, downloads, privacy, and storage.
           </p>
         </div>
       </div>
@@ -74,7 +74,7 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
           <section className="surface settings-group">
             <div className="section-heading">
               <h2>Appearance</h2>
-              <p>A familiar space, in your preferred light.</p>
+              <p>Choose light, dark, or match your device.</p>
             </div>
             <div className="appearance-options">
               {[
@@ -151,7 +151,7 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
               onClick={() => {
                 setPrivacyChoice('essential');
                 setMessage(
-                  'Essential storage selected. Local learning is off and its data is cleared.',
+                  'Essential storage selected.',
                 );
               }}
             >
