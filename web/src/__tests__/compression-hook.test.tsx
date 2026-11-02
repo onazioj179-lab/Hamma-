@@ -40,6 +40,20 @@ beforeEach(async () => {
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
 
 describe('compression screen workflow', () => {
+  it('admits only one job while an earlier file is being read', async () => {
+    let finishRead!: (value:ArrayBuffer)=>void;
+    const reading = new Promise<ArrayBuffer>(resolve=>{ finishRead=resolve; });
+    let first!:Promise<void>;
+    await act(async () => { first=controller.compress(file('first.txt',()=>reading)); });
+    const secondRead=vi.fn(async()=>new Uint8Array([1]).buffer);
+    await act(async () => controller.compress(file('second.txt',secondRead)));
+    expect(secondRead).not.toHaveBeenCalled();
+    expect(useAppStore.getState().selectedFile?.name).toBe('first.txt');
+    await act(async () => { finishRead(new Uint8Array([1,2,3]).buffer); await first; });
+    expect(mocks.compress).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().operationStatus).toBe('completed');
+  });
+
   it('reports unreadable files instead of making an incomplete multi-file archive', async () => {
     await act(async () => controller.compressMultiple([
       file('good.txt', async () => new Uint8Array([1,2,3]).buffer),
