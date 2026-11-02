@@ -30,7 +30,7 @@
     "wasm",
     "webassembly"
   ],
-  "author": "",
+  "author": "Onazi Treasure Oj",
   "license": "MIT",
   "devDependencies": {
     "rimraf": "^5.0.5"
@@ -39,4 +39,3 @@
     "immer": "^11.0.1"
   }
 }
-

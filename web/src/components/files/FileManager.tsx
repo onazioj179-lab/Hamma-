@@ -107,7 +107,7 @@ export function FileManager() {
   }, [selectedFiles, deleteFile, clearSelection]);
   
   return (
-    <div className="flex flex-col h-full bg-slate-900 text-white">
+    <div className="workspace-surface flex flex-col min-h-full bg-slate-900 text-white">
       {/* Header */}
       <div className="p-4 border-b border-slate-700">
         <div className="flex items-center justify-between mb-4">

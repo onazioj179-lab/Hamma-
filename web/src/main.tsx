@@ -6,7 +6,9 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import { MotionConfig } from 'framer-motion';
 import './index.css';
+import './expressive.css';
 
 // ============================================================================
 // ERROR BOUNDARY - Prevents app crashes from propagating
@@ -110,15 +112,6 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
 // THEME INITIALIZATION
 // ============================================================================
 
-const initTheme = (): void => {
-  const stored = localStorage.getItem('spk-theme');
-  if (stored === 'dark' || (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-    document.documentElement.classList.add('dark');
-  }
-};
-
-initTheme();
-
 // ============================================================================
 // APP INITIALIZATION
 // ============================================================================
@@ -126,7 +119,7 @@ initTheme();
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <App />
+      <MotionConfig reducedMotion="user"><App /></MotionConfig>
     </ErrorBoundary>
   </React.StrictMode>
 );
