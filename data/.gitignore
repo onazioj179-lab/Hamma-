@@ -1,0 +1,3 @@
+# Runtime account database, journals, and payloads must never enter source control.
+*
+!.gitignore

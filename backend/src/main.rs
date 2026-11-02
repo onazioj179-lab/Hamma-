@@ -160,6 +160,7 @@ async fn main() {
         // Account management endpoints
         .route("/api/account/create", post(routes::account::create_account))
         .route("/api/account/login", post(routes::account::login))
+        .route("/api/account/logout", post(routes::account::logout))
         .route("/api/account/recover", post(routes::account::recover_account))
         .route("/api/account/:account_id", get(routes::account::get_account))
         

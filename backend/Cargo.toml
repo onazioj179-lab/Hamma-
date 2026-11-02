@@ -50,6 +50,8 @@ hex = "0.4"
 
 # Crypto (for account hashing)
 sha2 = "0.10"
+argon2 = "0.5"
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 # System info
 num_cpus = "1.16"
