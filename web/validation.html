@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en"><meta charset="UTF-8"><title>SPK browser functionality checks</title>
+<style>body{font:16px system-ui;margin:32px;background:#101826;color:#e8eef7}li{padding:8px}.pass{color:#77e4a1}.fail{color:#ff9696}</style>
+<h1>Browser archive integrity</h1><p id="status" role="status">Running real browser engine checks…</p><ol id="results"></ol>
+<script type="module">
+import { AdaptiveEngine } from './src/engine/adaptive-engine.ts';
+const source = new TextEncoder().encode('Browser round-trip: 日本語 integrity.\n'.repeat(200));
+const checks = [
+  ...['main-js','worker-js','main-wasm','worker-wasm','streaming','minimal'].map(forceStrategy => [forceStrategy, {forceStrategy}]),
+  ['extreme', {compressionLevel:10}],
+];
+let failures=0;
+for (const [name, config] of checks) {
+  const item = document.createElement('li');
+  item.textContent = `${name}: running`;
+  document.querySelector('#results').append(item);
+  try {
+    const compressed = await new AdaptiveEngine(config).compress(source, 'browser.txt');
+    if (!compressed.success) throw Error(compressed.error);
+    const decoded = await new AdaptiveEngine().decompress(compressed.data);
+    if (!decoded.success) throw Error(decoded.error);
+    if (decoded.data.length !== source.length || decoded.data.some((byte, i) => byte !== source[i])) throw Error('Restored bytes differ');
+    item.className='pass'; item.textContent=`PASS ${name}: ${source.length} bytes restored exactly (actual strategy: ${compressed.strategy})`;
+  } catch(error) {
+    failures++; item.className='fail'; item.textContent=`FAIL ${name}: ${error.message}`;
+  }
+}
+document.querySelector('#status').textContent=`Complete: ${checks.length-failures} passed, ${failures} failed`;
+</script></html>

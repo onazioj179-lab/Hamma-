@@ -1,0 +1,42 @@
+{
+  "name": "singularity-pack",
+  "version": "1.0.0",
+  "description": "High-performance file compression tool with custom SPK format",
+  "private": true,
+  "workspaces": [
+    "web"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=web",
+    "build": "npm run build --workspace=web",
+    "build:mobile-web": "npm exec --workspace=web -- vite build --config ../mobile-web/vite.config.ts",
+    "preview": "npm run preview --workspace=web",
+    "build:wasm": "cd wasm && wasm-pack build --target web --out-dir ../web/src/wasm/generated",
+    "build:core": "cd core && cargo build --release",
+    "build:backend": "cd backend && cargo build --release",
+    "build:all": "npm run build:core && npm run build:wasm && npm run build",
+    "test": "npm run test:web && npm run test:core && npm run test:wasm",
+    "test:web": "npm run test:run --workspace=web",
+    "typecheck": "tsc --noEmit -p web/tsconfig.json && tsc --noEmit -p web/tsconfig.node.json",
+    "test:core": "cd core && cargo test",
+    "test:wasm": "cd wasm && cargo test",
+    "lint": "npm run lint --workspace=web",
+    "clean": "rimraf dist web/dist target wasm/pkg web/src/wasm/generated"
+  },
+  "keywords": [
+    "compression",
+    "archive",
+    "rust",
+    "wasm",
+    "webassembly"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "rimraf": "^5.0.5"
+  },
+  "dependencies": {
+    "immer": "^11.0.1"
+  }
+}
+

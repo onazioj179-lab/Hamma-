@@ -1,0 +1,1 @@
+export { zipSync } from 'fflate';

@@ -1,0 +1,50 @@
+# Rust
+/target/
+**/target/
+**/*.rs.bk
+
+# Node
+node_modules/
+dist/
+*.log
+npm-debug.log*
+
+# WebAssembly
+/wasm/pkg/
+/web/src/wasm/generated/
+*.wasm
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/tasks.json
+!.vscode/launch.json
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build artifacts
+*.spk
+*.spk.tmp
+
+# Test coverage
+coverage/
+*.lcov
+
+# Python and local runtime output
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+buildlogs/
+*.tsbuildinfo
+/mobile-web/assets/zip.js
+/validation/fixtures/

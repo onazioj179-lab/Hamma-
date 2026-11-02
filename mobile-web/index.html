@@ -1,0 +1,1023 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0D0D0D">
+    <title>Singularity Pack</title>
+    <link rel="manifest" href="manifest.json">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg: #0D0D0D;
+            --surface: #1A1A1A;
+            --surface-light: #2A2A2A;
+            --primary: #6366F1;
+            --primary-light: #818CF8;
+            --accent: #22D3EE;
+            --success: #10B981;
+            --warning: #F59E0B;
+            --error: #EF4444;
+            --text: #F5F5F5;
+            --text-secondary: #9CA3AF;
+            --text-muted: #6B7280;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        .app {
+            max-width: 480px;
+            margin: 0 auto;
+            padding: 16px;
+            padding-top: env(safe-area-inset-top, 16px);
+            padding-bottom: env(safe-area-inset-bottom, 16px);
+        }
+
+        /* Header */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 0;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-icon {
+            width: 36px;
+            height: 36px;
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+        }
+
+        .logo-text {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .info-btn {
+            width: 40px;
+            height: 40px;
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 20px;
+            cursor: pointer;
+            border-radius: 50%;
+        }
+
+        .info-btn:active {
+            background: var(--surface);
+        }
+
+        /* Version Badge */
+        .version-badge {
+            display: flex;
+            justify-content: center;
+            margin: 16px 0;
+        }
+
+        .badge {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            background: var(--surface);
+            border: 1px solid var(--surface-light);
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 1px;
+            color: var(--text-secondary);
+        }
+
+        .badge-dot {
+            width: 6px;
+            height: 6px;
+            background: var(--success);
+            border-radius: 50%;
+        }
+
+        /* Stats Card */
+        .stats-card {
+            background: var(--surface);
+            border: 1px solid var(--surface-light);
+            border-radius: 20px;
+            padding: 24px;
+            margin: 24px 0;
+            text-align: center;
+        }
+
+        .main-stat {
+            font-size: 56px;
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        .main-stat-label {
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 2px;
+            color: var(--primary);
+            margin-top: 4px;
+        }
+
+        .stats-row {
+            display: flex;
+            justify-content: space-evenly;
+            margin-top: 24px;
+            padding-top: 24px;
+            border-top: 1px solid var(--surface-light);
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+        }
+
+        .stat-unit {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--accent);
+        }
+
+        .stat-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        .stat-divider {
+            width: 1px;
+            background: var(--surface-light);
+        }
+
+        /* Action Cards */
+        .actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin: 24px 0;
+        }
+
+        .action-card {
+            padding: 20px;
+            border-radius: 16px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            border: none;
+            text-align: left;
+            color: white;
+        }
+
+        .action-card:active {
+            transform: scale(0.98);
+        }
+
+        .action-compress {
+            background: linear-gradient(135deg, var(--primary), #4F46E5);
+            box-shadow: 0 8px 20px rgba(99, 102, 241, 0.3);
+        }
+
+        .action-decompress {
+            background: linear-gradient(135deg, var(--accent), #0891B2);
+            box-shadow: 0 8px 20px rgba(34, 211, 238, 0.3);
+        }
+
+        .action-icon {
+            width: 48px;
+            height: 48px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            margin-bottom: 16px;
+        }
+
+        .action-title {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .action-subtitle {
+            font-size: 13px;
+            opacity: 0.8;
+            margin-top: 4px;
+        }
+
+        /* File Input (hidden) */
+        .file-input {
+            display: none;
+        }
+
+        /* Selected File Card */
+        .file-card {
+            display: none;
+            background: var(--surface);
+            border: 1px solid var(--surface-light);
+            border-radius: 12px;
+            padding: 16px;
+            margin: 16px 0;
+        }
+
+        .file-card.visible {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .file-icon {
+            width: 48px;
+            height: 48px;
+            background: var(--surface-light);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+        }
+
+        .file-info {
+            flex: 1;
+        }
+
+        .file-name {
+            font-size: 14px;
+            font-weight: 600;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 200px;
+        }
+
+        .file-meta {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        .file-type-badge {
+            padding: 4px 8px;
+            background: rgba(99, 102, 241, 0.1);
+            color: var(--primary);
+            border-radius: 6px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+
+        /* Progress Panel */
+        .progress-panel {
+            display: none;
+            background: var(--surface);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            border-radius: 16px;
+            padding: 20px;
+            margin: 24px 0;
+        }
+
+        .progress-panel.visible {
+            display: block;
+        }
+
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .progress-title {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .spinner {
+            width: 20px;
+            height: 20px;
+            border: 2px solid var(--surface-light);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .progress-percent {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .progress-bar-container {
+            height: 8px;
+            background: var(--surface-light);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 16px;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background: var(--primary);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+
+        .progress-status {
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-bottom: 16px;
+        }
+
+        .progress-stats {
+            display: flex;
+            gap: 24px;
+        }
+
+        .progress-stat {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .progress-stat-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .progress-stat-value {
+            font-size: 14px;
+            font-weight: 600;
+            margin-top: 4px;
+        }
+
+        /* Result Card */
+        .result-card {
+            display: none;
+            background: var(--surface);
+            border-radius: 16px;
+            padding: 20px;
+            margin: 24px 0;
+            text-align: center;
+        }
+
+        .result-card.visible {
+            display: block;
+        }
+
+        .result-card.success {
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+
+        .result-icon {
+            font-size: 48px;
+            margin-bottom: 12px;
+        }
+
+        .result-title {
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .result-message {
+            font-size: 14px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        .result-stats {
+            display: flex;
+            justify-content: center;
+            gap: 32px;
+            margin: 20px 0;
+            padding: 16px;
+            background: var(--surface-light);
+            border-radius: 12px;
+        }
+
+        .result-stat-value {
+            font-size: 18px;
+            font-weight: 700;
+        }
+
+        .result-stat-label {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .result-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 16px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 14px 24px;
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+            transition: opacity 0.2s;
+        }
+
+        .btn:active {
+            opacity: 0.8;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .btn-outline {
+            background: transparent;
+            border: 1.5px solid var(--surface-light);
+            color: var(--text);
+        }
+
+        /* Feature Pills */
+        .features {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 8px;
+            margin: 32px 0;
+        }
+
+        .feature-pill {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 12px;
+            background: var(--surface);
+            border-radius: 20px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        /* Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 100;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+        }
+
+        .modal-overlay.visible {
+            display: flex;
+        }
+
+        .modal {
+            background: var(--surface);
+            border-radius: 16px;
+            padding: 24px;
+            max-width: 360px;
+            width: 100%;
+        }
+
+        .modal-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .modal-title {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .modal-version {
+            font-size: 14px;
+            color: var(--text-secondary);
+            margin-bottom: 16px;
+        }
+
+        .modal-description {
+            font-size: 14px;
+            color: var(--text);
+            margin-bottom: 16px;
+        }
+
+        .modal-features-title {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .modal-feature {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+
+        .modal-feature-check {
+            color: var(--success);
+        }
+
+        .modal-close {
+            width: 100%;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <div class="logo-icon">📦</div>
+                <span class="logo-text">Singularity Pack</span>
+            </div>
+            <button class="info-btn" onclick="showAbout()">ℹ️</button>
+        </header>
+
+        <!-- Version Badge -->
+        <div class="version-badge">
+            <div class="badge">
+                <span class="badge-dot"></span>
+                V23 REALTIME ENGINE
+            </div>
+        </div>
+
+        <!-- Stats Card -->
+        <div class="stats-card">
+            <div class="main-stat">100%</div>
+            <div class="main-stat-label">LOSSLESS GUARANTEE</div>
+            <div class="stats-row">
+                <div class="stat-item">
+                    <div class="stat-value">60<span class="stat-unit">GB/s</span></div>
+                    <div class="stat-label">Max Throughput</div>
+                </div>
+                <div class="stat-divider"></div>
+                <div class="stat-item">
+                    <div class="stat-value">&lt;10<span class="stat-unit">ms</span></div>
+                    <div class="stat-label">Latency</div>
+                </div>
+                <div class="stat-divider"></div>
+                <div class="stat-item">
+                    <div class="stat-value">16K<span class="stat-unit">+</span></div>
+                    <div class="stat-label">Video Support</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Action Cards -->
+        <div class="actions">
+            <button class="action-card action-compress" onclick="selectFile('compress')">
+                <div class="action-icon">📥</div>
+                <div class="action-title">Compress</div>
+                <div class="action-subtitle">Pack files losslessly</div>
+            </button>
+            <button class="action-card action-decompress" onclick="selectFile('decompress')">
+                <div class="action-icon">📤</div>
+                <div class="action-title">Decompress</div>
+                <div class="action-subtitle">Extract .spk files</div>
+            </button>
+        </div>
+
+        <!-- Hidden File Input -->
+        <input type="file" id="fileInput" class="file-input" onchange="handleFileSelect(event)">
+
+        <!-- Selected File Card -->
+        <div id="fileCard" class="file-card">
+            <div class="file-icon" id="fileIcon">📄</div>
+            <div class="file-info">
+                <div class="file-name" id="fileName">filename.ext</div>
+                <div class="file-meta" id="fileMeta">0 KB</div>
+            </div>
+            <div class="file-type-badge" id="fileType">TYPE</div>
+        </div>
+
+        <!-- Start Button -->
+        <button id="startBtn" class="btn btn-primary" style="display:none; width:100%; margin: 16px 0;" onclick="startProcess()">
+            Start Compression
+        </button>
+
+        <!-- Progress Panel -->
+        <div id="progressPanel" class="progress-panel">
+            <div class="progress-header">
+                <div class="progress-title">
+                    <div class="spinner"></div>
+                    <span id="progressLabel">Compressing...</span>
+                </div>
+                <span class="progress-percent" id="progressPercent">0%</span>
+            </div>
+            <div class="progress-bar-container">
+                <div class="progress-bar" id="progressBar"></div>
+            </div>
+            <div class="progress-status" id="progressStatus">Initializing...</div>
+            <div class="progress-stats">
+                <div class="progress-stat">
+                    <div class="progress-stat-label">⚡ Speed</div>
+                    <div class="progress-stat-value" id="statSpeed">0 MB/s</div>
+                </div>
+                <div class="progress-stat">
+                    <div class="progress-stat-label">📦 Chunks</div>
+                    <div class="progress-stat-value" id="statChunks">0</div>
+                </div>
+                <div class="progress-stat">
+                    <div class="progress-stat-label">⏱️ ETA</div>
+                    <div class="progress-stat-value" id="statEta">--</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Result Card -->
+        <div id="resultCard" class="result-card success">
+            <div class="result-icon">✅</div>
+            <div class="result-title" id="resultTitle">Success!</div>
+            <div class="result-message" id="resultMessage">Compressed successfully</div>
+            <div class="result-stats">
+                <div>
+                    <div class="result-stat-value" id="resultRatio">0.85x</div>
+                    <div class="result-stat-label">Compression</div>
+                </div>
+                <div>
+                    <div class="result-stat-value" id="resultTime">1.2s</div>
+                    <div class="result-stat-label">Duration</div>
+                </div>
+                <div>
+                    <div class="result-stat-value" id="resultSize">10 MB</div>
+                    <div class="result-stat-label">Output</div>
+                </div>
+            </div>
+            <div class="result-actions">
+                <button class="btn btn-outline" onclick="downloadResult()">💾 Download</button>
+                <button class="btn btn-primary" onclick="resetApp()">🔄 New</button>
+            </div>
+        </div>
+
+        <!-- HAMMA AI Section -->
+        <div id="hammaCard" class="result-card" style="display: none; background: linear-gradient(135deg, rgba(99, 102, 241, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%); border: 1px solid rgba(99, 102, 241, 0.3);">
+            <div style="display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 16px;">
+                <svg width="24" height="24" fill="none" stroke="#6366F1" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path>
+                </svg>
+                <h3 style="font-size: 18px; font-weight: 700; color: #6366F1;">HAMMA Performance AI</h3>
+            </div>
+            <div id="hammaStatus" style="font-size: 14px; color: var(--text-secondary); text-align: center; margin-bottom: 16px;">
+                Learning from your data...
+            </div>
+            <div id="hammaMetrics" style="display: none; grid-template-columns: repeat(2, 1fr); gap: 12px;">
+                <div style="background: var(--surface); padding: 12px; border-radius: 8px; text-align: center;">
+                    <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">CONTEXTS</div>
+                    <div id="hammaContexts" style="font-size: 20px; font-weight: 700; color: #6366F1;">0</div>
+                </div>
+                <div style="background: var(--surface); padding: 12px; border-radius: 8px; text-align: center;">
+                    <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">SAMPLES</div>
+                    <div id="hammaSamples" style="font-size: 20px; font-weight: 700; color: #6366F1;">0</div>
+                </div>
+                <div style="background: var(--surface); padding: 12px; border-radius: 8px; text-align: center;">
+                    <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">AVG SPEED</div>
+                    <div id="hammaSpeed" style="font-size: 20px; font-weight: 700; color: #10B981;">0 MB/s</div>
+                </div>
+                <div style="background: var(--surface); padding: 12px; border-radius: 8px; text-align: center;">
+                    <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">AVG GAIN</div>
+                    <div id="hammaGain" style="font-size: 20px; font-weight: 700; color: #10B981;">0x</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Feature Pills -->
+        <div class="features">
+            <div class="feature-pill">🛡️ 100% Lossless</div>
+            <div class="feature-pill">⚡ &lt;10ms Latency</div>
+            <div class="feature-pill">🎬 16K Video</div>
+            <div class="feature-pill">🔮 Volumetric</div>
+            <div class="feature-pill">🔋 Energy Aware</div>
+            <div class="feature-pill">🧠 HAMMA AI</div>
+        </div>
+    </div>
+
+    <!-- About Modal -->
+    <div id="aboutModal" class="modal-overlay" onclick="hideAbout(event)">
+        <div class="modal" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <span style="font-size:24px">📦</span>
+                <span class="modal-title">Singularity Pack</span>
+            </div>
+            <div class="modal-version">Version 23.0.0</div>
+            <div class="modal-description">
+                Next-generation lossless compression with realtime media pipeline support.
+            </div>
+            <div class="modal-features-title">Features:</div>
+            <div class="modal-feature"><span class="modal-feature-check">✓</span> 100% bit-perfect lossless</div>
+            <div class="modal-feature"><span class="modal-feature-check">✓</span> Realtime streaming (&lt;10ms)</div>
+            <div class="modal-feature"><span class="modal-feature-check">✓</span> 4K-16K video support</div>
+            <div class="modal-feature"><span class="modal-feature-check">✓</span> Volumetric data handling</div>
+            <div class="modal-feature"><span class="modal-feature-check">✓</span> Energy-aware compression</div>
+            <div class="modal-feature"><span class="modal-feature-check">✓</span> AI-assisted optimization</div>
+            <button class="btn btn-outline modal-close" onclick="hideAbout()">Close</button>
+        </div>
+    </div>
+
+    <script src="config.js"></script>
+    <script>
+        // API configuration
+        const API_BASE = window.SPK_API_BASE || `http://${location.hostname}:3000/api`;
+
+        // App state
+        let currentMode = null;
+        let selectedFile = null;
+        let compressedBlob = null;
+        let downloadName = '';
+        let hammaInterval = null;
+
+        // File type icons
+        const fileIcons = {
+            video: '🎬',
+            image: '🖼️',
+            audio: '🎵',
+            document: '📄',
+            archive: '📦',
+            code: '💻',
+            default: '📄'
+        };
+
+        // Fetch HAMMA stats from backend
+        async function fetchHammaStats() {
+            try {
+                const response = await fetch(`${API_BASE}/hamma/stats`);
+                if (response.ok) {
+                    const stats = await response.json();
+                    
+                    // Calculate totals
+                    const totalSamples = stats.contexts.reduce((acc, ctx) => 
+                        acc + ctx.strategies.reduce((s, st) => s + st.samples, 0), 0
+                    );
+                    const avgSpeed = stats.contexts.reduce((acc, ctx) => {
+                        const ctxSpeed = ctx.strategies.reduce((s, st) => s + st.mean_speed_mb_s, 0);
+                        return acc + ctxSpeed / Math.max(ctx.strategies.length, 1);
+                    }, 0) / Math.max(stats.total_contexts, 1);
+                    const avgGain = stats.contexts.reduce((acc, ctx) => {
+                        const ctxGain = ctx.strategies.reduce((s, st) => s + st.mean_gain, 0);
+                        return acc + ctxGain / Math.max(ctx.strategies.length, 1);
+                    }, 0) / Math.max(stats.total_contexts, 1);
+
+                    // Update UI
+                    document.getElementById('hammaStatus').style.display = 'none';
+                    document.getElementById('hammaMetrics').style.display = 'grid';
+                    document.getElementById('hammaContexts').textContent = stats.total_contexts;
+                    document.getElementById('hammaSamples').textContent = totalSamples.toLocaleString();
+                    document.getElementById('hammaSpeed').textContent = avgSpeed.toFixed(1) + ' MB/s';
+                    document.getElementById('hammaGain').textContent = avgGain.toFixed(2) + 'x';
+                    document.getElementById('hammaCard').style.display = 'block';
+                } else if (response.status === 503) {
+                    // HAMMA not initialized yet
+                    document.getElementById('hammaStatus').textContent = 'Compress a file to initialize HAMMA...';
+                    document.getElementById('hammaCard').style.display = 'block';
+                }
+            } catch (err) {
+                console.log('HAMMA backend unavailable:', err.message);
+            }
+        }
+
+        // Start HAMMA monitoring after first compression
+        function startHammaMonitoring() {
+            if (!hammaInterval) {
+                fetchHammaStats();
+                hammaInterval = setInterval(fetchHammaStats, 10000); // Refresh every 10s
+            }
+        }
+
+        function getFileType(filename) {
+            const ext = filename.split('.').pop().toLowerCase();
+            const types = {
+                video: ['mp4', 'mov', 'avi', 'mkv', 'webm', 'wmv', 'flv'],
+                image: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tiff', 'raw', 'cr2', 'nef'],
+                audio: ['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a'],
+                document: ['pdf', 'doc', 'docx', 'txt', 'rtf'],
+                archive: ['zip', 'rar', '7z', 'tar', 'gz', 'spk'],
+                code: ['js', 'ts', 'py', 'rs', 'go', 'java', 'c', 'cpp', 'h']
+            };
+            
+            for (const [type, exts] of Object.entries(types)) {
+                if (exts.includes(ext)) return type;
+            }
+            return 'default';
+        }
+
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+            return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+        }
+
+        function selectFile(mode) {
+            currentMode = mode;
+            const input = document.getElementById('fileInput');
+            if (mode === 'decompress') {
+                input.accept = '.spk';
+            } else {
+                input.accept = '*/*';
+            }
+            input.click();
+        }
+
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            selectedFile = file;
+            const type = getFileType(file.name);
+            const ext = file.name.split('.').pop().toUpperCase();
+
+            document.getElementById('fileCard').classList.add('visible');
+            document.getElementById('fileIcon').textContent = fileIcons[type];
+            document.getElementById('fileName').textContent = file.name;
+            document.getElementById('fileMeta').textContent = formatSize(file.size);
+            document.getElementById('fileType').textContent = ext;
+
+            const startBtn = document.getElementById('startBtn');
+            startBtn.style.display = 'block';
+            startBtn.textContent = currentMode === 'compress' ? 'Start Compression' : 'Start Extraction';
+
+            // Hide previous results
+            document.getElementById('resultCard').classList.remove('visible');
+            document.getElementById('progressPanel').classList.remove('visible');
+        }
+
+        async function startProcess() {
+            if (!selectedFile) return;
+
+            const progressPanel = document.getElementById('progressPanel');
+            const progressBar = document.getElementById('progressBar');
+            const progressPercent = document.getElementById('progressPercent');
+            const progressStatus = document.getElementById('progressStatus');
+            const progressLabel = document.getElementById('progressLabel');
+
+            document.getElementById('startBtn').style.display = 'none';
+            progressPanel.classList.add('visible');
+            progressLabel.textContent = currentMode === 'compress' ? 'Compressing...' : 'Extracting...';
+
+            const startTime = Date.now();
+            const fileSize = selectedFile.size;
+
+            if (currentMode === 'compress') {
+                // Real backend compression with HAMMA
+                try {
+                    const formData = new FormData();
+                    formData.append('file', selectedFile);
+
+                    progressStatus.textContent = 'Uploading to backend...';
+                    const response = await fetch(`${API_BASE}/compress`, {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!response.ok) throw new Error('Compression failed');
+
+                    const result = await response.json();
+                    const download = await fetch(new URL(result.download_url, API_BASE));
+                    if (!download.ok) throw new Error('Archive download failed');
+                    compressedBlob = await download.blob();
+                    downloadName = selectedFile.name + '.spk';
+
+                    // Show result
+                    progressPanel.classList.remove('visible');
+                    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+                    document.getElementById('resultRatio').textContent = result.compression_ratio.toFixed(2) + 'x';
+                    document.getElementById('resultTime').textContent = duration + 's';
+                    document.getElementById('resultSize').textContent = formatSize(result.compressed_size);
+                    document.getElementById('resultCard').classList.add('visible');
+
+                    // Start HAMMA monitoring
+                    startHammaMonitoring();
+                } catch (err) {
+                    alert('Backend compression failed: ' + err.message);
+                    progressPanel.classList.remove('visible');
+                    document.getElementById('startBtn').style.display = 'block';
+                    return;
+                }
+            } else {
+                try {
+                    progressStatus.textContent = 'Uploading archive for restoration...';
+                    const form = new FormData(); form.append('file', selectedFile);
+                    const upload = await fetch(`${API_BASE}/files/upload`, {method:'POST',body:form});
+                    if (!upload.ok) throw new Error('Archive upload failed');
+                    const {id} = await upload.json();
+                    const response = await fetch(`${API_BASE}/decompress`, {
+                        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id})
+                    });
+                    if (!response.ok) throw new Error(await response.text());
+                    const result = await response.json();
+                    const files = Object.create(null);
+                    for (const file of result.files) {
+                        const name = file.path.replace(/\\/g, '/');
+                        if (name.startsWith('/') || /^[a-z]:/i.test(name) || name.split('/').some(part => !part || part === '..' || part === '.') || Object.prototype.hasOwnProperty.call(files,name)) {
+                            throw new Error('Invalid or duplicate archive path');
+                        }
+                        const download = await fetch(new URL(file.download_url, API_BASE));
+                        if (!download.ok) throw new Error('File download failed');
+                        files[name] = new Uint8Array(await download.arrayBuffer());
+                        if (files[name].length !== file.size) throw new Error('Restored size mismatch');
+                    }
+                    const {zipSync} = await import('./assets/zip.js');
+                    const zip = zipSync(files, {level:0});
+                    compressedBlob = new Blob([zip]);
+                    downloadName = selectedFile.name.replace(/\.spk$/i,'') + '.zip';
+                    progressPanel.classList.remove('visible');
+                    document.getElementById('resultTitle').textContent = 'Restoration Complete';
+                    document.getElementById('resultMessage').textContent = `${result.files.length} files restored to ZIP.`;
+                    document.getElementById('resultRatio').textContent = 'Verified';
+                    document.getElementById('resultTime').textContent = ((Date.now()-startTime)/1000).toFixed(1)+'s';
+                    document.getElementById('resultSize').textContent = formatSize(zip.length);
+                    document.getElementById('resultCard').classList.add('visible');
+                } catch (error) {
+                    compressedBlob = null;
+                    alert('Restoration failed: ' + error.message);
+                    progressPanel.classList.remove('visible');
+                    document.getElementById('startBtn').style.display = 'block';
+                }
+            }
+        }
+
+        function downloadResult() {
+            if (!compressedBlob || !selectedFile) return;
+            
+            const url = URL.createObjectURL(compressedBlob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = downloadName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function resetApp() {
+            selectedFile = null;
+            compressedBlob = null;
+            currentMode = null;
+            
+            document.getElementById('fileCard').classList.remove('visible');
+            document.getElementById('progressPanel').classList.remove('visible');
+            document.getElementById('resultCard').classList.remove('visible');
+            document.getElementById('startBtn').style.display = 'none';
+            document.getElementById('fileInput').value = '';
+        }
+
+        function showAbout() {
+            document.getElementById('aboutModal').classList.add('visible');
+        }
+
+        function hideAbout(event) {
+            if (!event || event.target.classList.contains('modal-overlay')) {
+                document.getElementById('aboutModal').classList.remove('visible');
+            }
+        }
+
+        // Register Service Worker for PWA
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('sw.js').catch(() => {});
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+# SPK V24 Analysis Options
+
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+  errors:
+    invalid_annotation_target: ignore
+  language:
+    strict-casts: false
+    strict-raw-types: false
+
+linter:
+  rules:
+    # Enabled
+    - prefer_const_constructors
+    - prefer_const_declarations
+    - prefer_final_fields
+    - avoid_print
+    - prefer_single_quotes
+    
+    # Disabled
+    - always_use_package_imports: false
+    - public_member_api_docs: false
+    - lines_longer_than_80_chars: false

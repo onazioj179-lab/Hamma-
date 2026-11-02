@@ -1,0 +1,62 @@
+[package]
+name = "spk-backend"
+version = "1.0.0"
+edition = "2021"
+authors = ["Singularity Pack Contributors"]
+description = "Backend server for Singularity Pack"
+license = "MIT"
+
+[[bin]]
+name = "spk-server"
+path = "src/main.rs"
+
+[dependencies]
+# Core library
+spk-core = { path = "../core" }
+
+# Web framework
+axum = { version = "0.7", features = ["multipart", "ws"] }
+tower = { version = "0.4", features = ["full"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "fs", "limit"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Utils
+uuid = { version = "1.6", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# File handling
+tempfile = "3.9"
+bytes = "1.5"
+futures = "0.3"
+async-stream = "0.3"
+
+# V6 - Base64 encoding
+base64 = "0.21"
+rand = "0.8"
+hex = "0.4"
+
+# Crypto (for account hashing)
+sha2 = "0.10"
+
+# System info
+num_cpus = "1.16"
+
+# Configuration
+dotenvy = "0.15"
+
+[dev-dependencies]
+reqwest = { version = "0.11", features = ["json", "multipart"] }
+tokio-test = "0.4"
