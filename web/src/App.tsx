@@ -23,10 +23,12 @@ import { ActivityHistory } from './components/files/ActivityHistory';
 import { CompressionWorkspace } from './components/workspace/CompressionWorkspace';
 import { LocalFiles } from './components/workspace/LocalFiles';
 import { LocalOverview } from './components/workspace/LocalOverview';
+import { UniversalWorkspace } from './components/workspace/UniversalWorkspace';
 
-type View = 'compress' | 'files' | 'history' | 'overview' | 'settings';
+type View = 'process' | 'compress' | 'files' | 'history' | 'overview' | 'settings';
 const navigation = [
-  { key: 'compress', label: 'Workspace', icon: LayoutGrid },
+  { key: 'process', label: 'Workspace', icon: LayoutGrid },
+  { key: 'compress', label: 'SPK archives', icon: FileArchive },
   { key: 'files', label: 'My files', icon: FolderOpen },
   { key: 'history', label: 'History', icon: History },
   { key: 'overview', label: 'Overview', icon: Files },
@@ -38,7 +40,7 @@ export default function App() {
     controller;
   const recent = useAppStore((state) => state.recentArchives);
   const { privacyChoice, setPrivacyChoice } = usePreferences();
-  const [view, setView] = useState<View>('compress');
+  const [view, setView] = useState<View>('process');
   const [section, setSection] = useState<SettingsSection>('general');
   const inputRef = useRef<HTMLInputElement>(null);
   const mainRef = useRef<HTMLElement>(null);
@@ -78,11 +80,12 @@ export default function App() {
       if (
         (event.ctrlKey || event.metaKey) &&
         event.key.toLowerCase() === 'o' &&
-        workerReady &&
+        (view === 'process' || workerReady) &&
         !isProcessing
       ) {
         event.preventDefault();
-        inputRef.current?.click();
+        if (view === 'process') document.querySelector<HTMLInputElement>('input[aria-label="Add files to queue"]')?.click();
+        else inputRef.current?.click();
       }
       if (event.key === 'Escape' && isProcessing) {
         event.preventDefault();
@@ -99,7 +102,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [workerReady, isProcessing, result, cancel, download]);
+  }, [view, workerReady, isProcessing, result, cancel, download]);
 
   const selectedTitle =
     view === 'settings'
@@ -115,7 +118,7 @@ export default function App() {
       <aside className="sidebar" aria-label="Application sidebar">
         <button
           className="brand"
-          onClick={() => setView('compress')}
+          onClick={() => setView('process')}
           aria-label="HAMMA workspace"
         >
           <span className="brand-symbol">
@@ -186,7 +189,7 @@ export default function App() {
             <span
               className={workerReady ? 'status-dot' : 'status-dot pending'}
             />
-            {isProcessing
+            {view !== 'compress' ? 'On this device' : isProcessing
               ? 'Processing locally'
               : workerReady
                 ? 'Local engine ready'
@@ -200,8 +203,13 @@ export default function App() {
           tabIndex={-1}
           className="workspace-main"
         >
+          <UniversalWorkspace
+            visible={view === 'process' || view === 'files' || view === 'history'}
+            screen={view === 'history' ? 'history' : view === 'files' ? 'files' : 'workspace'}
+            onHistory={() => setView('history')}
+          />
           {!workerReady ? (
-            <section className="splash-screen" role="status">
+            <section hidden={view !== 'compress'} className="splash-screen" role="status">
               <span className="splash-symbol">
                 <FileArchive size={26} />
               </span>
@@ -219,12 +227,14 @@ export default function App() {
                   onHistory={() => setView('history')}
                 />
               )}
-              {view === 'history' && <ActivityHistory />}
+              {view === 'history' && <details className="processing-options"><summary>SPK history</summary><ActivityHistory /></details>}
               {view === 'files' && (
+                <details className="processing-options"><summary>SPK result</summary>
                 <LocalFiles
                   controller={controller}
                   onWorkspace={() => setView('compress')}
                 />
+                </details>
               )}
               {view === 'overview' && (
                 <LocalOverview
@@ -269,7 +279,7 @@ export default function App() {
           <div>
             <strong>Your files. Your choice.</strong>
             <p>
-              No tracking cookies or uploads. Allow optional local learning of
+              No tracking or third-party uploads. Allow optional local learning of
               sizes and times, or keep essential settings only.
             </p>
           </div>

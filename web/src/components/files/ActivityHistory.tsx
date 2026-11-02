@@ -1,3 +1,4 @@
+import { SelectField } from '../ui/SelectField';
 import { useState } from 'react';
 import {
   ArrowDownLeft,
@@ -112,15 +113,15 @@ export function ActivityHistory() {
               onChange={(event) => setQuery(event.target.value)}
             />
           </label>
-          <select
+          <SelectField
             aria-label="Filter history"
             value={filter}
-            onChange={(event) => setFilter(event.target.value)}
+            onChange={(value) => setFilter(value)}
           >
             <option value="all">All operations</option>
             <option value="compress">Compression</option>
             <option value="decompress">Restoration</option>
-          </select>
+          </SelectField>
         </div>
         {visible.length ? (
           <OperationRows entries={visible} removable />

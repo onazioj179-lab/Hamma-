@@ -7,6 +7,9 @@
     "web"
   ],
   "scripts": {
+    "processor": "python -m processor.server",
+    "test:processor": "python -m unittest discover -s processor/tests -v",
+    "start:local": "npm run build && python -m processor.server",
     "dev": "npm run dev --workspace=web",
     "build": "npm run build --workspace=web",
     "build:mobile-web": "npm exec --workspace=web -- vite build --config ../mobile-web/vite.config.ts",

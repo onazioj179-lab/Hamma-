@@ -2,10 +2,27 @@
 
 **Make space. Keep everything.**
 
-A free, simple way to compress files and open SPK archives on your device.
+A free local workspace to compress, extract, convert, and download files.
 Created by **Onazi Treasure Oj**.
 
-## Get started
+## Run the new file workspace
+
+```sh
+npm ci
+npm run start:local
+```
+
+Open http://127.0.0.1:5010. Requires Node.js 22+, Python 3.11+, and optional
+FFmpeg/FFprobe for media conversion. Jobs run in local background processes.
+Standard ZIP/TAR/GZIP/BZIP2/XZ operations, verified downloads, resumable uploads,
+retry/cancel controls and 500-record guest history are implemented. The existing
+browser-only workflow is under **SPK archives**.
+
+See [supported formats, deployment and operational limits](docs/universal-processing.md).
+This local implementation does not yet provide accounts, synchronized storage,
+encryption at rest, distributed workers or validated multi-terabyte processing.
+
+## Use the SPK browser workflow
 
 1. Open HAMMA and choose **Select Files** or **Select Folder**. You can also drag files into the workspace.
 2. Wait for the operation to finish.
@@ -17,8 +34,9 @@ Already compressed files may not become smaller.
 
 ## Find your way around
 
-- **Workspace** is where you compress and restore files.
-- **My files** shows your current result.
+- **Workspace** queues standard archive and media operations.
+- **SPK archives** compresses and restores SPK files in your browser.
+- **My files** shows available downloads and the current SPK result.
 - **History** helps you find recent operations by file name.
 - **Overview** shows how much space your recorded compressions saved.
 - **Settings** lets you change appearance, automatic downloads, history, privacy, and app cache.
@@ -29,15 +47,18 @@ On a computer, Settings is at the bottom left. On a phone, use the bottom naviga
 ## Your files and privacy
 
 The local workspace is free and needs no account. Your files are processed on
-your device. They are not uploaded by this workflow.
+your device. Standard file jobs transfer data only to the local service and use
+temporary local disk storage. A temporary cookie isolates your guest session.
+No private contents are sent to an AI service or third party.
 
 Optional local learning remembers size and timing measurements on this browser.
 It starts off. You can enable it, turn it off, or clear it in Settings.
-History remembers file names and operation details; you can disable or clear it separately.
+SPK history remembers file names and operation details; you can disable or clear
+it separately. Standard job history and file retention are controlled in History.
 
-**Download your result before closing the page or starting again.** History does
-not keep a copy of your files, and HAMMA is not cloud storage. Clearing app cache
-or history does not delete files you have already downloaded.
+**Download SPK results before closing the page or starting again.** Standard job
+outputs stay on local disk until their expiry while the service runs. HAMMA is
+not cloud storage. Clearing history or app cache never deletes downloaded copies.
 
 ## Want to run HAMMA yourself?
 

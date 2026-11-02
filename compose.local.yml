@@ -1,0 +1,21 @@
+# Local Linux deployment. Windows/macOS: use npm run start:local.
+services:
+  hamma:
+    build:
+      context: .
+      dockerfile: processor/Dockerfile
+    network_mode: host
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 3g
+    cpus: 2
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    volumes:
+      - hamma-data:/data
+volumes:
+  hamma-data:

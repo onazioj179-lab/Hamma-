@@ -25,9 +25,10 @@ export function LocalOverview({
       <div className="page-heading">
         <div>
           <p className="eyebrow">THE SMALL THINGS ADD UP</p>
-          <h1>Your overview</h1>
+          <h1>SPK overview</h1>
           <p className="page-description">
-            Measured from the records on this browser.
+            SPK archive measurements from this browser. Standard file jobs are
+            listed in History.
           </p>
         </div>
       </div>
