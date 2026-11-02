@@ -15,7 +15,7 @@ import {
   LayoutDashboard,
   Zap,
   Shield,
-  Upload,
+  History,
 } from 'lucide-react';
 
 import { SettingsModal, DropZoneCompact } from './components/ui';
@@ -26,7 +26,7 @@ import { useAccountStore } from './store/account';
 import { AuthModal, RecoveryPhraseModal } from './components/auth/AuthModal';
 const FileManager = lazy(() => import('./components/files/FileManager').then(module => ({ default: module.FileManager })));
 const StorageDashboard = lazy(() => import('./components/dashboard/StorageDashboard').then(module => ({ default: module.StorageDashboard })));
-const LargeFileCompression = lazy(() => import('./components/compression/LargeFileCompression').then(module => ({ default: module.LargeFileCompression })));
+const ActivityHistory = lazy(() => import('./components/files/ActivityHistory').then(module => ({ default: module.ActivityHistory })));
 
 function ViewLoading() {
   return <p role="status" className="text-center text-muted p-8">Loading view…</p>;
@@ -39,7 +39,7 @@ const pageVariants = {
   exit: { opacity: 0, y: -10, scale: 0.98 },
 };
 
-type ViewType = 'compress' | 'large' | 'files' | 'dashboard';
+type ViewType = 'compress' | 'activity' | 'files' | 'dashboard';
 
 export default function App() {
   const {
@@ -121,11 +121,11 @@ export default function App() {
   }, [compress, decompress, compressMultiple]);
 
   const handleFileSelect = useCallback((file: File) => {
-    /\.spk$/i.test(file.name) ? decompress(file) : compress(file);
+    return /\.spk$/i.test(file.name) ? decompress(file) : compress(file);
   }, [compress, decompress]);
 
   const handleFilesSelect = useCallback((files: File[]) => {
-    compressMultiple(files);
+    return compressMultiple(files);
   }, [compressMultiple]);
 
   const handleOpenAuth = useCallback((mode: 'login' | 'create' | 'recover') => {
@@ -153,7 +153,7 @@ export default function App() {
         <div className="segmented-control app-navigation" role="navigation" aria-label="Main navigation">
           {[
             { key: 'compress', icon: FileArchive, label: 'Compress' },
-            { key: 'large', icon: Upload, label: 'Large Files' },
+            { key: 'activity', icon: History, label: 'Activity' },
             { key: 'files', icon: FolderOpen, label: 'Files' },
             { key: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
           ].map(({ key, icon: Icon, label }) => (
@@ -223,10 +223,10 @@ export default function App() {
       {/* Main Content Area */}
       <main className="flex-1 flex items-center justify-center p-6 overflow-auto">
         <AnimatePresence mode="wait">
-          {/* 100TB Compression View */}
-          {currentView === 'large' && (
+          {/* Local activity records */}
+          {currentView === 'activity' && (
             <motion.div
-              key="large"
+              key="activity"
               variants={pageVariants}
               initial="initial"
               animate="animate"
@@ -234,7 +234,7 @@ export default function App() {
               transition={{ duration: 0.35, ease: [0.25, 0.46, 0.45, 0.94] }}
               className="w-full h-full max-w-5xl mx-auto overflow-auto"
             >
-              <Suspense fallback={<ViewLoading />}><LargeFileCompression /></Suspense>
+              <Suspense fallback={<ViewLoading />}><ActivityHistory /></Suspense>
             </motion.div>
           )}
 
