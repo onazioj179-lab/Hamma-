@@ -1550,3 +1550,12 @@ progress::-moz-progress-bar {
   font-size: 12px;
   color: rgb(var(--muted));
 }
+
+/* Keep controls inside their panels at intermediate and narrow widths. */
+.button-row { min-width: 0; flex-wrap: wrap; }
+.privacy-banner { flex-wrap: wrap; }
+.privacy-banner > div:first-of-type { min-width: 0; flex: 1 1 260px; }
+.privacy-banner .button-row { flex: 0 1 auto; max-width: 100%; }
+.setting-action { flex-wrap: wrap; }
+.setting-action > div { min-width: 0; flex: 1 1 220px; }
+.button, .ios-btn-primary, .ios-btn-secondary { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
