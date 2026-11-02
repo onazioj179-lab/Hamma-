@@ -1,7 +1,7 @@
 // Button Component
 
 import { forwardRef } from 'react';
-import { motion, type HTMLMotionProps } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { clsx } from 'clsx';
 
 export interface ButtonProps {
@@ -26,26 +26,26 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         whileHover={{ scale: disabled || loading ? 1 : 1.02 }}
         whileTap={{ scale: disabled || loading ? 1 : 0.98 }}
         className={clsx(
-          'inline-flex items-center justify-center gap-2 font-semibold rounded-xl transition-all duration-200',
+          'inline-flex items-center justify-center gap-2 font-semibold rounded-md transition-all duration-200',
           'focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500',
           'disabled:opacity-50 disabled:cursor-not-allowed',
           {
             // Variants
-            'bg-gradient-to-r from-primary-500 to-primary-600 text-white shadow-lg shadow-primary-500/25 hover:shadow-xl hover:shadow-primary-500/30': variant === 'primary',
+            'bg-primary-500 text-white hover:bg-primary-600': variant === 'primary',
             'bg-surface-100 dark:bg-surface-800 text-foreground border border-border hover:bg-surface-200 dark:hover:bg-surface-850': variant === 'secondary',
             'text-muted hover:text-foreground hover:bg-surface-100 dark:hover:bg-surface-800': variant === 'ghost',
             'bg-red-500 text-white hover:bg-red-600': variant === 'danger',
             // Sizes
             'px-3 py-1.5 text-sm': size === 'sm',
-            'px-5 py-2.5 text-base': size === 'md',
-            'px-8 py-4 text-lg': size === 'lg',
+            'px-4 py-2 text-sm': size === 'md',
+            'px-5 py-2.5 text-sm': size === 'lg',
           },
           className
         )}
         disabled={disabled || loading}
       >
         {loading ? (
-          <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+          <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
             <circle
               className="opacity-25"
               cx="12"
@@ -62,7 +62,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
             />
           </svg>
         ) : icon ? (
-          <span className="shrink-0">{icon}</span>
+          <span className="shrink-0 [&>svg]:w-4 [&>svg]:h-4">{icon}</span>
         ) : null}
         {children}
       </motion.button>

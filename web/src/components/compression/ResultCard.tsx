@@ -92,25 +92,25 @@ function ResultCardBase({
       {/* Success Header */}
       <div className="relative py-8 px-6 text-center overflow-hidden">
         {/* Background gradient */}
-        <div 
+        <div
           className="absolute inset-0 opacity-10"
           style={{
             background: 'radial-gradient(circle at center top, rgb(16 185 129), transparent 60%)',
           }}
         />
-        
+
         {/* Success Icon */}
-        <motion.div 
-          className="relative w-16 h-16 mx-auto mb-4 rounded-full bg-emerald-500 
-                     flex items-center justify-center shadow-lg shadow-emerald-500/30"
+        <motion.div
+          className="relative w-9 h-9 mx-auto mb-4 rounded-full bg-emerald-500
+                     flex items-center justify-center "
           initial={{ scale: 0 }}
           animate={{ scale: 1 }}
           transition={{ type: 'spring', stiffness: 200, delay: 0.1 }}
         >
-          <Check className="w-8 h-8 text-white" strokeWidth={3} />
+          <Check className="w-4 h-4 text-white" strokeWidth={3} />
         </motion.div>
 
-        <motion.h2 
+        <motion.h2
           className="text-xl font-bold text-foreground mb-1"
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -118,8 +118,8 @@ function ResultCardBase({
         >
           {operation === 'decompress' ? 'Restoration Complete' : 'Compression Complete'}
         </motion.h2>
-        
-        <motion.p 
+
+        <motion.p
           className="text-sm text-muted truncate max-w-[280px] mx-auto"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -132,7 +132,7 @@ function ResultCardBase({
       {/* Stats Section */}
       <div className="px-6 pb-4">
         {/* Size Comparison */}
-        <motion.div 
+        <motion.div
           className="bg-gray-50 dark:bg-gray-900/50 rounded-xl p-4 mb-4"
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -143,15 +143,15 @@ function ResultCardBase({
               <p className="text-xs text-muted mb-1">{operation === 'decompress' ? 'Archive' : 'Original'}</p>
               <p className="text-base font-semibold text-foreground">{formatSize(originalSize)}</p>
             </div>
-            
-            <motion.div 
+
+            <motion.div
               className="flex flex-col items-center"
               animate={{ y: [0, 3, 0] }}
               transition={{ duration: 1.5, repeat: Infinity }}
             >
-              <ArrowDown className="w-5 h-5 text-emerald-500" />
+              <ArrowDown className="w-4 h-4 text-emerald-500" />
             </motion.div>
-            
+
             <div className="text-center">
               <p className="text-xs text-muted mb-1">{operation === 'decompress' ? 'Restored' : 'Compressed'}</p>
               <p className="text-base font-semibold text-foreground">{formatSize(compressedSize)}</p>
@@ -161,14 +161,14 @@ function ResultCardBase({
           {/* Savings Highlight */}
           {operation === 'compress' && (
           <div className={`text-center p-3 rounded-lg ${
-            Number(savings.percent) < 5 
-              ? 'bg-amber-50 dark:bg-amber-900/20' 
+            Number(savings.percent) < 5
+              ? 'bg-amber-50 dark:bg-amber-900/20'
               : 'bg-emerald-50 dark:bg-emerald-900/20'
           }`}>
-            <motion.p 
+            <motion.p
               className={`text-2xl font-bold ${
-                Number(savings.percent) < 5 
-                  ? 'text-amber-500' 
+                Number(savings.percent) < 5
+                  ? 'text-amber-500'
                   : 'text-emerald-500'
               }`}
               initial={{ scale: 0.8 }}
@@ -178,12 +178,12 @@ function ResultCardBase({
               {savings.percent}% saved
             </motion.p>
             <p className={`text-xs ${
-              Number(savings.percent) < 5 
-                ? 'text-amber-600 dark:text-amber-400' 
+              Number(savings.percent) < 5
+                ? 'text-amber-600 dark:text-amber-400'
                 : 'text-emerald-600 dark:text-emerald-400'
             }`}>
-              {Number(savings.percent) < 5 
-                ? 'Little or no space saved for this file' 
+              {Number(savings.percent) < 5
+                ? 'Little or no space saved for this file'
                 : `${formatSize(savings.bytes)} smaller`
               }
             </p>
@@ -192,7 +192,7 @@ function ResultCardBase({
         </motion.div>
 
         {/* Performance Stats */}
-        <motion.div 
+        <motion.div
           className="flex justify-center gap-6 mb-5"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -207,7 +207,7 @@ function ResultCardBase({
               <p className="text-sm font-semibold text-foreground">{formatSpeed(averageSpeed)}</p>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-2">
             <div className="p-1.5 rounded-lg bg-cyan-100 dark:bg-cyan-900/30">
               <Clock className="w-4 h-4 text-cyan-500" />
@@ -220,7 +220,7 @@ function ResultCardBase({
         </motion.div>
 
         {/* Action Buttons */}
-        <motion.div 
+        <motion.div
           className="flex gap-3"
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -229,32 +229,32 @@ function ResultCardBase({
           {downloadUrl ? (
             <motion.button
               onClick={handleDownload}
-              className="flex-1 flex items-center justify-center gap-2 py-3 px-4
-                         bg-primary-500 hover:bg-primary-600 text-white 
-                         rounded-xl font-semibold transition-colors shadow-lg shadow-primary-500/25"
+              className="flex-1 flex items-center justify-center gap-2 py-2 px-3
+                         bg-primary-500 hover:bg-primary-600 text-white
+                         rounded-md text-sm font-semibold transition-colors "
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
             >
-              <Download className="w-5 h-5" />
+              <Download className="w-4 h-4" />
               <span>Download</span>
             </motion.button>
           ) : (
-            <div className="flex-1 flex items-center justify-center gap-2 py-3 px-4
-                           bg-emerald-500 text-white rounded-xl font-semibold">
-              <Check className="w-5 h-5" />
+            <div className="flex-1 flex items-center justify-center gap-2 py-2 px-3
+                           bg-emerald-500 text-white rounded-md text-sm font-semibold">
+              <Check className="w-4 h-4" />
               <span>Saved to Disk</span>
             </div>
           )}
 
           <motion.button
             onClick={onReset}
-            className="flex items-center justify-center gap-2 py-3 px-4
+            className="flex items-center justify-center gap-2 py-2 px-3
                        bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700
-                       text-foreground rounded-xl font-semibold transition-colors"
+                       text-foreground rounded-md text-sm font-semibold transition-colors"
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
           >
-            <RotateCcw className="w-5 h-5" />
+            <RotateCcw className="w-4 h-4" />
             <span>New</span>
           </motion.button>
         </motion.div>

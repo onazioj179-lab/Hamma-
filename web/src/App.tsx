@@ -5,20 +5,17 @@
 
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  Settings, 
-  FileArchive, 
-  AlertTriangle, 
-  Loader2, 
-  User, 
-  FolderOpen, 
+import {
+  Settings,
+  FileArchive,
+  AlertTriangle,
+  Loader2,
+  User,
+  FolderOpen,
   LayoutDashboard,
   Zap,
   Shield,
-  Upload,
-  ChevronRight,
-  Check,
-  X
+  History,
 } from 'lucide-react';
 
 import { SettingsModal, DropZoneCompact } from './components/ui';
@@ -29,7 +26,7 @@ import { useAccountStore } from './store/account';
 import { AuthModal, RecoveryPhraseModal } from './components/auth/AuthModal';
 const FileManager = lazy(() => import('./components/files/FileManager').then(module => ({ default: module.FileManager })));
 const StorageDashboard = lazy(() => import('./components/dashboard/StorageDashboard').then(module => ({ default: module.StorageDashboard })));
-const LargeFileCompression = lazy(() => import('./components/compression/LargeFileCompression').then(module => ({ default: module.LargeFileCompression })));
+const ActivityHistory = lazy(() => import('./components/files/ActivityHistory').then(module => ({ default: module.ActivityHistory })));
 
 function ViewLoading() {
   return <p role="status" className="text-center text-muted p-8">Loading view…</p>;
@@ -42,19 +39,13 @@ const pageVariants = {
   exit: { opacity: 0, y: -10, scale: 0.98 },
 };
 
-const fadeIn = {
-  initial: { opacity: 0 },
-  animate: { opacity: 1 },
-  exit: { opacity: 0 },
-};
-
-type ViewType = 'compress' | 'large' | 'files' | 'dashboard';
+type ViewType = 'compress' | 'activity' | 'files' | 'dashboard';
 
 export default function App() {
-  const { 
-    progress, 
-    result, 
-    error, 
+  const {
+    progress,
+    result,
+    error,
     selectedFile,
     isIdle,
     isProcessing,
@@ -64,20 +55,20 @@ export default function App() {
     compress,
     decompress,
     compressMultiple,
-    cancel, 
-    reset, 
-    download 
+    cancel,
+    reset,
+    download
   } = useCompression();
 
   const { settingsOpen, setSettingsOpen, operationType } = useAppStore();
-  const { 
-    isLoggedIn, 
-    account, 
-    recoveryPhrase, 
+  const {
+    isLoggedIn,
+    account,
+    recoveryPhrase,
     showRecoveryPhrase,
     confirmRecoveryPhraseSaved,
   } = useAccountStore();
-  
+
   const [currentView, setCurrentView] = useState<ViewType>('compress');
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'create' | 'recover'>('login');
@@ -130,13 +121,13 @@ export default function App() {
   }, [compress, decompress, compressMultiple]);
 
   const handleFileSelect = useCallback((file: File) => {
-    /\.spk$/i.test(file.name) ? decompress(file) : compress(file);
+    return /\.spk$/i.test(file.name) ? decompress(file) : compress(file);
   }, [compress, decompress]);
 
   const handleFilesSelect = useCallback((files: File[]) => {
-    compressMultiple(files);
+    return compressMultiple(files);
   }, [compressMultiple]);
-  
+
   const handleOpenAuth = useCallback((mode: 'login' | 'create' | 'recover') => {
     setAuthMode(mode);
     setShowAuthModal(true);
@@ -148,7 +139,7 @@ export default function App() {
       <header className="nav-bar" aria-label="Application header">
         {/* Logo */}
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-blue-500 to-purple-600 
+          <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-blue-500 to-purple-600
                         flex items-center justify-center shadow-lg">
             <Zap className="w-5 h-5 text-white" />
           </div>
@@ -162,7 +153,7 @@ export default function App() {
         <div className="segmented-control app-navigation" role="navigation" aria-label="Main navigation">
           {[
             { key: 'compress', icon: FileArchive, label: 'Compress' },
-            { key: 'large', icon: Upload, label: 'Large Files' },
+            { key: 'activity', icon: History, label: 'Activity' },
             { key: 'files', icon: FolderOpen, label: 'Files' },
             { key: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
           ].map(({ key, icon: Icon, label }) => (
@@ -208,7 +199,7 @@ export default function App() {
               </button>
             </div>
           )}
-          
+
           <button
             onClick={() => setSettingsOpen(true)}
             className="w-10 h-10 flex items-center justify-center rounded-xl hover:bg-card-elevated transition-colors"
@@ -232,10 +223,10 @@ export default function App() {
       {/* Main Content Area */}
       <main className="flex-1 flex items-center justify-center p-6 overflow-auto">
         <AnimatePresence mode="wait">
-          {/* 100TB Compression View */}
-          {currentView === 'large' && (
+          {/* Local activity records */}
+          {currentView === 'activity' && (
             <motion.div
-              key="large"
+              key="activity"
               variants={pageVariants}
               initial="initial"
               animate="animate"
@@ -243,20 +234,10 @@ export default function App() {
               transition={{ duration: 0.35, ease: [0.25, 0.46, 0.45, 0.94] }}
               className="w-full h-full max-w-5xl mx-auto overflow-auto"
             >
-              {isLoggedIn ? (
-                <Suspense fallback={<ViewLoading />}><LargeFileCompression /></Suspense>
-              ) : (
-                <LoginRequired 
-                  icon={Upload}
-                  title="Large-file server jobs"
-                  description="Server streaming is an unfinished prototype. Use the Compress tab for local compression."
-                  onLogin={() => handleOpenAuth('login')}
-                  onCreate={() => handleOpenAuth('create')}
-                />
-              )}
+              <Suspense fallback={<ViewLoading />}><ActivityHistory /></Suspense>
             </motion.div>
           )}
-          
+
           {/* Files View */}
           {currentView === 'files' && (
             <motion.div
@@ -271,7 +252,7 @@ export default function App() {
               {isLoggedIn ? (
                 <Suspense fallback={<ViewLoading />}><FileManager /></Suspense>
               ) : (
-                <LoginRequired 
+                <LoginRequired
                   icon={FolderOpen}
                   title="Your Files"
                   description="Sign in to access your compressed files and manage your storage."
@@ -281,7 +262,7 @@ export default function App() {
               )}
             </motion.div>
           )}
-          
+
           {/* Dashboard View */}
           {currentView === 'dashboard' && (
             <motion.div
@@ -296,7 +277,7 @@ export default function App() {
               {isLoggedIn ? (
                 <Suspense fallback={<ViewLoading />}><StorageDashboard /></Suspense>
               ) : (
-                <LoginRequired 
+                <LoginRequired
                   icon={LayoutDashboard}
                   title="Dashboard"
                   description="Sign in to view your storage usage, compression stats, and account settings."
@@ -318,9 +299,9 @@ export default function App() {
               className="w-full max-w-md"
             >
               <div className="ios-card-elevated text-center p-8">
-                <div className="w-20 h-20 mx-auto mb-6 rounded-3xl bg-gradient-to-br from-blue-500/20 to-purple-500/20
+                <div className="w-10 h-10 mx-auto mb-4 rounded-lg bg-gradient-to-br from-blue-500/20 to-purple-500/20
                               flex items-center justify-center animate-pulse-subtle">
-                  <Loader2 className="w-10 h-10 text-accent animate-spin" />
+                  <Loader2 className="w-5 h-5 text-accent animate-spin" />
                 </div>
                 <h3 className="text-xl font-bold text-foreground mb-2">Initializing HAMMA</h3>
                 <p className="text-sm text-muted mb-6">Loading compression engine...</p>
@@ -351,35 +332,35 @@ export default function App() {
                   className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-success/10 mb-4"
                 >
                   <Shield className="w-4 h-4 text-success" />
-                  <span className="text-xs font-semibold text-success">100% Private - Local Processing</span>
+                  <span className="text-xs font-semibold text-success">Local file processing</span>
                 </motion.div>
                 <h2 className="text-3xl font-bold text-foreground mb-2">
-                  Less space. More possibility.
+                  Compress and restore files
                 </h2>
                 <p className="text-muted max-w-md mx-auto">
-                  A quieter workspace for your files. Compress locally, restore precisely, and keep every byte.
+                  Create lossless SPK archives on this device. Select an SPK archive to restore it.
                 </p>
               </div>
 
               {/* Drop Zone */}
-              <DropZoneCompact 
-                onFileSelect={handleFileSelect} 
+              <DropZoneCompact
+                onFileSelect={handleFileSelect}
                 onFilesSelect={handleFilesSelect}
               />
 
               {/* Feature Pills */}
-              <motion.div 
+              <motion.div
                 className="flex flex-wrap justify-center gap-3 mt-8"
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.3 }}
               >
                 {[
-                  { label: 'Local processing', color: 'accent' },
-                  { label: 'Lossless archives', color: 'success' },
-                  { label: 'ZIP restoration', color: 'purple' },
-                ].map(({ label, color }) => (
-                  <span 
+                  { label: 'Local processing' },
+                  { label: 'Lossless archives' },
+                  { label: 'ZIP restoration' },
+                ].map(({ label }) => (
+                  <span
                     key={label}
                     className="px-3 py-1.5 rounded-full text-xs font-medium badge-accent"
                   >
@@ -449,15 +430,15 @@ export default function App() {
               className="w-full max-w-md"
             >
               <div className="ios-card-elevated text-center p-8">
-                <motion.div 
-                  className="w-20 h-20 mx-auto mb-6 rounded-3xl bg-danger/10 flex items-center justify-center"
+                <motion.div
+                  className="w-10 h-10 mx-auto mb-4 rounded-lg bg-danger/10 flex items-center justify-center"
                   initial={{ scale: 0 }}
                   animate={{ scale: 1 }}
                   transition={{ type: 'spring', stiffness: 200 }}
                 >
-                  <AlertTriangle className="w-10 h-10 text-danger" />
+                  <AlertTriangle className="w-5 h-5 text-danger" />
                 </motion.div>
-                <h3 className="text-xl font-bold text-foreground mb-2">Compression Failed</h3>
+                <h3 className="text-xl font-bold text-foreground mb-2">{operationType === 'decompress' ? 'Restoration failed' : 'Compression failed'}</h3>
                 <p className="text-sm text-muted mb-6 line-clamp-3">{error}</p>
                 <button onClick={reset} className="ios-btn-primary w-full">
                   Try Again
@@ -472,7 +453,7 @@ export default function App() {
       {/* Footer */}
       <footer className="py-3 px-6 flex items-center justify-between border-t border-border/30">
         <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-success" />
+          <div className={`w-2 h-2 rounded-full ${workerReady ? 'bg-success' : 'bg-warning'}`} />
           <span className="text-xs text-muted">{workerReady ? 'Ready when you are' : 'Preparing engine'}</span>
         </div>
         <span className="text-xs text-muted">
@@ -487,7 +468,7 @@ export default function App() {
 
       {/* Modals */}
       <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
-      
+
       {showAuthModal && (
         <AuthModal
           mode={authMode}
@@ -495,7 +476,7 @@ export default function App() {
           onSuccess={() => setShowAuthModal(false)}
         />
       )}
-      
+
       {showRecoveryPhrase && recoveryPhrase && (
         <RecoveryPhraseModal
           phrase={recoveryPhrase}
@@ -522,10 +503,10 @@ function LoginRequired({ icon: Icon, title, description, onLogin, onCreate }: Lo
         initial={{ scale: 0.8, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
         transition={{ type: 'spring', stiffness: 200 }}
-        className="w-24 h-24 rounded-3xl bg-gradient-to-br from-accent/20 to-purple-500/10 
+        className="w-10 h-10 rounded-lg bg-gradient-to-br from-accent/20 to-purple-500/10
                   flex items-center justify-center mb-6"
       >
-        <Icon className="w-12 h-12 text-accent" />
+        <Icon className="w-5 h-5 text-accent" />
       </motion.div>
       <h3 className="text-2xl font-bold text-foreground mb-3">{title}</h3>
       <p className="text-muted mb-8">{description}</p>
@@ -537,29 +518,7 @@ function LoginRequired({ icon: Icon, title, description, onLogin, onCreate }: Lo
           Create Account
         </button>
       </div>
-      <div className="mt-8 ios-card p-4 text-left">
-        <p className="text-xs text-muted mb-3">To use the full features:</p>
-        <ol className="text-xs text-muted space-y-2">
-          <li className="flex items-start gap-2">
-            <span className="w-5 h-5 rounded-full bg-accent/10 flex items-center justify-center flex-shrink-0 mt-0.5">
-              <span className="text-accent font-bold">1</span>
-            </span>
-            <span>Start the backend server: <code className="px-1 py-0.5 rounded bg-card-elevated text-foreground text-[10px]">cargo run -p spk-backend</code></span>
-          </li>
-          <li className="flex items-start gap-2">
-            <span className="w-5 h-5 rounded-full bg-accent/10 flex items-center justify-center flex-shrink-0 mt-0.5">
-              <span className="text-accent font-bold">2</span>
-            </span>
-            <span>Create an account or login</span>
-          </li>
-          <li className="flex items-start gap-2">
-            <span className="w-5 h-5 rounded-full bg-accent/10 flex items-center justify-center flex-shrink-0 mt-0.5">
-              <span className="text-accent font-bold">3</span>
-            </span>
-            <span>Start compressing and storing files!</span>
-          </li>
-        </ol>
-      </div>
+
     </div>
   );
 }

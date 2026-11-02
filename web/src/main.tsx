@@ -8,7 +8,7 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import { MotionConfig } from 'framer-motion';
 import './index.css';
-import './expressive.css';
+import './workspace.css';
 
 // ============================================================================
 // ERROR BOUNDARY - Prevents app crashes from propagating

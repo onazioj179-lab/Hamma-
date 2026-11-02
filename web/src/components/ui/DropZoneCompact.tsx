@@ -6,14 +6,14 @@
 
 import { useCallback, useState, useRef, type DragEvent, type ChangeEvent } from 'react';
 import { motion } from 'framer-motion';
-import { Upload, FileArchive, Files, FolderOpen, ChevronDown } from 'lucide-react';
+import { Upload, FileArchive, Files, FolderOpen } from 'lucide-react';
 
 // Maximum files allowed
 const MAX_FILES = 5000;
 
 interface DropZoneCompactProps {
-  onFileSelect: (file: File) => void;
-  onFilesSelect?: (files: File[]) => void;
+  onFileSelect: (file: File) => void | Promise<void>;
+  onFilesSelect?: (files: File[]) => void | Promise<void>;
   disabled?: boolean;
   multiple?: boolean;
 }
@@ -27,16 +27,14 @@ export function DropZoneCompact({
   const [isDragOver, setIsDragOver] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [fileCount, setFileCount] = useState(0);
-  const [showMenu, setShowMenu] = useState(false);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const dragCounterRef = useRef(0);
-  const menuTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Handle single or multiple files
   const handleFiles = useCallback(async (files: File[]) => {
-    if (files.length === 0) return;
+    if (disabled || isProcessing || files.length === 0) return;
     setSelectionError(null);
     if (files.length > MAX_FILES) {
       setSelectionError(`Select at most ${MAX_FILES.toLocaleString()} files. No files were processed.`);
@@ -52,19 +50,20 @@ export function DropZoneCompact({
       
       if (files.length === 1) {
         // Single file - use original callback
-        onFileSelect(files[0]);
+        await onFileSelect(files[0]);
       } else if (onFilesSelect) {
         // Multiple files - use multi callback
-        onFilesSelect(files);
+        await onFilesSelect(files);
       } else {
-        // Fallback: compress first file only (for backward compat)
-        onFileSelect(files[0]);
+        setSelectionError("Multiple files are not supported here. Select one file.");
       }
+    } catch (error) {
+      setSelectionError(error instanceof Error ? error.message : "Unable to process selected files");
     } finally {
       setIsProcessing(false);
       setFileCount(0);
     }
-  }, [onFileSelect, onFilesSelect]);
+  }, [disabled, isProcessing, onFileSelect, onFilesSelect]);
 
   const handleDragEnter = useCallback((e: DragEvent) => {
     e.preventDefault();
@@ -138,7 +137,7 @@ export function DropZoneCompact({
     e.stopPropagation();
     dragCounterRef.current = 0;
     setIsDragOver(false);
-    if (disabled) return;
+    if (disabled || isProcessing) return;
 
     try {
 
@@ -175,12 +174,12 @@ export function DropZoneCompact({
     }
 
     if (collectedFiles.length > 0) {
-      handleFiles(collectedFiles);
+      await handleFiles(collectedFiles);
     }
     } catch (error) {
       setSelectionError(error instanceof Error ? error.message : 'Unable to read selected files');
     }
-  }, [disabled, handleFiles]);
+  }, [disabled, isProcessing, handleFiles]);
 
   const handleFileInputChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -204,7 +203,6 @@ export function DropZoneCompact({
     e.stopPropagation();
     if (!disabled) {
       fileInputRef.current?.click();
-      setShowMenu(false);
     }
   }, [disabled]);
 
@@ -212,38 +210,13 @@ export function DropZoneCompact({
     e.stopPropagation();
     if (!disabled) {
       folderInputRef.current?.click();
-      setShowMenu(false);
     }
   }, [disabled]);
-
-  const handleMenuToggle = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    setShowMenu(prev => !prev);
-  }, []);
-
-  const handleMenuLeave = useCallback(() => {
-    // Delay closing menu to allow clicking on menu items
-    menuTimeoutRef.current = setTimeout(() => {
-      setShowMenu(false);
-    }, 150);
-  }, []);
-
-  const handleMenuEnter = useCallback(() => {
-    if (menuTimeoutRef.current) {
-      clearTimeout(menuTimeoutRef.current);
-      menuTimeoutRef.current = null;
-    }
-  }, []);
-
-  // Close menu when clicking anywhere on the dropzone (not the button)
-  const handleDropzoneClick = useCallback(() => {
-    setShowMenu(false);
-  }, []);
 
   return (
     <motion.div
       className={`
-        drop-zone w-full cursor-pointer
+        drop-zone w-full
         ${isDragOver ? 'drop-zone-active' : ''}
         ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
       `}
@@ -251,27 +224,26 @@ export function DropZoneCompact({
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
-      onClick={handleDropzoneClick}
-      whileTap={{ scale: disabled ? 1 : 0.98 }}
+
     >
       <div className="flex flex-col items-center text-center">
         {selectionError && <p role="alert" className="text-red-500 mb-3">{selectionError}</p>}
         {/* Icon */}
         <motion.div 
-          className={`w-20 h-20 rounded-3xl flex items-center justify-center mb-5
+          className={`w-10 h-10 rounded-lg flex items-center justify-center mb-3
             ${isDragOver 
               ? 'bg-gradient-to-br from-blue-500/20 to-purple-500/20' 
               : 'bg-gradient-to-br from-blue-500/10 to-purple-500/5'
             }`}
-          animate={isDragOver ? { scale: 1.15, rotate: 5 } : { scale: 1, rotate: 0 }}
+          animate={isDragOver ? { scale: 1.05, rotate: 0 } : { scale: 1, rotate: 0 }}
           transition={{ type: 'spring', stiffness: 300 }}
         >
           {isDragOver ? (
-            <FileArchive className="w-10 h-10 text-accent" />
+            <FileArchive className="w-5 h-5 text-accent" />
           ) : isProcessing ? (
-            <div className="w-10 h-10 border-3 border-accent border-t-transparent rounded-full animate-spin" />
+            <div className="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
           ) : (
-            <Upload className="w-10 h-10 text-accent" />
+            <Upload className="w-5 h-5 text-accent" />
           )}
         </motion.div>
 
@@ -280,7 +252,7 @@ export function DropZoneCompact({
           {isDragOver ? 'Drop to compress' : isProcessing ? `Processing ${fileCount} files...` : 'Drop files here'}
         </p>
         <p className="text-sm text-muted mb-6">
-          or click to browse • Up to {MAX_FILES.toLocaleString()} files
+          Select files or a folder below. Up to {MAX_FILES.toLocaleString()} files
         </p>
 
         {/* Buttons Row */}

@@ -179,7 +179,7 @@ export function FileManager() {
             <option value="archive">Archives</option>
             <option value="code">Code</option>
             <option value="data">Data</option>
-            <option value="binary">⚙️ Binary</option>
+            <option value="binary">Binary</option>
           </select>
           
           {/* Tag Filter */}

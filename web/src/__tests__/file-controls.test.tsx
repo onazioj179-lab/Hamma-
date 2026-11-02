@@ -34,4 +34,29 @@ describe('file controls', () => {
     expect(host.querySelector('[role=alert]')?.textContent).toContain('No files were processed');
     expect(onFileSelect).not.toHaveBeenCalled(); expect(onFilesSelect).not.toHaveBeenCalled();
   });
+  it('reports callback failures instead of leaving an unhandled rejection', async () => {
+    const onFileSelect=vi.fn().mockRejectedValue(new Error('File could not be read'));
+    await act(async () => root.render(<DropZoneCompact onFileSelect={onFileSelect} />));
+    const input=host.querySelector('input[type=file]')!;
+    Object.defineProperty(input,'files',{value:[new File(['a'],'test.txt')]});
+    await act(async () => {
+      input.dispatchEvent(new Event('change',{bubbles:true}));
+      await new Promise(resolve=>setTimeout(resolve,30));
+    });
+    expect(host.querySelector('[role=alert]')?.textContent).toBe('File could not be read');
+    expect(host.querySelector('button')?.disabled).toBe(false);
+  });
+  it('does not silently discard files when a batch callback is missing', async () => {
+    const onFileSelect=vi.fn();
+    await act(async () => root.render(<DropZoneCompact onFileSelect={onFileSelect} />));
+    const input=host.querySelector('input[type=file]')!;
+    Object.defineProperty(input,'files',{value:[new File(['a'],'one.txt'),new File(['b'],'two.txt')]});
+    await act(async () => {
+      input.dispatchEvent(new Event('change',{bubbles:true}));
+      await new Promise(resolve=>setTimeout(resolve,30));
+    });
+    expect(onFileSelect).not.toHaveBeenCalled();
+    expect(host.querySelector('[role=alert]')?.textContent).toContain('Select one file');
+  });
+
 });
