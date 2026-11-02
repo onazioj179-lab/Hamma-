@@ -1,4 +1,8 @@
-# Singularity Pack (SPK)
+# HAMMA - Singularity Pack (SPK)
+
+Created by **Onazi Treasure Oj**.
+
+See [native Windows packaging and runtime roadmap](docs/native-roadmap.md).
 
 High-performance SPK compression platform with Rust core, WebAssembly bindings, modern React frontend, and HAMMA EXTREME self-learning optimizer.
 

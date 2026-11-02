@@ -143,9 +143,9 @@ export default function App() {
   }, []);
 
   return (
-    <div className="app-container dark">
+    <div className="app-container">
       {/* Navigation Bar - iOS Style */}
-      <header className="nav-bar">
+      <header className="nav-bar" aria-label="Application header">
         {/* Logo */}
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-blue-500 to-purple-600 
@@ -154,12 +154,12 @@ export default function App() {
           </div>
           <div>
             <h1 className="text-base font-bold text-foreground tracking-tight">HAMMA</h1>
-            <p className="text-[10px] text-muted -mt-0.5">Universal Compression</p>
+            <p className="text-[10px] text-muted -mt-0.5">By Onazi Treasure Oj</p>
           </div>
         </div>
 
         {/* Segmented Control - iOS Style */}
-        <div className="segmented-control">
+        <div className="segmented-control app-navigation" role="navigation" aria-label="Main navigation">
           {[
             { key: 'compress', icon: FileArchive, label: 'Compress' },
             { key: 'large', icon: Upload, label: 'Large Files' },
@@ -169,6 +169,7 @@ export default function App() {
             <button
               key={key}
               onClick={() => setCurrentView(key as ViewType)}
+              aria-current={currentView === key ? 'page' : undefined}
               className={currentView === key ? 'segment-active' : 'segment'}
             >
               <span className="flex items-center gap-1.5">
@@ -353,10 +354,10 @@ export default function App() {
                   <span className="text-xs font-semibold text-success">100% Private - Local Processing</span>
                 </motion.div>
                 <h2 className="text-3xl font-bold text-foreground mb-2">
-                  Compress or Restore Files
+                  Less space. More possibility.
                 </h2>
                 <p className="text-muted max-w-md mx-auto">
-                  Select files to compress, or select a .spk archive to restore it. Multi-file archives restore as ZIP files.
+                  A quieter workspace for your files. Compress locally, restore precisely, and keep every byte.
                 </p>
               </div>
 
@@ -374,11 +375,9 @@ export default function App() {
                 transition={{ delay: 0.3 }}
               >
                 {[
-                  { label: 'Zstandard', color: 'accent' },
-                  { label: 'LZ4 Ultra', color: 'success' },
-                  { label: 'Brotli', color: 'purple' },
-                  { label: 'Delta Compression', color: 'warning' },
-                  { label: 'Deduplication', color: 'cyan' },
+                  { label: 'Local processing', color: 'accent' },
+                  { label: 'Lossless archives', color: 'success' },
+                  { label: 'ZIP restoration', color: 'purple' },
                 ].map(({ label, color }) => (
                   <span 
                     key={label}
@@ -473,8 +472,8 @@ export default function App() {
       {/* Footer */}
       <footer className="py-3 px-6 flex items-center justify-between border-t border-border/30">
         <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-success animate-pulse" />
-          <span className="text-xs text-muted">Engine Ready</span>
+          <div className="w-2 h-2 rounded-full bg-success" />
+          <span className="text-xs text-muted">{workerReady ? 'Ready when you are' : 'Preparing engine'}</span>
         </div>
         <span className="text-xs text-muted">
           <span className="text-success font-medium">100% Private</span> • All processing happens locally

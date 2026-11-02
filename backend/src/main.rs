@@ -164,6 +164,10 @@ async fn main() {
         
         // Add state and middleware
         .with_state(state)
+        .fallback_service(tower_http::services::ServeDir::new(
+            std::env::var_os("SPK_WEB_DIR").map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::env::current_exe().unwrap_or_default().parent().unwrap_or(std::path::Path::new(".")).join("web"))
+        ))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
@@ -178,7 +182,9 @@ async fn main() {
         .and_then(|p| p.parse().ok())
         .unwrap_or(3000);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let host = std::env::var("SPK_BIND_HOST").unwrap_or_else(|_| "127.0.0.1".into())
+        .parse::<std::net::IpAddr>().expect("SPK_BIND_HOST must be an IP address");
+    let addr = SocketAddr::new(host, port);
     tracing::info!("Starting SPK server on {}", addr);
 
     // Start server
