@@ -236,7 +236,11 @@ impl AccountService {
         let mut accounts = self.accounts.write().await;
         let account = accounts.get_mut(account_id).ok_or(AccountError::AccountNotFound)?;
         
-        let new_usage = (account.storage_used as i64 + bytes_added).max(0) as u64;
+        let new_usage = if bytes_added >= 0 {
+            account.storage_used.checked_add(bytes_added as u64).ok_or(AccountError::StorageFull)?
+        } else {
+            account.storage_used.saturating_sub(bytes_added.unsigned_abs())
+        };
         if new_usage > account.storage_quota {
             return Err(AccountError::StorageFull);
         }
@@ -256,5 +260,22 @@ impl AccountService {
         }
         
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod accounting_tests {
+    use super::*;
+    #[tokio::test]
+    async fn rejects_overflow_without_mutating_usage() {
+        let service = AccountService::new();
+        let (account, _) = service.create_account("test", "Password123").await.unwrap();
+        { let mut accounts = service.accounts.write().await;
+          let stored = accounts.get_mut(&account.account_id).unwrap();
+          stored.storage_used = u64::MAX; stored.storage_quota = u64::MAX; }
+        assert!(matches!(service.update_storage(&account.account_id, 1).await, Err(AccountError::StorageFull)));
+        assert_eq!(service.get_account(&account.account_id).await.unwrap().storage_used, u64::MAX);
+        service.update_storage(&account.account_id, i64::MIN).await.unwrap();
+        assert_eq!(service.get_account(&account.account_id).await.unwrap().storage_used, i64::MAX as u64);
     }
 }
