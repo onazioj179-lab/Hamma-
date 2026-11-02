@@ -43,6 +43,8 @@ let root: Root;
 beforeEach(async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+  localStorage.setItem('hamma-terms-v1', 'accepted');
+  usePreferences.getState().setRememberHistory(true);
   usePreferences.getState().setPrivacyChoice('essential');
   useAppStore.getState().clearRecentArchives();
   mock.download.mockClear();
@@ -63,13 +65,13 @@ const button = (name: string) =>
 
 it('keeps the real result available across navigation without requiring an account', async () => {
   expect(host.textContent).not.toContain('Login');
-  await act(async () => button('My files').click());
+  await act(async () => button('Files & History').click());
   expect(host.textContent).toContain('real.spk');
   await act(async () => button('Download').click());
   expect(mock.download).toHaveBeenCalledOnce();
   await act(async () => button('Overview').click());
   expect(host.textContent).toContain('0 B');
-  expect(host.textContent).toContain('Off by default');
+  expect(host.textContent).not.toContain('Local performance learning');
 });
 it('opens the persistent settings panel and honors privacy controls', async () => {
   await act(async () => button('Settings').click());
@@ -77,11 +79,10 @@ it('opens the persistent settings panel and honors privacy controls', async () =
   await act(async () => button('Privacy').click());
   const switches =
     host.querySelectorAll<HTMLInputElement>('input[role=switch]');
-  expect(switches[0].checked).toBe(false);
+  expect(switches[0].checked).toBe(true);
   await act(async () => switches[0].click());
-  expect(usePreferences.getState().privacyChoice).toBe('learning');
-  await act(async () => button('Use essential storage only').click());
-  expect(usePreferences.getState().privacyChoice).toBe('essential');
+  expect(usePreferences.getState().rememberHistory).toBe(false);
+  expect(host.textContent).not.toContain('Local performance learning');
   await act(async () => button('About').click());
   expect(host.textContent).toContain('Onazi Treasure Oj');
   expect(

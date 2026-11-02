@@ -39,6 +39,7 @@ export default function App() {
   const recent = useAppStore((state) => state.recentArchives);
   const { privacyChoice, setPrivacyChoice } = usePreferences();
   const [view, setView] = useState<View>('process');
+  useEffect(() => { if (privacyChoice === 'learning') setPrivacyChoice('essential'); }, [privacyChoice, setPrivacyChoice]);
   const [section, setSection] = useState<SettingsSection>('general');
   const inputRef = useRef<HTMLInputElement>(null);
   const mainRef = useRef<HTMLElement>(null);
