@@ -19,9 +19,7 @@ import {
   SettingsPanel,
   type SettingsSection,
 } from './components/ui/SettingsPanel';
-import { ActivityHistory } from './components/files/ActivityHistory';
 import { CompressionWorkspace } from './components/workspace/CompressionWorkspace';
-import { LocalFiles } from './components/workspace/LocalFiles';
 import { LocalOverview } from './components/workspace/LocalOverview';
 import { UniversalWorkspace } from './components/workspace/UniversalWorkspace';
 
@@ -207,6 +205,8 @@ export default function App() {
           className="workspace-main"
         >
           <UniversalWorkspace
+            spkResult={result}
+            onSpkDownload={download}
             visible={view === 'process' || view === 'compress' || view === 'files' || view === 'history'}
             screen={view === 'history' || view === 'files' ? 'history' : 'workspace'}
             onHistory={() => setView('files')}
@@ -230,15 +230,6 @@ export default function App() {
                   onSelect={selectFiles}
                   onHistory={() => setView('files')}
                 /></details>
-              )}
-              {view === 'history' && <details className="processing-options"><summary>SPK history</summary><ActivityHistory /></details>}
-              {view === 'files' && (
-                <details className="processing-options"><summary>SPK result</summary>
-                <LocalFiles
-                  controller={controller}
-                  onWorkspace={() => setView('compress')}
-                />
-                </details>
               )}
               {view === 'overview' && (
                 <LocalOverview

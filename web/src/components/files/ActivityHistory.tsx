@@ -35,7 +35,7 @@ export function OperationRows({
             <div className="operation-name">
               <strong title={entry.fileName}>{entry.fileName}</strong>
               <span>
-                {restore ? 'Restored' : 'Compressed'} ·{' '}
+                <b className={`operation-tag tag-${restore ? 'extract' : 'compress'}`}>SPK / {restore ? 'Restore' : 'Compress'}</b> ·{' '}
                 {Number.isNaN(date.getTime())
                   ? 'Date unavailable'
                   : date.toLocaleString(undefined, {
