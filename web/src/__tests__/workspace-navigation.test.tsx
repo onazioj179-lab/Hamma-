@@ -67,8 +67,8 @@ it('keeps the real result available across navigation without requiring an accou
   expect(host.textContent).not.toContain('Login');
   await act(async () => button('Files & History').click());
   expect(host.textContent).toContain('real.spk');
-  await act(async () => button('Download').click());
-  expect(mock.download).toHaveBeenCalledOnce();
+  const downloadLink = host.querySelector<HTMLAnchorElement>('a[download="real.spk"]')!;
+  expect(downloadLink.getAttribute('href')).toBe('blob:current');
   await act(async () => button('Overview').click());
   expect(host.textContent).toContain('0 B');
   expect(host.textContent).not.toContain('Local performance learning');

@@ -203,6 +203,8 @@ interface AppState {
     duration: number;
     speedMbps: number;
     outputName: string;
+    historyId?: string;
+    historyCreated?: number;
     downloadUrl: string | null;
   } | null;
   setResult: (result: AppState['result']) => void;
@@ -412,14 +414,14 @@ export const useAppStore = create<AppState>()(
       // Recent archives
       recentArchives: [],
       addRecentArchive: (archive) => {
-        if (!usePreferences.getState().rememberHistory) return;
         const newArchive: RecentArchive = {
           ...archive,
           id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
           date: Date.now(),
         };
         set((state) => ({
-          recentArchives: [newArchive, ...state.recentArchives].slice(0, 20),
+          result: state.result ? { ...state.result, historyId: newArchive.id, historyCreated: newArchive.date } : null,
+          recentArchives: usePreferences.getState().rememberHistory ? [newArchive, ...state.recentArchives].slice(0, 20) : state.recentArchives,
         }));
       },
       removeRecentArchive: (id) => set((state) => ({

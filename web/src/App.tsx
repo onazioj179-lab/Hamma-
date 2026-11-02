@@ -6,7 +6,6 @@ import {
   FileArchive,
   Files,
   FolderOpen,
-  History,
   LayoutGrid,
   Loader2,
   Settings2,
@@ -19,13 +18,12 @@ import {
   SettingsPanel,
   type SettingsSection,
 } from './components/ui/SettingsPanel';
-import { CompressionWorkspace } from './components/workspace/CompressionWorkspace';
 import { LocalOverview } from './components/workspace/LocalOverview';
 import { UniversalWorkspace } from './components/workspace/UniversalWorkspace';
 
 const remoteServer = !['localhost', '127.0.0.1', '::1'].includes(location.hostname);
 
-type View = 'process' | 'compress' | 'files' | 'history' | 'overview' | 'settings';
+type View = 'process' | 'files' | 'overview' | 'settings';
 const navigation = [
   { key: 'process', label: 'Workspace', icon: LayoutGrid },
   { key: 'files', label: 'Files & History', icon: FolderOpen },
@@ -41,7 +39,6 @@ export default function App() {
   const [view, setView] = useState<View>('process');
   useEffect(() => { if (privacyChoice === 'learning') setPrivacyChoice('essential'); }, [privacyChoice, setPrivacyChoice]);
   const [section, setSection] = useState<SettingsSection>('general');
-  const inputRef = useRef<HTMLInputElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const [announcement, setAnnouncement] = useState('');
   const [jobCount, setJobCount] = useState(0);
@@ -69,11 +66,10 @@ export default function App() {
     window.scrollTo(0, 0);
   }, [view]);
   const selectFiles = useCallback(
-    async (files: File[]) => {
+    async (files: File[], restore = true) => {
       if (isProcessing || !workerReady || !files.length) return;
-      setView('compress');
       if (files.length === 1) {
-        return /\.spk$/i.test(files[0].name)
+        return restore && /\.spk$/i.test(files[0].name)
           ? controller.decompress(files[0])
           : controller.compress(files[0]);
       }
@@ -95,12 +91,11 @@ export default function App() {
       if (
         (event.ctrlKey || event.metaKey) &&
         event.key.toLowerCase() === 'o' &&
-        (view === 'process' || workerReady) &&
         !isProcessing
       ) {
         event.preventDefault();
-        if (view === 'process') document.querySelector<HTMLInputElement>('input[aria-label="Add files to queue"]')?.click();
-        else inputRef.current?.click();
+        setView('process');
+        document.querySelector<HTMLInputElement>('input[aria-label="Add files to queue"]')?.click();
       }
       if (event.key === 'Escape' && isProcessing) {
         event.preventDefault();
@@ -125,7 +120,7 @@ export default function App() {
       : navigation.find((item) => item.key === view)?.label;
   return (
     <div
-      className={`hamma-shell ${privacyChoice === null ? 'privacy-open' : ''}`}
+      className="hamma-shell"
     >
       <a className="skip-link" href="#workspace-main">
         Skip to content
@@ -204,52 +199,32 @@ export default function App() {
             <span
               className={workerReady ? 'status-dot' : 'status-dot pending'}
             />
-            {view !== 'compress' ? (remoteServer ? 'Wi-Fi server' : 'On this device') : isProcessing
-              ? 'Processing locally'
-              : workerReady
-                ? 'Local engine ready'
-                : 'Preparing engine'}
+            {isProcessing ? 'Processing' : workerReady ? 'Ready' : 'Starting'}
             <span className="free-label">Free</span>
           </span>
         </header>
         <main
-          {...(!termsAccepted && view !== 'settings' ? { inert: '' } : {})}
           id="workspace-main"
           ref={mainRef}
           tabIndex={-1}
           className="workspace-main"
         >
+          {!termsAccepted && <aside className="processor-notice first-run-note" aria-label="File privacy"><div><strong>Your file privacy</strong><p>Standard jobs run on the computer hosting HAMMA. SPK runs in this browser. Each person has a separate file history.</p><button className="text-button" onClick={() => openSettings('privacy')}>Privacy details</button></div><button className="button secondary" onClick={() => { localStorage.setItem('hamma-terms-v1', 'accepted'); setTermsAccepted(true); setPrivacyChoice('essential'); }}>Got it</button></aside>}
           <UniversalWorkspace
+            spkReady={workerReady}
+            spkBusy={isProcessing}
+            onSpkSelect={async (files, restore) => { await selectFiles(files, restore); return useAppStore.getState().operationStatus === 'completed'; }}
+            spkStatus={isProcessing ? <div className="upload-status" role="status"><Loader2 size={16} className="animate-spin" /><span>{controller.progress.phase || 'Processing SPK'}<small>{controller.selectedFile?.name}</small></span><progress aria-label="SPK progress" value={controller.progress.bytesProcessed} max={Math.max(1, controller.progress.totalBytes)} /><button className="icon-button" aria-label="Cancel SPK operation" onClick={cancel}>Cancel</button></div> : controller.isError ? <div className="processor-notice" role="alert">{controller.error}<button className="text-button" onClick={controller.reset}>Dismiss</button></div> : null}
             spkResult={result}
             onSpkDownload={download}
-            visible={view === 'process' || view === 'compress' || view === 'files' || view === 'history'}
-            screen={view === 'history' || view === 'files' ? 'history' : 'workspace'}
+            visible={view === 'process' || view === 'files'}
+            screen={view === 'files' ? 'history' : 'workspace'}
             onHistory={() => setView('files')}
           />
-          {!workerReady ? (
-            <section hidden={view !== 'compress'} className="splash-screen" role="status">
-              <span className="splash-symbol">
-                <FileArchive size={26} />
-              </span>
-              <p className="eyebrow">HAMMA</p>
-              <h1>A little room for more.</h1>
-              <p>Preparing your local workspace…</p>
-              <Loader2 size={18} className="animate-spin" />
-            </section>
-          ) : (
-            <>
-              {(view === 'process' || view === 'compress') && (
-                <details className="spk-tools" open={view === 'compress'}><summary>SPK tools</summary>
-                <CompressionWorkspace
-                  controller={controller}
-                  onSelect={selectFiles}
-                  onHistory={() => setView('files')}
-                /></details>
-              )}
               {view === 'overview' && (
                 <LocalOverview
                   device={deviceInfo}
-                  onPrivacy={() => openSettings('privacy')}
+                  onHistory={() => setView('files')}
                 />
               )}
               {view === 'settings' && (
@@ -259,8 +234,6 @@ export default function App() {
                   busy={isProcessing}
                 />
               )}
-            </>
-          )}
           <footer className="workspace-footer">
             <span>Made to make room.</span>
             <span>
@@ -269,19 +242,6 @@ export default function App() {
           </footer>
         </main>
       </div>
-      <input
-        ref={inputRef}
-        type="file"
-        multiple
-        hidden
-        aria-label="Choose files"
-        onChange={(event) => {
-          const files = Array.from(event.target.files || []);
-          event.target.value = '';
-          void selectFiles(files);
-        }}
-      />
-      {!termsAccepted && <aside className="privacy-banner" aria-label="First use agreement"><div><strong>Before you begin</strong><p>Files are processed on the computer running HAMMA. On Wi-Fi, uploads travel to that computer over your local network. Temporary files and job metadata remain until expiry. No AI service receives your contents.</p><a href="#" onClick={event => { event.preventDefault(); openSettings('privacy'); }}>Privacy & terms</a></div><button className="button primary" onClick={() => { localStorage.setItem('hamma-terms-v1', 'accepted'); setTermsAccepted(true); setPrivacyChoice('essential'); }}>Agree & continue</button></aside>}
       {notice && <aside className="job-toast" aria-label="Job update"><span>{notice}</span><button className="button secondary" onClick={() => { setView('files'); setNotice(''); }}>View files</button><button className="text-button" aria-label="Dismiss job update" onClick={() => setNotice('')}>Dismiss</button></aside>}
       <span className="sr-only" role="status">
         {announcement}

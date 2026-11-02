@@ -5,6 +5,32 @@
 A free local workspace to compress, extract, convert, and download files.
 Created by **Onazi Treasure Oj**.
 
+## Start HAMMA with one click on Windows
+
+Double-click **Start HAMMA.cmd** in this folder (or the HAMMA desktop shortcut).
+It builds changed app files, starts the local processor in the background, and
+opens the browser. Reopening it reuses the running server. Node.js 22+ and
+Python 3.11+ must already be installed; the first launch installs npm dependencies.
+
+The default address is **http://127.0.0.1:5014**. Phones and other computers on
+the same network use this computer's private address on port 5014. The launcher
+writes current links to `.hamma-data/connection-links.txt`. Keep this computer
+awake. Localhost on a phone refers to the phone itself. Remote internet access
+is not provided by these LAN links. Windows Firewall must allow this port from
+the local subnet; the existing setup script is `scripts/allow-lan-firewall.ps1`.
+
+Standard formats and SPK share **Add Files / Add Folder**. Choose ZIP or another
+format under **Options / Archive**, or choose SPK for browser compression.
+Use **Extract** to restore SPK and standard archives. Empty folders require a
+standard archive format. One history list sorts and searches both engines,
+with colored operation tags and unique IDs. The current SPK download stays on
+its history row; older SPK records contain metadata only. Overview includes
+retained processor jobs and browser SPK records, with measured compression savings.
+Each visitor has a separate session and history.
+
+Logs: `.hamma-data/server.err.log`. Startup state: `.hamma-data/launcher.json`.
+The launcher uses `.hamma-data/lan-test` to preserve the existing LAN job store.
+
 ## Run the new file workspace
 
 ```sh
@@ -15,8 +41,7 @@ npm run start:local
 Open http://127.0.0.1:5010. Requires Node.js 22+, Python 3.11+, and optional
 FFmpeg/FFprobe for media conversion. Jobs run in local background processes.
 Standard ZIP/TAR/GZIP/BZIP2/XZ operations, verified downloads, resumable uploads,
-retry/cancel controls and 500-record guest history are implemented. The existing
-browser-only workflow is inside **Workspace / SPK tools**.
+retry/cancel controls and 500-record guest history are implemented. The browser SPK engine is available through the same Workspace file picker.
 
 See [supported formats, deployment and operational limits](docs/universal-processing.md).
 This local implementation does not yet provide accounts, synchronized storage,
@@ -40,10 +65,8 @@ Already compressed files may not become smaller.
 ## Find your way around
 
 - **Workspace** queues standard archive and media operations.
-- **SPK tools** inside Workspace compresses and restores SPK files in your browser.
 - **Files & History** combines downloads, job history, retention and the current SPK result.
-- **History** helps you find recent operations by file name.
-- **Overview** shows how much space your recorded compressions saved.
+- **Overview** combines processor and browser activity, status, and measured compression savings.
 - **Settings** lets you change appearance, automatic downloads, history, privacy, and app cache.
 - **About** introduces the project and its creator.
 

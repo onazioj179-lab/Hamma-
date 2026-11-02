@@ -89,3 +89,24 @@ it('announces newly completed jobs once after reconnecting', async () => {
     expect(notice).toHaveBeenCalledTimes(1);
   } finally { window.removeEventListener('hamma-job-notice', notice); }
 });
+
+it('uses the shared file picker for SPK and keeps the current result on its original history row', async () => {
+  const { useAppStore } = await import('../store/app');
+  const entry = { id: 'record-one', fileName: 'note.txt', date: 1000, type: 'compress' as const, mode: 'auto' as const, originalSize: 4, compressedSize: 2, ratio: .5 };
+  useAppStore.setState({ recentArchives: [entry] });
+  const onSpkDownload = vi.fn();
+  const onSpkSelect = vi.fn(async () => true);
+  try {
+    await act(async () => root.render(<UniversalWorkspace visible screen="workspace" onHistory={() => {}} spkReady onSpkSelect={onSpkSelect} spkResult={{ outputName: 'note.txt.spk', downloadUrl: 'blob:result', historyId: 'record-one' }} onSpkDownload={onSpkDownload} />));
+    expect(host.querySelectorAll('.processing-job')).toHaveLength(1);
+    expect(host.querySelector('.operation-tag')?.textContent).toBe('SPK / compress');
+    const link = host.querySelector<HTMLAnchorElement>('a[aria-label="Download note.txt.spk"]')!;
+    expect(link.getAttribute('href')).toBe('blob:result');
+    expect(link.download).toBe('note.txt.spk');
+    await select([new File(['spk'], 'restore.spk')]);
+    await act(async () => button('Extract').click());
+    expect(onSpkSelect).toHaveBeenCalledWith([expect.objectContaining({ name: 'restore.spk' })], true);
+    expect(host.querySelector('.source-row')).toBeNull();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/uploads'))).toBe(false);
+  } finally { await act(async () => useAppStore.setState({ recentArchives: [] })); }
+});
