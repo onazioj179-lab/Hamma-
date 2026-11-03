@@ -229,7 +229,10 @@ class Service:
         # A crash must never leave an old success or a fictitious running job.
         for owner, record in self.store.list():
             if record["state"] in ("processing", "verifying"):
-                self.store.patch(owner, "job", record["id"], state="interrupted", error="Processing interrupted", downloadAvailable=False)
+                self.store.patch(owner, "job", record["id"], state="interrupted", error="Processing interrupted", finished=time.time(), downloadAvailable=False)
+                self.clean_work(owner, record["id"])
+            elif record["state"] in ("failed", "cancelled", "interrupted"):
+                # A crash can occur after the terminal state was saved but before cleanup.
                 self.clean_work(owner, record["id"])
 
     def sign(self, value):
@@ -342,7 +345,7 @@ class Service:
                     process.join()
                     record = self.store.get(owner, "job", job_id)
                     if record and record["state"] in ACTIVE:
-                        self.store.patch(owner, "job", job_id, state="interrupted", error="Worker interrupted", downloadAvailable=False)
+                        self.store.patch(owner, "job", job_id, state="interrupted", error="Worker interrupted", finished=time.time(), downloadAvailable=False)
                     if record and record["state"] != "completed":
                         self.clean_work(owner, job_id)
                     del self.running[job_id]
@@ -357,8 +360,14 @@ class Service:
                     self.store.patch(owner, "job", job["id"], state="failed", error="Storage full", downloadAvailable=False)
                     continue
                 self.store.patch(owner, "job", job["id"], state="processing")
-                process = multiprocessing.get_context("spawn").Process(target=run_job, args=(str(self.store.root), owner, job["id"], self.limits, True))
-                process.start()
+                try:
+                    process = multiprocessing.get_context("spawn").Process(target=run_job, args=(str(self.store.root), owner, job["id"], self.limits, True))
+                    process.start()
+                except Exception:
+                    LOG.exception("Worker could not start: %s", job["id"])
+                    self.store.patch(owner, "job", job["id"], state="interrupted", error="Worker could not start; retry the job", finished=time.time(), downloadAvailable=False)
+                    self.clean_work(owner, job["id"])
+                    continue
                 self.running[job["id"]] = (process, owner, time.monotonic())
 
     def loop(self):
@@ -570,6 +579,8 @@ def handler(service):
                     if not record:
                         raise HTTPError(404, "File unavailable")
                     source = service.store.folder(self.owner, upload_id) / "input"
+                    if method in ("GET", "PUT") and (record["expires"] <= time.time() or not source.is_file()):
+                        raise HTTPError(410, "Upload expired or unavailable")
                     if method == "GET":
                         return self.send(200, {**record, "offset": source.stat().st_size})
                     if method == "DELETE":
@@ -628,6 +639,8 @@ def handler(service):
                         if not record or record["expires"] <= time.time():
                             raise HTTPError(404, "File unavailable")
                         source = service.store.folder(self.owner, upload_id) / "input"
+                        if not source.is_file():
+                            raise HTTPError(410, "Upload expired or unavailable")
                         if source.stat().st_size != record["size"]:
                             raise HTTPError(409, "Upload incomplete")
                         if record["name"].casefold() in seen:
@@ -725,10 +738,12 @@ def handler(service):
                         elif action == "retry" and record["state"] in ("failed", "cancelled", "interrupted"):
                             if job_id in service.running:
                                 raise HTTPError(409, "Worker stopping")
+                            if sum(j["state"] in (*ACTIVE, "paused") for _, j in service.store.list(self.owner)) >= 100:
+                                raise HTTPError(429, "Queue full")
                             if record["fileExpires"] <= time.time() or any(not (service.store.folder(self.owner, i["id"]) / "input").exists() for i in record["inputs"]):
                                 raise HTTPError(410, "Input files expired")
                             (directory / "cancel").unlink(missing_ok=True)
-                            service.store.patch(self.owner, "job", job_id, state="queued", error=None, processed=0, entries=0, expanded=0, mediaSeconds=0, duration=None, hidden=False)
+                            service.store.patch(self.owner, "job", job_id, state="queued", error=None, processed=0, entries=0, expanded=0, mediaSeconds=0, duration=None, started=None, finished=None, hidden=False)
                         else:
                             raise HTTPError(409, "Action unavailable for this job")
                     return self.send(200, service.public(self.owner, service.store.get(self.owner, "job", job_id)))
