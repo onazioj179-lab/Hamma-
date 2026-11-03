@@ -1,0 +1,25 @@
+{
+  "note": "Local sample only. Memory is traced Python allocations, not full process/native RSS.",
+  "results": [
+    {
+      "workload": "repeated-text",
+      "inputBytes": 4194304,
+      "outputBytes": 10351,
+      "secondsIncludingVerification": 0.5082,
+      "inputMiBPerSecond": 7.872,
+      "peakPythonAllocatedBytes": 3254904,
+      "sha256": "8c11ae9258140d9a26dae25bad3dd146b4d767803a6cdac4bebbe366d35764c8",
+      "verified": true
+    },
+    {
+      "workload": "random-bytes",
+      "inputBytes": 4194304,
+      "outputBytes": 4195712,
+      "secondsIncludingVerification": 1.8047,
+      "inputMiBPerSecond": 2.216,
+      "peakPythonAllocatedBytes": 4240983,
+      "sha256": "fc69fa988b16ea360ba63feae61ce172ef626effc35b80fb468716d0349d62fb",
+      "verified": true
+    }
+  ]
+}

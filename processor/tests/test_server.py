@@ -91,6 +91,21 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.call("/jobs/" + queued["id"])["state"], "queued")
         self.assertEqual(len(self.service.running), 0)
 
+    def test_json_routes_reject_non_object_bodies(self):
+        for value in ([], None, 12, "string"):
+            payload = json.dumps(value).encode()
+            self.assert_status(400, lambda: self.call("/uploads", payload, "POST", {"Content-Type": "application/json"}, raw=True))
+
+    def test_rate_limit_returns_retry_after_and_discards_expired_windows(self):
+        self.service.requests_per_minute = 1
+        self.service.rates["expired-client"] = (2000, int(time.time() // 60) - 1)
+        self.call("/health")
+        with self.assertRaises(HTTPError) as raised:
+            self.call("/health")
+        self.assertEqual(raised.exception.code, 429)
+        self.assertTrue(1 <= int(raised.exception.headers["Retry-After"]) <= 60)
+        self.assertNotIn("expired-client", self.service.rates)
+
     def test_health_identifies_live_instance_without_file_metadata(self):
         first = self.call("/health")
         second = self.call("/health")

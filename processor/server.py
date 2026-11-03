@@ -223,6 +223,9 @@ class Service:
                 stream.write(secrets.token_bytes(32))
         self.key = self.secret.read_bytes()
         self.rates = {}
+        self.requests_per_minute = int(os.environ.get("HAMMA_REQUESTS_PER_MINUTE", "2000"))
+        if not 1 <= self.requests_per_minute <= 1000000:
+            raise ValueError("HAMMA_REQUESTS_PER_MINUTE must be between 1 and 1000000")
         # A crash must never leave an old success or a fictitious running job.
         for owner, record in self.store.list():
             if record["state"] in ("processing", "verifying"):
@@ -386,8 +389,8 @@ class Service:
 
 
 class HTTPError(Exception):
-    def __init__(self, status, message):
-        self.status, self.message = status, message
+    def __init__(self, status, message, retry_after=None):
+        self.status, self.message, self.retry_after = status, message, retry_after
 
 
 class LocalHTTPServer(ThreadingHTTPServer):
@@ -410,10 +413,12 @@ def handler(service):
             # No filenames, signed URLs, cookies, or query strings in access logs.
             LOG.debug("HTTP %s", self.command)
 
-        def send(self, status, value):
+        def send(self, status, value, retry_after=None):
             data = json.dumps(value, ensure_ascii=True).encode()
             self.send_response(status)
             self.headers_common()
+            if retry_after is not None:
+                self.send_header("Retry-After", str(retry_after))
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
@@ -478,12 +483,14 @@ def handler(service):
             path, method = url.path, self.command
             if path.startswith("/api/process"):
                 with service.lock:
-                    minute = int(time.time() // 60)
+                    now = time.time()
+                    minute = int(now // 60)
+                    service.rates = {address: entry for address, entry in service.rates.items() if entry[1] == minute}
                     key = self.client_address[0]
                     used, window = service.rates.get(key, (0, minute))
                     service.rates[key] = ((used if minute == window else 0) + 1, minute)
-                    if service.rates[key][0] > 2000:
-                        raise HTTPError(429, "Too many requests")
+                    if service.rates[key][0] > service.requests_per_minute:
+                        raise HTTPError(429, "Too many requests", max(1, 60 - int(now % 60)))
                 if method in ("POST", "PUT", "DELETE") and self.headers.get("X-Hamma-Request") != "1":
                     raise HTTPError(403, "Request authorization required")
             if path == "/api/process/prepare-restart" and method == "POST":
@@ -749,14 +756,11 @@ def handler(service):
             start, end, status = 0, size - 1, 200
             range_header = self.headers.get("Range")
             if range_header and self.headers.get("If-Range", f'"{checksum}"') == f'"{checksum}"':
-                match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header)
-                if not match or not any(match.groups()):
-                    raise HTTPError(416, "Invalid download range")
-                first, last = match.groups()
-                start = int(first) if first else max(0, size - int(last))
-                end = min(size - 1, int(last)) if first and last else size - 1
-                if start > end or start >= size:
-                    raise HTTPError(416, "Invalid download range")
+                from processor.ranges import download_range
+                try:
+                    start, end = download_range(range_header, size)
+                except ValueError:
+                    raise HTTPError(416, "Invalid download range") from None
                 status = 206
             self.send_response(status)
             self.headers_common()
@@ -784,7 +788,7 @@ def handler(service):
             try:
                 self.route()
             except HTTPError as error:
-                self.send(error.status, {"error": error.message})
+                self.send(error.status, {"error": error.message}, error.retry_after)
             except (ValueError, TypeError, KeyError, ProcessingError):
                 self.send(400, {"error": "Invalid request"})
             except (BrokenPipeError, ConnectionResetError, TimeoutError):

@@ -8,3 +8,7 @@
 - Launcher: cold start and concurrent reuse checked. Final processor deployment and launcher reuse were rechecked.
 
 A newly added restart regression initially failed because the drain check landed in cleanup rather than scheduling. The check was moved into tick; all 36 processor tests then passed. No failed test was removed or suppressed. Embedded-browser blob file-save confirmation timed out. Chrome capture could not restore its minimized window. Physical phone and browser save completion remain unverified.
+
+## API reliability batch
+
+38 processor tests passed, including malformed JSON bodies and throttling headers. All 10 processing-client tests passed, including retry guidance and response-body cancellation. Previous complete web run: 411 passed, 23 skipped; the two new client cases were run in the targeted suite. See performance-baseline.md for actual local benchmark values.

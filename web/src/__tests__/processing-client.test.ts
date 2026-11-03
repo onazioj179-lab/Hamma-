@@ -84,3 +84,15 @@ it('reports unreadable processor responses without displaying server HTML', asyn
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 502, json: async () => { throw new Error('<html>proxy failure</html>'); } })));
   await expect(request('/jobs')).rejects.toThrow('unreadable response');
 });
+
+it('exposes the server retry interval without automatically resubmitting work', async () => {
+  const fetch = vi.fn(async () => ({ ok: false, status: 429, headers: { get: () => '12' }, json: async () => ({ error: 'Too many requests' }) }));
+  vi.stubGlobal('fetch', fetch);
+  await expect(request('/jobs')).rejects.toMatchObject({ status: 429, retryAfterSeconds: 12, message: 'Too many requests. Try again in 12 seconds.' });
+  expect(fetch).toHaveBeenCalledOnce();
+});
+it('preserves cancellation during response parsing', async () => {
+  const controller = new AbortController();
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => { controller.abort(); throw new DOMException('Aborted', 'AbortError'); } })));
+  await expect(request('/jobs', { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+});

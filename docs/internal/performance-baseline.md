@@ -1,5 +1,10 @@
-# Performance baseline
+# Local performance baseline
 
-No comparable before/after throughput or RSS benchmark was collected in this patch. No speedup or compression-ratio improvement is claimed. The existing processor/benchmark.py can measure a repeatable local archive workload including verification and traced Python allocations; traced allocations are not native/process RSS. Keep environmental details and workload sizes with any future measurements.
+Recorded on 2026-11-02 using `python -m processor.benchmark --size-mib 4` on the development Windows host. Both ZIP outputs passed the benchmark integrity verification. Raw measurements: baseline-4mib.json.
 
-Measured test execution is correctness evidence, not a throughput benchmark. Avoid extrapolating tiny fixtures to multi-terabyte workloads or concurrent production capacity.
+| Workload | Input | Output | Seconds including verification | Input MiB/s | Peak traced Python bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| repeated-text | 4194304 | 10351 | 0.5082 | 7.872 | 3254904 |
+| random-bytes | 4194304 | 4195712 | 1.8047 | 2.216 | 4240983 |
+
+This is a current baseline, not a before/after comparison or speedup claim. The random input varies between runs; use the recorded checksum to identify this sample. Traced Python allocations exclude native allocations and are not process RSS. Do not extrapolate to large files, phones, distributed workers or production concurrency. No compression algorithm was changed in this batch.

@@ -18,7 +18,7 @@ export interface Retention { historyRetention: string; fileRetention: string }
 export const activeJob = (job: Job) => ['queued', 'processing', 'verifying', 'paused'].includes(job.state);
 
 export class ProcessorError extends Error {
-  constructor(message: string, public status: number) { super(message); this.name = 'ProcessorError'; }
+  constructor(message: string, public status: number, public retryAfterSeconds?: number) { super(message); this.name = 'ProcessorError'; }
 }
 
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -35,8 +35,16 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
     if (response.status === 204) return undefined as T;
     let result;
     try { result = await response.json(); }
-    catch { throw new ProcessorError('The processor returned an unreadable response. Reconnect and try again.', response.status); }
-    if (!response.ok) throw new ProcessorError(result.error || 'Request failed', response.status);
+    catch (error) {
+      if (controller.signal.aborted) throw error;
+      throw new ProcessorError('The processor returned an unreadable response. Reconnect and try again.', response.status);
+    }
+    if (!response.ok) {
+      const header = response.headers?.get('Retry-After');
+      const seconds = header && /^\d+$/.test(header) ? Number(header) : undefined;
+      const message = typeof result?.error === 'string' ? result.error : 'Request failed';
+      throw new ProcessorError(seconds ? `${message}. Try again in ${seconds} seconds.` : message, response.status, seconds);
+    }
     return result as T;
   } catch (error) {
     if (timedOut) throw new Error('The processor took too long to respond. Reconnect and retry.');
