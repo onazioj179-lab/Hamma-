@@ -160,7 +160,10 @@ def run_job(root, owner, job_id, limits, isolated=False):
             raise ProcessingError("Output size limit reached")
         # The API exposes only names and opaque identifiers, never storage paths.
         extension = "zip" if detect(output) == "zip" else job["target"]
-        stem = Path(job["name"]).name.rsplit(".", 1)[0] or "files"
+        leaf = Path(job["name"]).name
+        # A raw Zstandard frame has no filename field. Preserve the complete
+        # source basename in its download name so restoration retains its type.
+        stem = leaf if job["operation"] == "compress" and job["target"] == "zstd" else leaf.rsplit(".", 1)[0] or "files"
         output_name = ("extracted" if job["operation"] == "extract" else stem) + "." + extension
         ctx.check()
         store.patch(owner, "job", job_id, state="completed", processed=job["inputSize"],

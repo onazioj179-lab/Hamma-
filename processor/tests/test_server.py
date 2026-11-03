@@ -351,10 +351,11 @@ class ServerTests(unittest.TestCase):
                 break
             time.sleep(.1)
         self.assertEqual(current['state'], 'completed', current)
+        self.assertEqual(current['outputName'], 'original.txt.zstd')
         packed = self.call(current['download'].removeprefix('/api/process'), raw=True)
         self.assertEqual(hashlib.sha256(packed).hexdigest(), current['sha256'])
         self.assertEqual(packed[:4], b'\x28\xb5\x2f\xfd')
-        source = self.upload(packed, 'original.txt.zstd')
+        source = self.upload(packed, current['outputName'])
         restored = self.execute(self.job(source, operation='extract', target='zip'))
         output = self.call(restored['download'].removeprefix('/api/process'), raw=True)
         with zipfile.ZipFile(io.BytesIO(output)) as archive:
