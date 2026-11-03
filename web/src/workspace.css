@@ -1696,3 +1696,9 @@ a{color:rgb(var(--accent));text-underline-offset:3px}button,input,a{touch-action
   .hamma-shell .job-toast { bottom:90px; }
   .hamma-shell .universal-search .select-field { flex:1; min-width:0; }
 }
+
+/* Keep shared page content and notifications above the home indicator. */
+@media (max-width: 650px) {
+  .hamma-shell .workspace-main { padding-bottom: calc(100px + env(safe-area-inset-bottom)); }
+  .hamma-shell .job-toast { bottom: calc(90px + env(safe-area-inset-bottom)); }
+}

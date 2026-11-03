@@ -81,3 +81,27 @@ it('retains wrong-password feedback after reloading the current session', async 
   expect(host.querySelector('[role=alert]')?.textContent).toContain('Incorrect username or password');
   expect(host.querySelector<HTMLInputElement>('input[name=password]')!.value).toBe('');
 });
+
+
+it('shows honest provider availability without starting an unconfigured sign-in', async () => {
+  fetchMock.mockResolvedValue({ ok: true, json: async () => ({ ...guest, providers: [
+    { id: 'google', name: 'Google', available: false }, { id: 'apple', name: 'Apple', available: false },
+  ] }) });
+  await render();
+  expect(host.textContent).toContain('Google');
+  expect(host.textContent).toContain('Apple');
+  expect(host.querySelectorAll('.account-provider')).toHaveLength(2);
+  expect(host.querySelector('.account-providers button')).toBeNull();
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+
+it('toggles password visibility and clears a visible password after failed sign-in', async () => {
+  await render();
+  fill('username', 'alice'); fill('password', 'wrong-password');
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Show password"]')!.click());
+  expect(host.querySelector<HTMLInputElement>('[name=password]')!.type).toBe('text');
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/login') ? { ok: false, status: 401, json: async () => ({ error: 'Incorrect username or password' }) } : { ok: true, json: async () => guest });
+  await submit();
+  expect(host.querySelector<HTMLInputElement>('[name=password]')!.value).toBe('');
+  expect(host.querySelector('[role=alert]')?.textContent).toContain('Incorrect');
+});

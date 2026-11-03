@@ -38,6 +38,7 @@ from .worker_limits import apply_worker_limits
 from .accounts import Accounts, AccountError, plan as account_plan
 from .catalog import FileCatalog
 from .capabilities import action_registry
+from .identity_providers import public_providers
 
 LOG = logging.getLogger("hamma.processor")
 TERMINAL = ("completed", "failed", "cancelled", "interrupted")
@@ -725,7 +726,8 @@ def handler(service):
         def account_view(self):
             return {'authenticated': self.account is not None,
                     'account': service.accounts.public(self.account) if self.account else None,
-                    'plan': self.plan, 'billingEnabled': False, 'credentialsAllowed': self.credentials_allowed}
+                    'plan': self.plan, 'billingEnabled': False, 'credentialsAllowed': self.credentials_allowed,
+                    'providers': public_providers()}
 
         def json_body(self):
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
