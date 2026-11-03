@@ -90,9 +90,10 @@ Current service limits remain bounded (default 8 GiB input and 2 GiB expanded);
 64-bit counters and streaming design do not certify terabyte/petabyte workloads.
 Physical iOS/Android/foldable tests, power-loss durability and whole-process leak
 tests remain unverified. Remote Linux, macOS, MSVC Windows and sanitizer jobs
-passed for the worker-limit fix revision; final follow-up checks are recorded
-below when available. Sanitizers instrument both the C++ kernel and bundled C
-codec. The vcpkg alternative was not executed.
+passed on the final source revision, including streaming verification. Sanitizers
+instrument both the C++ kernel and bundled C codec. Evidence is recorded in
+validation/shante-ci.json and [run 41581448076](https://github.com/onazioj179-lab/Hamma-/actions/runs/41581448076).
+The vcpkg alternative was not executed.
 
 Cross-platform CI exposed a pre-existing macOS failure: RLIMIT_AS rejected the
 spawned worker setup. The adapter now respects inherited hard limits and applies

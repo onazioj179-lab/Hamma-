@@ -1,8 +1,8 @@
 {
-  "artifact": "SHANTE-Core-0.1.0-Windows-AMD64-de325ad2.zip",
-  "sha256": "0b91b4cbdb705ce21ca2092243a3df6479858e57e9efdf3fba3d14923a551a4e",
-  "bytes": 735192,
-  "binarySha256": "de325ad2170600a17ba8ed37467597e8e7bb3db069b1e8fe1fbf465315b98c79",
+  "artifact": "SHANTE-Core-0.1.0-Windows-AMD64-e0084992.zip",
+  "sha256": "23d1f6731ce031fc418dbeb9d9d9f888392bdaaa7bf730e0d17656cca22351cc",
+  "bytes": 735228,
+  "binarySha256": "904028f14a6402550b0151cc503464f2b5ef55d2de3979f0ce80d48f5cc4bfe7",
   "probe": {
     "protocol": 1,
     "engine": "shante-core",
@@ -10,7 +10,7 @@
     "codec": "zstd",
     "cores": 8,
     "codecVersion": "1.5.7",
-    "availableMemory": 4691451904,
+    "availableMemory": 5080752128,
     "workers": 2,
     "avx2": true,
     "avx512": false,
