@@ -34,6 +34,7 @@ from urllib.parse import parse_qs, urlsplit, quote
 import zipfile
 
 from .engine import ARCHIVES, MEDIA, BLOCK, Context, ProcessingError, archive_formats, compress, convert, detect, extract, file_digest, safe_path
+from .worker_limits import apply_worker_limits
 
 LOG = logging.getLogger("hamma.processor")
 TERMINAL = ("completed", "failed", "cancelled", "interrupted")
@@ -117,10 +118,7 @@ class Store:
 def run_job(root, owner, job_id, limits, isolated=False):
     if isolated and os.name != "nt":
         os.setsid()
-        import resource
-        resource.setrlimit(resource.RLIMIT_FSIZE, (limits["expanded"] + 64 * BLOCK,) * 2)
-        resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3,) * 2)
-        resource.setrlimit(resource.RLIMIT_CPU, (limits["seconds"],) * 2)
+        apply_worker_limits(limits)
     store = Store(root)
     job = store.get(owner, "job", job_id)
     directory = store.folder(owner, job_id)
