@@ -58,6 +58,7 @@ it('offers normal file selection when the native folder picker cannot select fol
   expect(fileClick).toHaveBeenCalledTimes(1);
   await select([new File(['mobile'], 'mobile.txt')]);
   expect(host.textContent).toContain('mobile.txt');
+  expect(host.textContent).not.toContain('Can’t select the folder?');
   expect(button('Compress').disabled).toBe(false);
 });
 
