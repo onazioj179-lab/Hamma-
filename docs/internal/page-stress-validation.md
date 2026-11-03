@@ -22,6 +22,24 @@ afterward. No test was removed or suppressed.
 
 ## Verification
 
+Final scoped UI matrix: **100/100 passed**. Seven screens at seven widths
+(320, 360, 390, 650, 768, 1024 and 1440 CSS pixels) in light and dark appearance
+provide 98 cases. A live 1,000-file picker selection (14 rendered rows) and atomic
+duplicate rejection provide the remaining two cases. Every screen case checks
+one visible page heading, document overflow and horizontally clipped controls.
+The populated desktop History navigation includes its operation-count badge.
+Original System appearance and the normal viewport were restored afterward.
+
+Final generated processor workload: **100/100 passed**, using eight client
+threads against the disposable localhost:5026 instance. ZIP, gzip, bzip2 and xz
+cases verify exact restored bytes, SHA-256, resumable offsets, request
+idempotency, byte ranges and owner isolation. Empty inputs and Unicode paths are
+included. Elapsed run time was 54.176 seconds; this is not a throughput guarantee.
+
+Full recorded results: `validation/page-matrix-100-result.json` and
+`validation/processor-100-result.json`. These scoped case counts do not describe
+completion of the separate 100 engineering proposals.
+
 | Check | Result |
 | --- | --- |
 | Live page navigation | 50 transitions across Workspace, History, Overview, Settings and About; no console errors |
@@ -51,6 +69,7 @@ directory and run:
 ```powershell
 python -m processor.server --port 5026 --data .hamma-data/page-stress --web web/dist
 python scripts/stress-processor.py http://127.0.0.1:5026 --sessions 8
+python scripts/stress-local.py --base http://127.0.0.1:5026 --jobs 100 --workers 8 --report validation/processor-100-result.json
 ```
 
 Remaining verification includes physical iOS/Android saves, native Rust/WASM,
