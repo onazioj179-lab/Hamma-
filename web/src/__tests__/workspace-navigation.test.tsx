@@ -89,3 +89,18 @@ it('opens the persistent settings panel and honors privacy controls', async () =
     host.querySelector('a[href="https://github.com/onazioj179-lab/Hamma-"]'),
   ).not.toBeNull();
 });
+
+it('keeps all pages usable when browser storage reads and writes are denied', async () => {
+  await act(async () => root.unmount());
+  vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new DOMException('Storage blocked', 'SecurityError'); });
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new DOMException('Storage full', 'QuotaExceededError'); });
+  root = createRoot(host);
+  await act(async () => root.render(<App />));
+  expect(host.textContent).toContain('Your file privacy');
+  await act(async () => button('Got it').click());
+  expect(host.textContent).not.toContain('Your file privacy');
+  for (const name of ['Files & History', 'Overview', 'Settings', 'About HAMMA', 'Workspace']) {
+    await act(async () => button(name).click());
+    expect(host.querySelector('main')?.textContent).not.toBe('');
+  }
+});

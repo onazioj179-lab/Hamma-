@@ -223,7 +223,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Deletion failed'); }
   };
   const toggleSource = (id: string) => setSelected(previous => { const next = new Set(previous); next.has(id) ? next.delete(id) : next.add(id); return next; });
-  const rowStart = Math.max(0, Math.floor(scroll / 64) - 3);
+  const rowStart = Math.min(Math.max(0, sources.length - 14), Math.max(0, Math.floor(scroll / 64) - 3));
   const rendered = sources.slice(rowStart, rowStart + 14);
   const downloadsOnly = screen === 'files' || operationFilter === 'downloads';
   const combined = combineActivity(jobs, archives, outputs, downloadsOnly);

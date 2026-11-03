@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
+import { browserStorage } from './storage';
 
 interface LocalLearning {
   samples: number;
@@ -66,7 +67,7 @@ export const usePreferences = create<Preferences>()(
     }),
     {
       name: 'hamma-preferences',
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => browserStorage),
     },
   ),
 );
