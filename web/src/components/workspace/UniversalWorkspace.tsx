@@ -1,12 +1,14 @@
+import { resolveActions } from '../../processing/actions';
 import { useAppStore } from '../../store/app';
 import { combineActivity, filterActivity, loadJobs, type ActivityJob } from '../../processing/activity';
 import { SelectField } from '../ui/SelectField';
 import { ConfirmAction, type ConfirmationRequest } from '../ui/ConfirmAction';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowDownToLine, ArrowRightLeft, Check, ChevronLeft, ChevronRight, Download, File, FileArchive, FolderPlus, History, Loader2, Pause, Play, Plus, RefreshCw, Search, ShieldCheck, Trash2, X } from 'lucide-react';
-import { activeJob, droppedSources, jsonRequest, request, requestId, randomId, upload, type Capability, type Job, type Retention, type Source } from '../../processing/client';
+import { ProcessorError, activeJob, droppedSources, jsonRequest, request, requestId, randomId, upload, type Capability, type Job, type Retention, type Source } from '../../processing/client';
 import { formatFileSize } from '../../utils/fileHelpers';
 import { accountChanging } from '../../processing/account';
+import { directoryPicker, readFolder } from '../../processing/folders';
 import '../../processing/processing.css';
 
 type Props = { visible: boolean; screen: 'workspace' | 'files' | 'history'; onHistory: () => void; spkResult?: { outputName: string; downloadUrl: string | null; historyId?: string; historyCreated?: number; originalSize?: number; resultSize?: number; operation?: 'compress' | 'extract' } | null; onSpkDownload?: () => void; spkReady?: boolean; spkBusy?: boolean; spkStatus?: ReactNode; onSpkSelect?: (files: File[], restore: boolean) => Promise<boolean> };
@@ -45,7 +47,11 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const [recursive, setRecursive] = useState(false);
   const [retention, setRetention] = useState<Retention>({ historyRetention: '30d', fileRetention: '24h' });
   const [error, setError] = useState('');
+  const [sourceErrors, setSourceErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const [folderHelp, setFolderHelp] = useState(false);
+  const [readingFolder, setReadingFolder] = useState(false);
+  const folderController = useRef<AbortController | null>(null);
   const [uploadStatus, setUploadStatus] = useState<{ name: string; offset: number; size: number } | null>(null);
   const [scroll, setScroll] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -62,7 +68,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const refreshFlight = useRef<Promise<void> | null>(null);
   const mounted = useRef(true);
   const ownerGeneration = useRef(0);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; abort.current?.abort(); refreshController.current?.abort(); deletionPreviewController.current?.abort(); }; }, []);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; abort.current?.abort(); folderController.current?.abort(); refreshController.current?.abort(); deletionPreviewController.current?.abort(); }; }, []);
   useEffect(() => {
     if (!visible) { deletionPreviewController.current?.abort(); if (!mutation.current) setConfirmation(null); }
   }, [visible]);
@@ -113,7 +119,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     const guard = (event: Event) => { if (busy || spkBusy || submitting.current || mutation.current || preparingDelete.current || savingRetention) event.preventDefault(); };
     const clear = () => {
       ownerGeneration.current += 1;
-      abort.current?.abort();
+      abort.current?.abort(); folderController.current?.abort(); setFolderHelp(false);
       refreshController.current?.abort(); refreshFlight.current = null;
       deletionPreviewController.current?.abort();
       knownStates.current.clear(); activity.current = false;
@@ -164,12 +170,43 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     setSelected(previous => new Set([...previous, ...incoming.map(s => s.id)]));
   };
   const choose = (files: File[]) => add(files.map(file => ({ id: randomId(), file, name: file.webkitRelativePath || file.name, size: file.size, directory: false })));
+  const chooseFolder = async () => {
+    if (busy || spkBusy || folderController.current || accountChanging()) return;
+    setError(''); setFolderHelp(true);
+    const picker = directoryPicker();
+    if (!picker) {
+      if (folder.current && 'webkitdirectory' in folder.current) folder.current.click();
+      return;
+    }
+    const controller = new AbortController(); folderController.current = controller;
+    const generation = ownerGeneration.current;
+    setBusy(true); setReadingFolder(true);
+    try {
+      // Call directly from the button gesture, before awaiting any other work.
+      const handle = await picker({ mode: 'read', id: 'hamma-add-folder' });
+      const incoming = await readFolder(handle, capability?.limits.files || 5000, controller.signal);
+      if (mounted.current && generation === ownerGeneration.current && !controller.signal.aborted) {
+        add(incoming); setFolderHelp(false);
+      }
+    } catch (caught) {
+      if (mounted.current && generation === ownerGeneration.current && !controller.signal.aborted && !(caught instanceof DOMException && caught.name === 'AbortError')) {
+        setError(caught instanceof DOMException ? 'This folder could not be opened. Try another folder or select its files instead.' : caught instanceof Error ? caught.message : 'Folder selection failed. Select its files instead.');
+      }
+    } finally {
+      if (folderController.current === controller) folderController.current = null;
+      if (mounted.current) { setBusy(false); setReadingFolder(false); }
+    }
+  };
   const chosen = sources.filter(source => selected.has(source.id));
+  const actions = resolveActions(chosen, capability);
+  const canExtract = chosen.length > 0 && chosen.every(source => /\.spk$/i.test(source.name) ? !!spkReady : resolveActions([source], capability).extract);
+  const conversionTarget = actions.conversions.includes(conversion) ? conversion : actions.conversions[0];
   const submit = async (operation: 'compress' | 'extract' | 'convert') => {
     if (accountChanging()) return;
     if (submitting.current || spkBusy || !chosen.length) return;
-    if (operation === 'convert' && ['mp3', 'aac', 'm4a', 'ogg', 'opus', 'jpg'].includes(conversion) && qualityMode !== 'lossy') {
-      setError(`${conversion.toUpperCase()} can reduce quality. Choose Allow quality loss before converting.`);
+    if (operation === 'convert' && !conversionTarget) return;
+    if (operation === 'convert' && ['mp3', 'aac', 'm4a', 'ogg', 'opus', 'jpg'].includes(conversionTarget) && qualityMode !== 'lossy') {
+      setError(`${conversionTarget.toUpperCase()} can reduce quality. Choose Allow quality loss before converting.`);
       return;
     }
     const browserOnly = (operation === 'compress' && target === 'spk') || (operation === 'extract' && chosen.every(source => /\.spk$/i.test(source.name)));
@@ -200,6 +237,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     const submitted = new Set<string>();
     try {
       const inputs: { source: Source; id: string }[] = [];
+      const failures: Record<string, string> = {};
       for (const source of chosen) {
         controller.signal.throwIfAborted();
         if (operation === 'extract' && /\.spk$/i.test(source.name)) {
@@ -207,14 +245,25 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
           if (!await onSpkSelect([source.file], true)) throw new Error('SPK restoration did not complete.');
           submitted.add(source.id); continue;
         }
-        const id = await upload(source, controller.signal, offset => { if (generation === ownerGeneration.current) { source.uploaded = offset; setUploadStatus({ name: source.name, offset, size: source.size }); } });
-        inputs.push({ source, id });
-        if (operation !== 'compress') {
-          const conversionOptions = operation === 'convert' ? { qualityMode, metadataPolicy } : {};
-          await jsonRequest('/jobs', { uploads: [id], operation, target: operation === 'extract' ? 'zip' : conversion, recursive, ...conversionOptions, requestId: await requestId([generation, source.id, operation, conversion, recursive, conversionOptions]) }, 'POST', { signal: controller.signal });
-          submitted.add(source.id);
+        try {
+          const id = await upload(source, controller.signal, offset => { if (generation === ownerGeneration.current) { source.uploaded = offset; setUploadStatus({ name: source.name, offset, size: source.size }); } });
+          inputs.push({ source, id });
+          if (operation !== 'compress') {
+            const conversionOptions = operation === 'convert' ? { qualityMode, metadataPolicy } : {};
+            await jsonRequest('/jobs', { uploads: [id], operation, target: operation === 'extract' ? 'zip' : conversionTarget, recursive, ...conversionOptions, requestId: await requestId([generation, source.id, operation, conversionTarget, recursive, conversionOptions]) }, 'POST', { signal: controller.signal });
+            submitted.add(source.id);
+            setSourceErrors(previous => { const next = { ...previous }; delete next[source.id]; return next; });
+          }
+        } catch (caught) {
+          if (controller.signal.aborted || operation === 'compress') throw caught;
+          // A capacity/network failure affects the batch: retain all unsubmitted
+          // files for resume. A file-specific rejection must not stop later files.
+          if (!(caught instanceof ProcessorError) || ![400, 413, 415, 422].includes(caught.status)) throw caught;
+          failures[source.id] = caught.message;
+          setSourceErrors(previous => ({ ...previous, [source.id]: caught.message }));
         }
       }
+      if (Object.keys(failures).length) setError(`${Object.keys(failures).length} files could not be queued. Select an action to retry; details appear beside each file.`);
       if (operation === 'compress') {
         await jsonRequest('/jobs', { uploads: inputs.map(i => i.id), operation, target, requestId: await requestId([generation, inputs.map(i => i.source.id), operation, target]) }, 'POST', { signal: controller.signal });
         inputs.forEach(i => submitted.add(i.source.id));
@@ -393,14 +442,16 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     {screen === 'workspace' && <>
       <div className={`surface universal-drop ${dragging ? 'drag-active' : ''}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); if (busy || spkBusy) return; void droppedSources(event.dataTransfer, capability?.limits.files).then(add).catch(caught => setError(caught.message)); }}>
         <div className="universal-drop-icon"><FileArchive size={30} strokeWidth={1.2} /></div><h2>Add your files</h2><p>Drop files or folders</p>
-        <div className="button-row"><button className="button primary" disabled={busy || spkBusy} onClick={() => input.current?.click()}><Plus size={16} /> Add Files</button><button className="button secondary" disabled={busy || spkBusy} onClick={() => folder.current?.click()}><FolderPlus size={16} /> Add Folder</button></div>
-        <input type="file" multiple hidden ref={input} aria-label="Add files to queue" onChange={event => { choose(Array.from(event.target.files || [])); event.target.value = ''; }} />
-        <input type="file" multiple hidden ref={folder} {...{ webkitdirectory: '' }} aria-label="Add folder to queue" onChange={event => { choose(Array.from(event.target.files || [])); event.target.value = ''; }} />
+        <div className="button-row"><button className="button primary" disabled={busy || spkBusy} onClick={() => input.current?.click()}><Plus size={16} /> Add Files</button><button className="button secondary" disabled={busy || spkBusy} onClick={() => void chooseFolder()}><FolderPlus size={16} /> Add Folder</button></div>
+        <input type="file" multiple className="file-picker-input" tabIndex={-1} ref={input} aria-label="Add files to queue" onChange={event => { const files = Array.from(event.target.files || []); choose(files); if (files.length) setFolderHelp(false); event.target.value = ''; }} />
+        <input type="file" multiple className="file-picker-input" tabIndex={-1} ref={folder} {...{ webkitdirectory: '' }} aria-label="Add folder to queue" onChange={event => { const files = Array.from(event.target.files || []); if (files.length) { choose(files); setFolderHelp(!files.some(file => file.webkitRelativePath)); } else setError('No files were selected from this folder. Select its files instead.'); event.target.value = ''; }} />
       </div>
+      {folderHelp && !readingFolder && <div className="processor-notice folder-selection-help" role="status"><span>Can’t select the folder? Select the files inside it instead, or add a ZIP.</span><button className="button secondary" disabled={busy || spkBusy} onClick={() => input.current?.click()}>Select files instead</button><button className="icon-button" aria-label="Dismiss folder help" onClick={() => setFolderHelp(false)}><X size={16} /></button></div>}
+      {readingFolder && <div className="upload-status" role="status"><Loader2 size={16} className="animate-spin" /><span>Reading folder…</span><button className="button secondary" onClick={() => folderController.current?.abort()}>Cancel</button></div>}
       {sources.length > 0 && <section className="surface source-panel" aria-label="Selected files">
         <div className="source-toolbar"><label className="selection-label"><input type="checkbox" checked={selected.size === sources.length} onChange={() => setSelected(selected.size === sources.length ? new Set() : new Set(sources.map(s => s.id)))} />Select all</label><span>{selected.size.toLocaleString()} selected · {formatFileSize(chosen.reduce((sum, source) => sum + source.size, 0))}</span><button className="icon-button" disabled={busy || spkBusy || !selected.size} aria-label="Remove selected files" onClick={removeSelectedSources}><Trash2 size={16} /></button></div>
-        <div className="source-scroll" onScroll={event => setScroll(event.currentTarget.scrollTop)}><div style={{ height: sources.length * 64, position: 'relative' }}>{rendered.map((source, index) => <div className="source-row" key={source.id} style={{ top: (rowStart + index) * 64 }}><input type="checkbox" aria-label={`Select ${source.name}`} checked={selected.has(source.id)} onChange={() => toggleSource(source.id)} /><File size={19} strokeWidth={1.5} /><div><strong title={source.name}>{source.name}</strong><span>{source.directory ? 'Empty folder' : formatFileSize(source.size)}</span></div><span className="file-state">Waiting</span></div>)}</div></div>
-        <div className="processing-actions"><button className="button primary" disabled={busy || spkBusy || !selected.size || (target === 'spk' ? !spkReady || chosen.some(source => source.directory) : !capability || offline)} onClick={() => void submit('compress')}><FileArchive size={16} /> Compress</button><button className="button secondary" disabled={busy || spkBusy || !selected.size || chosen.some(s => s.directory) || (chosen.every(source => /\.spk$/i.test(source.name)) ? !spkReady : !capability || offline)} onClick={() => void submit('extract')}><ArrowDownToLine size={16} /> Extract</button><button className="button secondary" disabled={busy || spkBusy || !selected.size || !capability?.conversions.length || offline || chosen.some(s => s.directory)} onClick={() => void submit('convert')}><ArrowRightLeft size={16} /> Convert</button><label className="conversion-select">To<SelectField disabled={busy || spkBusy} aria-label="Conversion format" value={conversion} onChange={value => setConversion(value)}>{(capability?.conversions.length ? capability.conversions : ['wav']).map(format => <option key={format}>{format}</option>)}</SelectField></label><label className="conversion-select">Quality<SelectField disabled={busy || spkBusy} aria-label="Conversion quality" value={qualityMode} onChange={value => setQualityMode(value as "lossless" | "lossy")}><option value="lossless">Lossless</option><option value="lossy">Allow quality loss</option></SelectField></label></div>
+        <div className="source-scroll" onScroll={event => setScroll(event.currentTarget.scrollTop)}><div style={{ height: sources.length * 64, position: 'relative' }}>{rendered.map((source, index) => <div className="source-row" key={source.id} style={{ top: (rowStart + index) * 64 }}><input type="checkbox" aria-label={`Select ${source.name}`} checked={selected.has(source.id)} onChange={() => toggleSource(source.id)} /><File size={19} strokeWidth={1.5} /><div><strong title={source.name}>{source.name}</strong><span>{source.directory ? 'Empty folder' : formatFileSize(source.size)}</span></div>{sourceErrors[source.id] ? <button className="file-state source-error" title={sourceErrors[source.id]} onClick={() => setError(source.name + ': ' + sourceErrors[source.id])}>{sourceErrors[source.id]}</button> : <span className="file-state">Waiting</span>}</div>)}</div></div>
+        <div className="processing-actions"><button className="button primary" disabled={busy || spkBusy || !selected.size || (target === 'spk' ? !spkReady || chosen.some(source => source.directory) : !capability || offline)} onClick={() => void submit('compress')}><FileArchive size={16} /> Compress</button>{canExtract && <button className="button secondary" disabled={busy || spkBusy || !selected.size || chosen.some(s => s.directory) || (chosen.every(source => /\.spk$/i.test(source.name)) ? !spkReady : !capability || offline)} onClick={() => void submit('extract')}><ArrowDownToLine size={16} /> Extract</button>}{actions.conversions.length > 0 && <><button className="button secondary" disabled={busy || spkBusy || !selected.size || !capability?.conversions.length || offline || chosen.some(s => s.directory)} onClick={() => void submit('convert')}><ArrowRightLeft size={16} /> Convert</button><label className="conversion-select">To<SelectField disabled={busy || spkBusy} aria-label="Conversion format" value={conversionTarget} onChange={value => setConversion(value)}>{actions.conversions.map(format => <option key={format}>{format}</option>)}</SelectField></label><label className="conversion-select">Quality<SelectField disabled={busy || spkBusy} aria-label="Conversion quality" value={qualityMode} onChange={value => setQualityMode(value as "lossless" | "lossy")}><option value="lossless">Lossless</option><option value="lossy">Allow quality loss</option></SelectField></label></>}</div>
       </section>}
       {capability && !capability.conversions.length && <p className="footnote">Media conversion is unavailable until FFmpeg and FFprobe are installed on the computer running HAMMA.</p>}
       {uploadStatus && <div className="upload-status" role="status"><Loader2 size={16} className="animate-spin" /><span>{uploadStatus.name}<small>{formatFileSize(uploadStatus.offset)} / {formatFileSize(uploadStatus.size)}</small></span><progress aria-label="Upload progress" value={uploadStatus.offset} max={Math.max(1, uploadStatus.size)} /><button className="icon-button" aria-label="Pause upload" onClick={() => abort.current?.abort()}><Pause size={16} /></button></div>}

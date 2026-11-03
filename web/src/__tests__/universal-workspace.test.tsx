@@ -11,7 +11,7 @@ vi.hoisted(() => { Object.defineProperty(window, 'matchMedia', { configurable: t
 let root: Root;
 let host: HTMLDivElement;
 let fetchMock: ReturnType<typeof vi.fn>;
-const caps = { archives: ['zip', 'gzip'], conversions: ['wav', 'png'], processing: 'local', version: 1, limits: { input: 1e9, expanded: 1e9, files: 5000 } };
+const caps = { actionRegistry: [{ mime: ['image/png'], extensions: ['png'], conversions: ['png'], extract: false }, { mime: ['audio/wav'], extensions: ['wav'], conversions: ['wav', 'mp3'], extract: false }, { mime: [], extensions: ['zip'], conversions: [], extract: true }], archives: ['zip', 'gzip'], conversions: ['wav', 'png'], processing: 'local', version: 1, limits: { input: 1e9, expanded: 1e9, files: 5000 } };
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   useAppStore.setState({ sessionOutputs: {}, recentArchives: [], history: [], result: null });
@@ -28,6 +28,62 @@ const select = async (files: File[]) => {
   Object.defineProperty(input, 'files', { value: files, configurable: true });
   await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })));
 };
+
+it('uses an explicit read-only directory picker and queues nested and empty folders', async () => {
+  vi.stubGlobal('isSecureContext', true);
+  const picker = vi.fn(async () => ({ kind: 'directory', name: 'Selected', async *values() {
+    yield { kind: 'file', name: 'note.txt', getFile: async () => new File(['hello'], 'note.txt') };
+    yield { kind: 'directory', name: 'empty', async *values() {} };
+  } }));
+  vi.stubGlobal('showDirectoryPicker', picker);
+  await render(); await act(async () => button('Add Folder').click());
+  expect(picker).toHaveBeenCalledWith({ mode: 'read', id: 'hamma-add-folder' });
+  expect(host.textContent).toContain('Selected/note.txt');
+  expect(host.textContent).toContain('Selected/empty/');
+  expect(host.textContent).toContain('2 selected');
+  expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/uploads'))).toBe(false);
+});
+
+it('offers normal file selection when the native folder picker cannot select folders', async () => {
+  await render();
+  const files = host.querySelector<HTMLInputElement>('[aria-label="Add files to queue"]')!;
+  const directory = host.querySelector<HTMLInputElement>('[aria-label="Add folder to queue"]')!;
+  Object.defineProperty(directory, 'webkitdirectory', { value: true, configurable: true });
+  const folderClick = vi.spyOn(directory, 'click');
+  const fileClick = vi.spyOn(files, 'click');
+  await act(async () => button('Add Folder').click());
+  expect(folderClick).toHaveBeenCalledTimes(1);
+  expect(host.textContent).toContain('Can’t select the folder?');
+  await act(async () => button('Select files instead').click());
+  expect(fileClick).toHaveBeenCalledTimes(1);
+  await select([new File(['mobile'], 'mobile.txt')]);
+  expect(host.textContent).toContain('mobile.txt');
+  expect(host.textContent).not.toContain('Can’t select the folder?');
+  expect(button('Compress').disabled).toBe(false);
+});
+
+it('leaves the selection intact when a folder picker is cancelled', async () => {
+  vi.stubGlobal('isSecureContext', true);
+  vi.stubGlobal('showDirectoryPicker', vi.fn(async () => { throw new DOMException('Cancelled', 'AbortError'); }));
+  await render(); await select([new File(['keep'], 'keep.txt')]);
+  await act(async () => button('Add Folder').click());
+  expect(host.querySelector('[role=alert]')).toBeNull();
+  expect(host.textContent).toContain('keep.txt');
+  expect(button('Add Folder').disabled).toBe(false);
+});
+
+it('preserves relative paths from directory input and allows the same folder again after removal', async () => {
+  await render();
+  const directory = host.querySelector<HTMLInputElement>('[aria-label="Add folder to queue"]')!;
+  const file = new File(['nested'], 'nested.txt');
+  Object.defineProperty(file, 'webkitRelativePath', { value: 'Picked/sub/nested.txt' });
+  Object.defineProperty(directory, 'files', { value: [file], configurable: true });
+  await act(async () => directory.dispatchEvent(new Event('change', { bubbles: true })));
+  expect(host.textContent).toContain('Picked/sub/nested.txt');
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Remove selected files"]')!.click());
+  await act(async () => directory.dispatchEvent(new Event('change', { bubbles: true })));
+  expect(host.textContent).toContain('Picked/sub/nested.txt');
+});
 
 it('clears previous-owner jobs before auth resolves while preserving selected files', async () => {
   const initial = fetchMock.getMockImplementation()!;
@@ -69,7 +125,7 @@ it('adds files without processing them until a direct action and virtualizes lar
   expect(host.querySelectorAll('.source-row').length).toBeLessThan(20);
   expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/uploads'))).toBe(false);
   expect(button('Compress').disabled).toBe(false);
-  expect(button('Extract').disabled).toBe(false);
+  expect(button('Extract')).toBeUndefined();
 });
 
 it('rejects duplicate names as a complete selection', async () => {
@@ -381,4 +437,51 @@ it('keeps a hidden processor output discoverable through Available downloads aft
     expect(host.querySelectorAll('.processing-job')).toHaveLength(1);
     expect(host.querySelector('[aria-label="Download retained.zip"]')).not.toBeNull();
   } finally { window.removeEventListener('hamma-job-count', count); }
+});
+
+
+it('continues a 300-file batch after 14 file-specific queue rejections and retains retry details', async () => {
+  await render();
+  const initial = fetchMock.getMockImplementation()!;
+  let count = 0;
+  vi.spyOn(processingClient, 'upload').mockImplementation(async source => 'upload-' + source.id);
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/jobs') && init?.method === 'POST') {
+      count++;
+      if (count <= 14) return { ok: false, status: 415, json: async () => ({ error: 'Unsupported test image' }) };
+      return { ok: true, json: async () => ({ id: String(count) }) };
+    }
+    return initial(url, init);
+  });
+  await select(Array.from({ length: 300 }, (_, i) => new File(['fixture'], `image-${i}.png`, { type: 'image/png' })));
+  expect(button('Extract')).toBeUndefined();
+  expect(host.textContent).not.toContain('WAV');
+  await act(async () => button('Convert').click());
+  expect(count).toBe(300);
+  expect(host.textContent).toContain('14 selected');
+  expect(host.textContent).toContain('14 files could not be queued');
+  expect(host.textContent).toContain('Unsupported test image');
+  await act(async () => button('Convert').click());
+  expect(count).toBe(314);
+  expect(host.querySelector('[aria-label="Selected files"]')).toBeNull();
+});
+
+
+it('pauses on queue capacity errors and retains only unsubmitted files', async () => {
+  await render();
+  const initial = fetchMock.getMockImplementation()!;
+  let count = 0;
+  vi.spyOn(processingClient, 'upload').mockImplementation(async source => 'upload-' + source.id);
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/jobs') && init?.method === 'POST') {
+      if (++count === 2) return { ok: false, status: 429, json: async () => ({ error: 'Queue limit reached' }) };
+      return { ok: true, json: async () => ({ id: String(count) }) };
+    }
+    return initial(url, init);
+  });
+  await select([0, 1, 2].map(i => new File(['fixture'], `photo-${i}.png`, { type: 'image/png' })));
+  await act(async () => button('Convert').click());
+  expect(count).toBe(2);
+  expect(host.textContent).toContain('2 selected');
+  expect(host.textContent).toContain('Queue limit reached');
 });
