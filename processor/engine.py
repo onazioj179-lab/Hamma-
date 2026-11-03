@@ -77,7 +77,7 @@ def detect(path: Path) -> str:
     if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
         return "webp"
     if head[4:8] == b"ftyp":
-        return "mp4"
+        return "avif" if head[8:12] == b"avif" else "mp4"
     if head[:4] == b"\x1aE\xdf\xa3":
         return "mkv"
     if head.startswith(b"%PDF-"):
@@ -510,7 +510,7 @@ def convert(source: Path, output: Path, target: str, ctx: Context, quality_mode=
     outputs = []
     if image:
         formats = set(info.get("format", {}).get("format_name", "").split(","))
-        if not formats.intersection({"image2", "png_pipe", "jpeg_pipe", "webp_pipe", "bmp_pipe", "tiff_pipe", "gif"}):
+        if not formats.intersection({"image2", "png_pipe", "jpeg_pipe", "webp_pipe", "bmp_pipe", "tiff_pipe", "gif"}) and detect(source) != "avif":
             raise ProcessingError("Choose a still image")
         frames = [s for s in probe(source, count_frames=True)["streams"] if s["codec_type"] == "video"]
         if len(frames) != 1 or frames[0].get("nb_read_frames") != "1":

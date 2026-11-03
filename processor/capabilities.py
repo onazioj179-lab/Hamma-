@@ -7,7 +7,7 @@ def action_registry():
     from .native import capability
     native = bool(capability())
     return [
-        {'mime': ['image/png', 'image/jpeg', 'image/webp'], 'extensions': ['png', 'jpg', 'jpeg', 'webp'],
+        {'mime': ['image/png', 'image/jpeg', 'image/webp', 'image/avif'], 'extensions': ['png', 'jpg', 'jpeg', 'webp', 'avif'],
          'conversions': ['png', 'webp', 'jpg'] if media else [], 'extract': False},
         {'mime': ['audio/wav', 'audio/x-wav', 'audio/flac', 'audio/mpeg', 'audio/ogg'],
          'extensions': ['wav', 'flac', 'mp3', 'ogg', 'opus', 'm4a', 'aac'],

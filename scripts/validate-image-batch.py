@@ -54,5 +54,5 @@ report = dict(environment='Windows desktop Python/FFmpeg engine; sequential jobs
               successfulFiles=sum(row['status']=='completed' for row in results), failedFiles=sum(row['status']=='failed' for row in results),
               durationSeconds=round(time.monotonic()-started, 3), peakPythonTracedBytes=peak,
               limitations='Python allocations only; excludes FFmpeg RSS. No mobile hardware, HEIC, background suspension, upload or concurrency certification.', files=results)
-Path('validation/image-batch-v4.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+Path(sys.argv[1] if len(sys.argv) > 1 else 'validation/image-batch-v4.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
 print(json.dumps({key: value for key, value in report.items() if key != 'files'}))

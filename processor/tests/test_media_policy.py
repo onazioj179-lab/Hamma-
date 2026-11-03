@@ -3,7 +3,7 @@ import shutil
 import subprocess
 import unittest
 
-from processor.engine import ProcessingError, convert, decoded_digest, probe
+from processor.engine import ProcessingError, convert, decoded_digest, probe, detect
 from processor.media_policy import validate_conversion_options
 from test_engine import EngineFixture
 
@@ -68,3 +68,19 @@ class MediaQualityTests(EngineFixture):
         self.ffmpeg('-f', 'lavfi', '-i', 'color=c=blue:s=32x32', '-frames:v', '1', str(source))
         with self.assertRaisesRegex(ProcessingError, 'verification limit'):
             decoded_digest(source, self.context(expanded=100), stream='0:v:0', encoding='rgba64le', container='rawvideo')
+
+
+    def test_avif_still_image_decodes_and_preserves_pixels_in_png(self):
+        source = self.root / 'image-with-wrong-extension.bin'
+        self.ffmpeg('-f', 'lavfi', '-i', 'testsrc=size=48x32:duration=0.1', '-frames:v', '1', '-threads', '1', '-f', 'avif', str(source))
+        self.assertEqual(detect(source), 'avif')
+        output = self.root / 'decoded.png'
+        convert(source, output, 'png', self.context())
+        self.assertEqual(decoded_digest(source, self.context(), stream='0:v:0', encoding='rgba', container='rawvideo'),
+                         decoded_digest(output, self.context(), stream='0:v:0', encoding='rgba', container='rawvideo'))
+
+    def test_single_frame_video_is_not_accepted_as_a_still_image(self):
+        source = self.root / 'video.mp4'
+        self.ffmpeg('-f', 'lavfi', '-i', 'testsrc=size=48x32:duration=0.1', '-frames:v', '1', '-pix_fmt', 'yuv420p', str(source))
+        with self.assertRaisesRegex(ProcessingError, 'still image'):
+            convert(source, self.root / 'invalid.png', 'png', self.context())
