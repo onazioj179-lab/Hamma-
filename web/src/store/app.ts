@@ -71,6 +71,17 @@ export interface RecentArchive {
   date: number;
   type: 'compress' | 'decompress';
   mode: CompressionMode;
+  outputName?: string;
+  duration?: number;
+  fileCount?: number;
+}
+
+export interface SessionOutput {
+  archive: RecentArchive;
+  outputName: string;
+  downloadUrl: string | null;
+  savedToDevice: boolean;
+  hidden?: boolean;
 }
 
 // Compression history entry (V43)
@@ -203,6 +214,10 @@ interface AppState {
     duration: number;
     speedMbps: number;
     outputName: string;
+    historyId?: string;
+    historyCreated?: number;
+    fileCount?: number;
+    operation?: 'compress' | 'extract';
     downloadUrl: string | null;
   } | null;
   setResult: (result: AppState['result']) => void;
@@ -219,6 +234,10 @@ interface AppState {
   wasmCapabilities: WasmCapabilities | null;
   setWasmReady: (ready: boolean, capabilities?: WasmCapabilities) => void;
   
+  sessionOutputs: Record<string, SessionOutput>;
+  deleteSessionOutput: (id: string) => void;
+  clearSessionOutputs: () => void;
+
   // Recent archives
   recentArchives: RecentArchive[];
   addRecentArchive: (archive: Omit<RecentArchive, 'id' | 'date'>) => void;
@@ -409,24 +428,45 @@ export const useAppStore = create<AppState>()(
         wasmCapabilities: capabilities || null 
       }),
       
-      // Recent archives
+      // Temporary output URLs are intentionally excluded from persisted storage.
+      sessionOutputs: {},
+      deleteSessionOutput: (id) => set((state) => {
+        const output = state.sessionOutputs[id];
+        if (output?.downloadUrl) URL.revokeObjectURL(output.downloadUrl);
+        const sessionOutputs = { ...state.sessionOutputs };
+        delete sessionOutputs[id];
+        return { sessionOutputs, result: state.result?.historyId === id ? null : state.result };
+      }),
+      clearSessionOutputs: () => set((state) => {
+        Object.values(state.sessionOutputs).forEach(output => { if (output.downloadUrl) URL.revokeObjectURL(output.downloadUrl); });
+        return { sessionOutputs: {}, result: null };
+      }),
       recentArchives: [],
       addRecentArchive: (archive) => {
-        if (!usePreferences.getState().rememberHistory) return;
+        const result = get().result;
         const newArchive: RecentArchive = {
           ...archive,
           id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
           date: Date.now(),
+          outputName: result?.outputName,
+          duration: result?.duration,
+          fileCount: result?.fileCount || 1,
         };
         set((state) => ({
-          recentArchives: [newArchive, ...state.recentArchives].slice(0, 20),
+          result: result ? { ...result, historyId: newArchive.id, historyCreated: newArchive.date, operation: archive.type === 'decompress' ? 'extract' : 'compress' } : null,
+          sessionOutputs: result ? { ...state.sessionOutputs, [newArchive.id]: { archive: newArchive, outputName: result.outputName, downloadUrl: result.downloadUrl, savedToDevice: result.downloadUrl === '' } } : state.sessionOutputs,
+          recentArchives: usePreferences.getState().rememberHistory ? [newArchive, ...state.recentArchives].slice(0, 20) : state.recentArchives,
         }));
       },
       removeRecentArchive: (id) => set((state) => ({
         recentArchives: state.recentArchives.filter(a => a.id !== id),
+        sessionOutputs: state.sessionOutputs[id] ? { ...state.sessionOutputs, [id]: { ...state.sessionOutputs[id], hidden: true } } : state.sessionOutputs,
       })),
-      clearRecentArchives: () => set({ recentArchives: [], history: [] }),
-      
+      clearRecentArchives: () => set((state) => ({
+        recentArchives: [], history: [],
+        sessionOutputs: Object.fromEntries(Object.entries(state.sessionOutputs).map(([id, output]) => [id, { ...output, hidden: true }])),
+      })),
+
       // Compression history (V43)
       history: [],
       addHistoryEntry: (entry) => {

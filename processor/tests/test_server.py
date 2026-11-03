@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 import zipfile
@@ -42,6 +43,16 @@ class ServerTests(unittest.TestCase):
             result = response.read()
             return result if raw else json.loads(result)
 
+    def test_json_endpoints_reject_non_object_payloads(self):
+        for path, method in [("/uploads", "POST"), ("/jobs", "POST"), ("/settings", "PUT")]:
+            for payload in [b"null", b"[]", b"1", b'"text"', b'{"size": NaN}', b'{"size": Infinity}']:
+                with self.subTest(path=path, payload=payload):
+                    with self.assertRaises(HTTPError) as caught:
+                        self.call(path, payload, method, {"Content-Type": "application/json"}, raw=True)
+                    self.assertEqual(caught.exception.code, 400)
+                    self.assertIn("error", json.loads(caught.exception.read()))
+        self.assertIn("id", self.upload())
+
     def upload(self, data=b"test data", name="nested/世界.txt", split=False):
         record = self.call("/uploads", {"name": name, "size": len(data)}, "POST")
         if split:
@@ -65,6 +76,69 @@ class ServerTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as raised:
             function()
         self.assertEqual(raised.exception.code, status, raised.exception.read().decode())
+
+    def test_restart_preparation_is_instance_bound_and_keeps_queued_jobs_intact(self):
+        queued = self.job()
+        self.assert_status(409, lambda: self.call("/prepare-restart", method="POST", headers={"X-Hamma-Instance": "wrong"}))
+        self.assertEqual(self.service.restart_until, 0)
+        self.service.running["busy"] = ()
+        try:
+            self.assert_status(409, lambda: self.call("/prepare-restart", method="POST", headers={"X-Hamma-Instance": self.service.instance_id}))
+        finally:
+            self.service.running.pop("busy")
+        prepared = self.call("/prepare-restart", method="POST", headers={"X-Hamma-Instance": self.service.instance_id})
+        self.assertTrue(prepared["ready"])
+        self.service.tick()
+        self.assertEqual(self.call("/jobs/" + queued["id"])["state"], "queued")
+        self.assertEqual(len(self.service.running), 0)
+
+    def test_json_routes_reject_non_object_bodies(self):
+        for value in ([], None, 12, "string"):
+            payload = json.dumps(value).encode()
+            self.assert_status(400, lambda: self.call("/uploads", payload, "POST", {"Content-Type": "application/json"}, raw=True))
+
+    def test_rate_limit_returns_retry_after_and_discards_expired_windows(self):
+        self.service.requests_per_minute = 1
+        self.service.rates["expired-client"] = (2000, int(time.time() // 60) - 1)
+        self.call("/health")
+        with self.assertRaises(HTTPError) as raised:
+            self.call("/health")
+        self.assertEqual(raised.exception.code, 429)
+        self.assertTrue(1 <= int(raised.exception.headers["Retry-After"]) <= 60)
+        self.assertNotIn("expired-client", self.service.rates)
+
+    def test_expired_or_missing_uploads_report_gone_before_cleanup(self):
+        source = self.upload(b"original")
+        owner = self.service.store.list(kind="upload")[0][0]
+        self.service.store.patch(owner, "upload", source["id"], expires=time.time() - 1)
+        self.assert_status(410, lambda: self.call("/uploads/" + source["id"]))
+        self.assert_status(410, lambda: self.call("/uploads/" + source["id"], b"", "PUT", {"Upload-Offset": "8"}, raw=True))
+        self.assertEqual((self.service.store.folder(owner, source["id"]) / "input").read_bytes(), b"original")
+        missing = self.upload(b"missing", "missing.txt")
+        (self.service.store.folder(owner, missing["id"]) / "input").unlink()
+        self.assert_status(410, lambda: self.call("/uploads/" + missing["id"]))
+
+    def test_retry_cannot_bypass_queue_capacity(self):
+        job = self.job()
+        owner = self.service.store.list()[0][0]
+        self.service.store.patch(owner, "job", job["id"], state="failed", error="Original failure")
+        for index in range(100):
+            self.service.store.put(owner, "job", {"id": f"{index:032x}", "created": time.time(), "state": "paused"})
+        self.assert_status(429, lambda: self.call("/jobs/" + job["id"] + "/retry", method="POST"))
+        record = self.service.store.get(owner, "job", job["id"])
+        self.assertEqual(record["state"], "failed")
+        self.assertEqual(record["error"], "Original failure")
+
+    def test_health_identifies_live_instance_without_file_metadata(self):
+        first = self.call("/health")
+        second = self.call("/health")
+        self.assertEqual(first["instance"], second["instance"])
+        self.assertEqual(first["pid"], os.getpid())
+        self.assertEqual(first["activeJobs"], 0)
+        self.assertEqual(first["processing"], "local")
+        self.assertRegex(first["revision"], r"^[0-9a-f]{64}:[0-9a-f]{64}$")
+        self.assertNotIn(str(self.service.store.root), json.dumps(first))
+        self.assertNotIn("files", first)
 
     def test_resumable_chunks_real_job_hash_download_and_ranges(self):
         source = self.upload(b"Real content" * 100, split=True)
@@ -179,6 +253,60 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(first["id"], second["id"])
         self.assertEqual(self.call("/jobs")["total"], 1)
         self.assert_status(409, lambda: self.job(upload, requestId="a" * 64, target="tar"))
+
+    def test_worker_start_failure_does_not_strand_jobs_or_stop_queue(self):
+        jobs = [self.job(), self.job()]
+        with self.assertLogs("hamma.processor", level="ERROR"), patch("processor.server.multiprocessing.get_context") as spawn:
+            spawn.return_value.Process.return_value.start.side_effect = OSError("private host detail")
+            self.service.tick()
+        self.assertEqual(spawn.call_count, 2)
+        self.assertFalse(self.service.running)
+        for job in jobs:
+            current = self.call("/jobs/" + job["id"])
+            self.assertEqual(current["state"], "interrupted")
+            self.assertIn("retry", current["error"])
+            self.assertNotIn("private host detail", current["error"])
+            self.assertIsNotNone(current["finished"])
+            self.assertFalse(current["downloadAvailable"])
+        retried = self.call("/jobs/" + jobs[0]["id"] + "/retry", method="POST")
+        self.assertEqual(retried["state"], "queued")
+        self.assertIsNone(retried["finished"])
+        self.assertIsNone(retried["started"])
+        self.assertEqual(self.execute(retried)["state"], "completed")
+
+    def test_restart_cleans_incomplete_outputs_and_preserves_completed_and_queued_jobs(self):
+        completed = self.execute(self.job())
+        queued = self.job()
+        owner = self.service.store.list()[0][0]
+        incomplete = []
+        for state in ("processing", "verifying", "failed", "cancelled", "interrupted"):
+            job = self.job()
+            self.service.store.patch(owner, "job", job["id"], state=state)
+            directory = self.service.store.folder(owner, job["id"])
+            (directory / "output.zip").write_bytes(b"partial")
+            (directory / "expanded").mkdir()
+            (directory / "expanded" / "private.txt").write_bytes(b"temporary")
+            incomplete.append((job, state))
+        self.service.close()
+        self.service = Service(self.temp.name, limits=LIMITS)
+        for job, state in incomplete:
+            current = self.call("/jobs/" + job["id"])
+            self.assertEqual(current["state"], "interrupted" if state in ("processing", "verifying") else state)
+            self.assertFalse(current["downloadAvailable"])
+            self.assertEqual(list(self.service.store.folder(owner, job["id"]).iterdir()), [])
+        self.assertEqual(self.call("/jobs/" + queued["id"])["state"], "queued")
+        current = self.call("/jobs/" + completed["id"])
+        output = self.call(current["download"].removeprefix("/api/process"), raw=True)
+        self.assertEqual(hashlib.sha256(output).hexdigest(), current["sha256"])
+
+    def test_job_creation_rejects_missing_and_incomplete_uploads(self):
+        missing = self.upload()
+        owner = self.service.store.list(kind="upload")[0][0]
+        (self.service.store.folder(owner, missing["id"]) / "input").unlink()
+        self.assert_status(410, lambda: self.job(missing))
+        incomplete = self.call("/uploads", {"name": "partial.txt", "size": 100}, "POST")
+        self.assert_status(409, lambda: self.job(incomplete))
+        self.assertEqual(self.call("/jobs")["total"], 0)
 
     def test_bulk_deletion_includes_hidden_records_and_orphan_uploads(self):
         job = self.execute(self.job())

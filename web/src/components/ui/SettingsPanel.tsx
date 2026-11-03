@@ -8,8 +8,9 @@ interface Props {
   section: SettingsSection;
   onSectionChange: (section: SettingsSection) => void;
   busy: boolean;
+  onHistory?: () => void;
 }
-export function SettingsPanel({ section, onSectionChange, busy }: Props) {
+export function SettingsPanel({ section, onSectionChange, busy, onHistory }: Props) {
   const {
     theme,
     setTheme,
@@ -17,15 +18,15 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
     setAutoDownload,
     recentArchives,
     clearRecentArchives,
+    sessionOutputs,
+    clearSessionOutputs,
   } = useAppStore();
   const {
-    privacyChoice,
     setPrivacyChoice,
     rememberHistory,
     setRememberHistory,
-    learning,
-    clearLearning,
   } = usePreferences();
+  const outputCount = Object.values(sessionOutputs).filter(output => output.downloadUrl).length;
   const [message, setMessage] = useState('');
   const [clearing, setClearing] = useState(false);
   const clearCache = async () => {
@@ -49,9 +50,9 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
       <div className="page-heading">
         <div>
           <p className="eyebrow">MAKE IT YOURS</p>
-          <h1>{section === 'about' ? 'Made with purpose.' : 'Settings'}</h1>
+          <h1>{section === 'about' ? 'About HAMMA' : 'Settings'}</h1>
           <p className="page-description">
-            Simple controls. Clear choices. Everything in one place.
+            Appearance, downloads, privacy, and storage.
           </p>
         </div>
       </div>
@@ -74,7 +75,7 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
           <section className="surface settings-group">
             <div className="section-heading">
               <h2>Appearance</h2>
-              <p>A familiar space, in your preferred light.</p>
+              <p>Choose light, dark, or match your device.</p>
             </div>
             <div className="appearance-options">
               {[
@@ -104,7 +105,7 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
           <section className="surface settings-group">
             <SettingSwitch
               label="Automatic SPK downloads"
-              description="Download a result as soon as compression or restoration finishes."
+              description="Download a result as soon as compression or restoration finishes. If your browser blocks automatic downloads, use the file’s download link in History."
               checked={autoDownload}
               onChange={setAutoDownload}
             />
@@ -127,7 +128,7 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
               <p>
                 The workspace processes files on the computer running HAMMA. It does not
                 send files to third parties or send analytics. Standard archive
-                and media jobs use temporary storage on this device.
+                and media jobs use temporary storage on the host computer. SPK contents stay in the browser processing them.
               </p>
             </div>
             <SettingSwitch
@@ -151,7 +152,7 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
               onClick={() => {
                 setPrivacyChoice('essential');
                 setMessage(
-                  'Essential storage selected. Local learning is off and its data is cleared.',
+                  'Essential storage selected.',
                 );
               }}
             >
@@ -172,7 +173,7 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
             </div>
             <SettingAction
               title="SPK operation history"
-              description={`${recentArchives.length} of 20 records stored. File contents are never saved in history.`}
+              description={`${recentArchives.length} of 20 records stored. Records contain metadata only. Clearing history keeps temporary output files available through the Available downloads filter.`}
               label="Clear history"
               disabled={!recentArchives.length}
               onClick={() => {
@@ -183,6 +184,14 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
               }}
             />
             <SettingAction
+              title="Temporary SPK downloads"
+              description={`${outputCount} output files available in this session. Delete them to release browser memory; downloaded copies stay on your device.`}
+              label="Delete browser files"
+              disabled={busy || !outputCount}
+              onClick={() => { clearSessionOutputs(); setMessage('Temporary browser files deleted. History and downloaded copies were kept.'); }}
+            />
+            {onHistory && <SettingAction title="Processor files & retention" description="Manage standard job downloads, history, and expiry in the shared file history." label="Manage files" disabled={false} onClick={onHistory} />}
+            <SettingAction
               title="Application cache"
               description="Clear only HAMMA-owned Cache Storage entries. This does not clear your browser cache or other sites."
               label={clearing ? 'Clearing…' : 'Clear app cache'}
@@ -191,7 +200,7 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
             />
           </section>
           <p className="footnote">
-            SPK results stay available until you start another job or close the
+            SPK results stay available until you delete them or close the
             page. Standard file jobs use the retention controls in History.
           </p>
         </>
@@ -228,7 +237,7 @@ export function SettingsPanel({ section, onSectionChange, busy }: Props) {
             <div className="section-heading">
               <h2>How it works</h2>
               <p>
-                Files are processed on this device. Standard jobs continue while
+                SPK runs in your browser; standard jobs run on the host computer. Jobs continue while
                 you move between screens, and results remain available until
                 their expiry. Compression savings depend on the file.
               </p>

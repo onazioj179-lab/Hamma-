@@ -17,16 +17,45 @@ export interface Source { id: string; file: File | null; name: string; size: num
 export interface Retention { historyRetention: string; fileRetention: string }
 export const activeJob = (job: Job) => ['queued', 'processing', 'verifying', 'paused'].includes(job.state);
 
-export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch('/api/process' + path, {
-    ...init, credentials: 'same-origin', headers: { 'X-Hamma-Request': '1', ...init.headers },
-  });
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error || 'Request failed');
-  return result as T;
+export class ProcessorError extends Error {
+  constructor(message: string, public status: number, public retryAfterSeconds?: number) { super(message); this.name = 'ProcessorError'; }
 }
-export const jsonRequest = <T>(path: string, data: unknown, method = 'POST') =>
-  request<T>(path, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+
+export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const controller = new AbortController();
+  const cancel = () => controller.abort(init.signal?.reason);
+  if (init.signal?.aborted) cancel();
+  else init.signal?.addEventListener('abort', cancel, { once: true });
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 30000);
+  try {
+    const response = await fetch('/api/process' + path, {
+      ...init, signal: controller.signal, credentials: 'same-origin', headers: { 'X-Hamma-Request': '1', ...init.headers },
+    });
+    if (response.status === 204) return undefined as T;
+    let result;
+    try { result = await response.json(); }
+    catch (error) {
+      if (controller.signal.aborted) throw error;
+      throw new ProcessorError('The processor returned an unreadable response. Reconnect and try again.', response.status);
+    }
+    if (!response.ok) {
+      const header = response.headers?.get('Retry-After');
+      const seconds = header && /^\d+$/.test(header) ? Number(header) : undefined;
+      const message = typeof result?.error === 'string' ? result.error : 'Request failed';
+      throw new ProcessorError(seconds ? `${message}. Try again in ${seconds} seconds.` : message, response.status, seconds);
+    }
+    return result as T;
+  } catch (error) {
+    if (timedOut) throw new Error('The processor took too long to respond. Reconnect and retry.');
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    init.signal?.removeEventListener('abort', cancel);
+  }
+}
+export const jsonRequest = <T>(path: string, data: unknown, method = 'POST', init: RequestInit = {}) =>
+  request<T>(path, { ...init, method, headers: { 'Content-Type': 'application/json', ...init.headers }, body: JSON.stringify(data) });
 
 export const randomId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
 const requestKeys = new Map<string, string>();
@@ -41,12 +70,25 @@ export async function requestId(parts: unknown[]): Promise<string> {
 
 /** Chunk retries reconcile the server's committed offset before sending more bytes. */
 export async function upload(source: Source, signal: AbortSignal, update: (offset: number) => void): Promise<string> {
-  if (!source.upload) {
-    const record = await jsonRequest<{ id: string }>('/uploads', { name: source.name, size: source.size, directory: source.directory });
+  signal.throwIfAborted();
+  const create = async () => {
+    const record = await jsonRequest<{ id: string }>('/uploads', { name: source.name, size: source.size, directory: source.directory }, 'POST', { signal });
     source.upload = record.id;
+  };
+  if (!source.upload) await create();
+  let offset: number;
+  try { offset = (await request<{ offset: number }>('/uploads/' + source.upload, { signal })).offset; }
+  catch (error) {
+    if (!(error instanceof ProcessorError) || ![404, 410].includes(error.status)) throw error;
+    await create();
+    offset = (await request<{ offset: number }>('/uploads/' + source.upload, { signal })).offset;
   }
-  const id = source.upload;
-  let offset = (await request<{ offset: number }>('/uploads/' + id, { signal })).offset;
+  const id = source.upload!;
+  const validOffset = (value: number) => {
+    if (!Number.isSafeInteger(value) || value < 0 || value > source.size) throw new Error('The processor returned an invalid upload position.');
+    return value;
+  };
+  offset = validOffset(offset);
   update(offset);
   let failures = 0;
   while (offset < source.size) {
@@ -56,12 +98,20 @@ export async function upload(source: Source, signal: AbortSignal, update: (offse
       const result = await request<{ offset: number }>('/uploads/' + id, {
         method: 'PUT', signal, headers: { 'Upload-Offset': String(offset) }, body: source.file!.slice(offset, next),
       });
-      offset = result.offset;
+      if (result.offset <= offset) throw new Error('The upload made no progress. Retry the operation.');
+      offset = validOffset(result.offset);
       failures = 0;
       update(offset);
     } catch (error) {
-      if (signal.aborted || ++failures >= 3) throw error;
-      offset = (await request<{ offset: number }>('/uploads/' + id, { signal })).offset;
+      // Retrying throttling or permanent errors only increases pressure on the host.
+      if (signal.aborted || error instanceof ProcessorError && ![408, 409, 500, 502, 503, 504].includes(error.status) || ++failures >= 3) throw error;
+      await new Promise<void>((resolve, reject) => {
+        const cancel = () => { clearTimeout(timer); reject(signal.reason || new DOMException('Aborted', 'AbortError')); };
+        const timer = setTimeout(() => { signal.removeEventListener('abort', cancel); resolve(); }, 200 * 2 ** (failures - 1));
+        if (signal.aborted) cancel();
+        else signal.addEventListener('abort', cancel, { once: true });
+      });
+      offset = validOffset((await request<{ offset: number }>('/uploads/' + id, { signal })).offset);
       update(offset);
     }
   }

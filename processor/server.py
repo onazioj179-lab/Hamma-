@@ -1,6 +1,6 @@
 """Local-only HTTP service. Start with python -m processor.server.
 
-The service deliberately refuses non-loopback binds. Public, multi-tenant hosting
+The service requires explicit private hosts for non-loopback binds. Public, multi-tenant hosting
 requires an authenticated gateway and stronger per-worker OS sandboxing.
 """
 from __future__ import annotations
@@ -38,6 +38,8 @@ from .engine import ARCHIVES, MEDIA, BLOCK, Context, ProcessingError, compress, 
 LOG = logging.getLogger("hamma.processor")
 TERMINAL = ("completed", "failed", "cancelled", "interrupted")
 ACTIVE = ("queued", "processing", "verifying")
+PROCESSOR_REVISION = ":".join(hashlib.sha256(path.read_bytes()).hexdigest() for path in
+                              (Path(__file__), Path(__file__).with_name("engine.py")))
 RETENTION = {"24h": 86400, "7d": 604800, "30d": 2592000, "never": None}
 
 
@@ -192,6 +194,7 @@ class Service:
     def __init__(self, root, web=None, limits=None, lan_hosts=()):
         self.store = Store(root)
         self.lan_hosts = frozenset(lan_hosts)
+        self.instance_id = secrets.token_hex(16)
         self.instance_lock = (self.store.root / ".server.lock").open("a+b")
         self.instance_lock.write(b"\0")
         self.instance_lock.flush()
@@ -211,6 +214,7 @@ class Service:
                                  "ratio": 1000, "depth": 8, "seconds": 1800, "storage": 20 * 1024**3}
         self.lock = threading.RLock()
         self.running = {}
+        self.restart_until = 0
         self.stop = threading.Event()
         self.secret = self.store.root / ".key"
         if not self.secret.exists():
@@ -219,10 +223,16 @@ class Service:
                 stream.write(secrets.token_bytes(32))
         self.key = self.secret.read_bytes()
         self.rates = {}
+        self.requests_per_minute = int(os.environ.get("HAMMA_REQUESTS_PER_MINUTE", "2000"))
+        if not 1 <= self.requests_per_minute <= 1000000:
+            raise ValueError("HAMMA_REQUESTS_PER_MINUTE must be between 1 and 1000000")
         # A crash must never leave an old success or a fictitious running job.
         for owner, record in self.store.list():
             if record["state"] in ("processing", "verifying"):
-                self.store.patch(owner, "job", record["id"], state="interrupted", error="Processing interrupted", downloadAvailable=False)
+                self.store.patch(owner, "job", record["id"], state="interrupted", error="Processing interrupted", finished=time.time(), downloadAvailable=False)
+                self.clean_work(owner, record["id"])
+            elif record["state"] in ("failed", "cancelled", "interrupted"):
+                # A crash can occur after the terminal state was saved but before cleanup.
                 self.clean_work(owner, record["id"])
 
     def sign(self, value):
@@ -335,10 +345,12 @@ class Service:
                     process.join()
                     record = self.store.get(owner, "job", job_id)
                     if record and record["state"] in ACTIVE:
-                        self.store.patch(owner, "job", job_id, state="interrupted", error="Worker interrupted", downloadAvailable=False)
+                        self.store.patch(owner, "job", job_id, state="interrupted", error="Worker interrupted", finished=time.time(), downloadAvailable=False)
                     if record and record["state"] != "completed":
                         self.clean_work(owner, job_id)
                     del self.running[job_id]
+            if time.monotonic() < self.restart_until:
+                return
             for owner, job in self.store.list():
                 if len(self.running) >= 2:
                     break
@@ -348,8 +360,14 @@ class Service:
                     self.store.patch(owner, "job", job["id"], state="failed", error="Storage full", downloadAvailable=False)
                     continue
                 self.store.patch(owner, "job", job["id"], state="processing")
-                process = multiprocessing.get_context("spawn").Process(target=run_job, args=(str(self.store.root), owner, job["id"], self.limits, True))
-                process.start()
+                try:
+                    process = multiprocessing.get_context("spawn").Process(target=run_job, args=(str(self.store.root), owner, job["id"], self.limits, True))
+                    process.start()
+                except Exception:
+                    LOG.exception("Worker could not start: %s", job["id"])
+                    self.store.patch(owner, "job", job["id"], state="interrupted", error="Worker could not start; retry the job", finished=time.time(), downloadAvailable=False)
+                    self.clean_work(owner, job["id"])
+                    continue
                 self.running[job["id"]] = (process, owner, time.monotonic())
 
     def loop(self):
@@ -380,8 +398,8 @@ class Service:
 
 
 class HTTPError(Exception):
-    def __init__(self, status, message):
-        self.status, self.message = status, message
+    def __init__(self, status, message, retry_after=None):
+        self.status, self.message, self.retry_after = status, message, retry_after
 
 
 class LocalHTTPServer(ThreadingHTTPServer):
@@ -404,10 +422,12 @@ def handler(service):
             # No filenames, signed URLs, cookies, or query strings in access logs.
             LOG.debug("HTTP %s", self.command)
 
-        def send(self, status, value):
+        def send(self, status, value, retry_after=None):
             data = json.dumps(value, ensure_ascii=True).encode()
             self.send_response(status)
             self.headers_common()
+            if retry_after is not None:
+                self.send_header("Retry-After", str(retry_after))
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
@@ -458,7 +478,12 @@ def handler(service):
             length = int(self.headers.get("Content-Length", "0"))
             if not 0 < length <= 2 * BLOCK:
                 raise HTTPError(413, "Request too large")
-            return json.loads(self.rfile.read(length))
+            def reject_constant(value):
+                raise ValueError("Non-finite JSON number")
+            value = json.loads(self.rfile.read(length), parse_constant=reject_constant)
+            if not isinstance(value, dict):
+                raise HTTPError(400, "Expected a JSON object")
+            return value
 
         def route(self):
             self.connection.settimeout(30)
@@ -467,14 +492,33 @@ def handler(service):
             path, method = url.path, self.command
             if path.startswith("/api/process"):
                 with service.lock:
-                    minute = int(time.time() // 60)
+                    now = time.time()
+                    minute = int(now // 60)
+                    service.rates = {address: entry for address, entry in service.rates.items() if entry[1] == minute}
                     key = self.client_address[0]
                     used, window = service.rates.get(key, (0, minute))
                     service.rates[key] = ((used if minute == window else 0) + 1, minute)
-                    if service.rates[key][0] > 2000:
-                        raise HTTPError(429, "Too many requests")
+                    if service.rates[key][0] > service.requests_per_minute:
+                        raise HTTPError(429, "Too many requests", max(1, 60 - int(now % 60)))
                 if method in ("POST", "PUT", "DELETE") and self.headers.get("X-Hamma-Request") != "1":
                     raise HTTPError(403, "Request authorization required")
+            if path == "/api/process/prepare-restart" and method == "POST":
+                if not ipaddress.ip_address(self.client_address[0]).is_loopback:
+                    raise HTTPError(403, "Restart preparation is local only")
+                if self.headers.get("X-Hamma-Instance") != service.instance_id:
+                    raise HTTPError(409, "Processor instance changed")
+                with service.lock:
+                    if service.running:
+                        raise HTTPError(409, "Finish or cancel active jobs before restarting")
+                    # Prevent a queued worker from starting between the health check and exit.
+                    # If a launcher fails to stop us, scheduling resumes automatically.
+                    service.restart_until = time.monotonic() + 30
+                return self.send(200, {"ready": True, "instance": service.instance_id})
+            if path == "/api/process/health" and method == "GET":
+                with service.lock:
+                    running = len(service.running)
+                return self.send(200, {"version": 1, "processing": "local", "instance": service.instance_id,
+                                       "pid": os.getpid(), "revision": PROCESSOR_REVISION, "activeJobs": running})
             if path == "/api/process/capabilities" and method == "GET":
                 return self.send(200, {"archives": ARCHIVES, "conversions": MEDIA if shutil.which("ffmpeg") and shutil.which("ffprobe") else [],
                                        "limits": service.limits, "processing": "local", "version": 1})
@@ -535,6 +579,8 @@ def handler(service):
                     if not record:
                         raise HTTPError(404, "File unavailable")
                     source = service.store.folder(self.owner, upload_id) / "input"
+                    if method in ("GET", "PUT") and (record["expires"] <= time.time() or not source.is_file()):
+                        raise HTTPError(410, "Upload expired or unavailable")
                     if method == "GET":
                         return self.send(200, {**record, "offset": source.stat().st_size})
                     if method == "DELETE":
@@ -593,6 +639,8 @@ def handler(service):
                         if not record or record["expires"] <= time.time():
                             raise HTTPError(404, "File unavailable")
                         source = service.store.folder(self.owner, upload_id) / "input"
+                        if not source.is_file():
+                            raise HTTPError(410, "Upload expired or unavailable")
                         if source.stat().st_size != record["size"]:
                             raise HTTPError(409, "Upload incomplete")
                         if record["name"].casefold() in seen:
@@ -690,10 +738,12 @@ def handler(service):
                         elif action == "retry" and record["state"] in ("failed", "cancelled", "interrupted"):
                             if job_id in service.running:
                                 raise HTTPError(409, "Worker stopping")
+                            if sum(j["state"] in (*ACTIVE, "paused") for _, j in service.store.list(self.owner)) >= 100:
+                                raise HTTPError(429, "Queue full")
                             if record["fileExpires"] <= time.time() or any(not (service.store.folder(self.owner, i["id"]) / "input").exists() for i in record["inputs"]):
                                 raise HTTPError(410, "Input files expired")
                             (directory / "cancel").unlink(missing_ok=True)
-                            service.store.patch(self.owner, "job", job_id, state="queued", error=None, processed=0, entries=0, expanded=0, mediaSeconds=0, duration=None, hidden=False)
+                            service.store.patch(self.owner, "job", job_id, state="queued", error=None, processed=0, entries=0, expanded=0, mediaSeconds=0, duration=None, started=None, finished=None, hidden=False)
                         else:
                             raise HTTPError(409, "Action unavailable for this job")
                     return self.send(200, service.public(self.owner, service.store.get(self.owner, "job", job_id)))
@@ -721,14 +771,11 @@ def handler(service):
             start, end, status = 0, size - 1, 200
             range_header = self.headers.get("Range")
             if range_header and self.headers.get("If-Range", f'"{checksum}"') == f'"{checksum}"':
-                match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header)
-                if not match or not any(match.groups()):
-                    raise HTTPError(416, "Invalid download range")
-                first, last = match.groups()
-                start = int(first) if first else max(0, size - int(last))
-                end = min(size - 1, int(last)) if first and last else size - 1
-                if start > end or start >= size:
-                    raise HTTPError(416, "Invalid download range")
+                from processor.ranges import download_range
+                try:
+                    start, end = download_range(range_header, size)
+                except ValueError:
+                    raise HTTPError(416, "Invalid download range") from None
                 status = 206
             self.send_response(status)
             self.headers_common()
@@ -756,7 +803,7 @@ def handler(service):
             try:
                 self.route()
             except HTTPError as error:
-                self.send(error.status, {"error": error.message})
+                self.send(error.status, {"error": error.message}, error.retry_after)
             except (ValueError, TypeError, KeyError, ProcessingError):
                 self.send(400, {"error": "Invalid request"})
             except (BrokenPipeError, ConnectionResetError, TimeoutError):
