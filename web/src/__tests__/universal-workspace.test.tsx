@@ -29,6 +29,61 @@ const select = async (files: File[]) => {
   await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })));
 };
 
+it('uses an explicit read-only directory picker and queues nested and empty folders', async () => {
+  vi.stubGlobal('isSecureContext', true);
+  const picker = vi.fn(async () => ({ kind: 'directory', name: 'Selected', async *values() {
+    yield { kind: 'file', name: 'note.txt', getFile: async () => new File(['hello'], 'note.txt') };
+    yield { kind: 'directory', name: 'empty', async *values() {} };
+  } }));
+  vi.stubGlobal('showDirectoryPicker', picker);
+  await render(); await act(async () => button('Add Folder').click());
+  expect(picker).toHaveBeenCalledWith({ mode: 'read', id: 'hamma-add-folder' });
+  expect(host.textContent).toContain('Selected/note.txt');
+  expect(host.textContent).toContain('Selected/empty/');
+  expect(host.textContent).toContain('2 selected');
+  expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/uploads'))).toBe(false);
+});
+
+it('offers normal file selection when the native folder picker cannot select folders', async () => {
+  await render();
+  const files = host.querySelector<HTMLInputElement>('[aria-label="Add files to queue"]')!;
+  const directory = host.querySelector<HTMLInputElement>('[aria-label="Add folder to queue"]')!;
+  Object.defineProperty(directory, 'webkitdirectory', { value: true, configurable: true });
+  const folderClick = vi.spyOn(directory, 'click');
+  const fileClick = vi.spyOn(files, 'click');
+  await act(async () => button('Add Folder').click());
+  expect(folderClick).toHaveBeenCalledTimes(1);
+  expect(host.textContent).toContain('Can’t select the folder?');
+  await act(async () => button('Select files instead').click());
+  expect(fileClick).toHaveBeenCalledTimes(1);
+  await select([new File(['mobile'], 'mobile.txt')]);
+  expect(host.textContent).toContain('mobile.txt');
+  expect(button('Compress').disabled).toBe(false);
+});
+
+it('leaves the selection intact when a folder picker is cancelled', async () => {
+  vi.stubGlobal('isSecureContext', true);
+  vi.stubGlobal('showDirectoryPicker', vi.fn(async () => { throw new DOMException('Cancelled', 'AbortError'); }));
+  await render(); await select([new File(['keep'], 'keep.txt')]);
+  await act(async () => button('Add Folder').click());
+  expect(host.querySelector('[role=alert]')).toBeNull();
+  expect(host.textContent).toContain('keep.txt');
+  expect(button('Add Folder').disabled).toBe(false);
+});
+
+it('preserves relative paths from directory input and allows the same folder again after removal', async () => {
+  await render();
+  const directory = host.querySelector<HTMLInputElement>('[aria-label="Add folder to queue"]')!;
+  const file = new File(['nested'], 'nested.txt');
+  Object.defineProperty(file, 'webkitRelativePath', { value: 'Picked/sub/nested.txt' });
+  Object.defineProperty(directory, 'files', { value: [file], configurable: true });
+  await act(async () => directory.dispatchEvent(new Event('change', { bubbles: true })));
+  expect(host.textContent).toContain('Picked/sub/nested.txt');
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Remove selected files"]')!.click());
+  await act(async () => directory.dispatchEvent(new Event('change', { bubbles: true })));
+  expect(host.textContent).toContain('Picked/sub/nested.txt');
+});
+
 it('clears previous-owner jobs before auth resolves while preserving selected files', async () => {
   const initial = fetchMock.getMockImplementation()!;
   let finish!: (value: unknown) => void;

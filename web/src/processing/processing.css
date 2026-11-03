@@ -78,3 +78,5 @@
   .job-bulk > span { width: 100%; }
   .universal-workspace .icon-button { min-width: 44px; min-height: 44px; }
 }
+.file-picker-input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); opacity: 0; pointer-events: none; }
+.folder-selection-help { margin-top: 12px; }

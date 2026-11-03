@@ -7,6 +7,7 @@ import { ArrowDownToLine, ArrowRightLeft, Check, ChevronLeft, ChevronRight, Down
 import { activeJob, droppedSources, jsonRequest, request, requestId, randomId, upload, type Capability, type Job, type Retention, type Source } from '../../processing/client';
 import { formatFileSize } from '../../utils/fileHelpers';
 import { accountChanging } from '../../processing/account';
+import { directoryPicker, readFolder } from '../../processing/folders';
 import '../../processing/processing.css';
 
 type Props = { visible: boolean; screen: 'workspace' | 'files' | 'history'; onHistory: () => void; spkResult?: { outputName: string; downloadUrl: string | null; historyId?: string; historyCreated?: number; originalSize?: number; resultSize?: number; operation?: 'compress' | 'extract' } | null; onSpkDownload?: () => void; spkReady?: boolean; spkBusy?: boolean; spkStatus?: ReactNode; onSpkSelect?: (files: File[], restore: boolean) => Promise<boolean> };
@@ -46,6 +47,9 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const [retention, setRetention] = useState<Retention>({ historyRetention: '30d', fileRetention: '24h' });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [folderHelp, setFolderHelp] = useState(false);
+  const [readingFolder, setReadingFolder] = useState(false);
+  const folderController = useRef<AbortController | null>(null);
   const [uploadStatus, setUploadStatus] = useState<{ name: string; offset: number; size: number } | null>(null);
   const [scroll, setScroll] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -62,7 +66,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const refreshFlight = useRef<Promise<void> | null>(null);
   const mounted = useRef(true);
   const ownerGeneration = useRef(0);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; abort.current?.abort(); refreshController.current?.abort(); deletionPreviewController.current?.abort(); }; }, []);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; abort.current?.abort(); folderController.current?.abort(); refreshController.current?.abort(); deletionPreviewController.current?.abort(); }; }, []);
   useEffect(() => {
     if (!visible) { deletionPreviewController.current?.abort(); if (!mutation.current) setConfirmation(null); }
   }, [visible]);
@@ -113,7 +117,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     const guard = (event: Event) => { if (busy || spkBusy || submitting.current || mutation.current || preparingDelete.current || savingRetention) event.preventDefault(); };
     const clear = () => {
       ownerGeneration.current += 1;
-      abort.current?.abort();
+      abort.current?.abort(); folderController.current?.abort(); setFolderHelp(false);
       refreshController.current?.abort(); refreshFlight.current = null;
       deletionPreviewController.current?.abort();
       knownStates.current.clear(); activity.current = false;
@@ -164,6 +168,33 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     setSelected(previous => new Set([...previous, ...incoming.map(s => s.id)]));
   };
   const choose = (files: File[]) => add(files.map(file => ({ id: randomId(), file, name: file.webkitRelativePath || file.name, size: file.size, directory: false })));
+  const chooseFolder = async () => {
+    if (busy || spkBusy || folderController.current || accountChanging()) return;
+    setError(''); setFolderHelp(true);
+    const picker = directoryPicker();
+    if (!picker) {
+      if (folder.current && 'webkitdirectory' in folder.current) folder.current.click();
+      return;
+    }
+    const controller = new AbortController(); folderController.current = controller;
+    const generation = ownerGeneration.current;
+    setBusy(true); setReadingFolder(true);
+    try {
+      // Call directly from the button gesture, before awaiting any other work.
+      const handle = await picker({ mode: 'read', id: 'hamma-add-folder' });
+      const incoming = await readFolder(handle, capability?.limits.files || 5000, controller.signal);
+      if (mounted.current && generation === ownerGeneration.current && !controller.signal.aborted) {
+        add(incoming); setFolderHelp(false);
+      }
+    } catch (caught) {
+      if (mounted.current && generation === ownerGeneration.current && !controller.signal.aborted && !(caught instanceof DOMException && caught.name === 'AbortError')) {
+        setError(caught instanceof DOMException ? 'This folder could not be opened. Try another folder or select its files instead.' : caught instanceof Error ? caught.message : 'Folder selection failed. Select its files instead.');
+      }
+    } finally {
+      if (folderController.current === controller) folderController.current = null;
+      if (mounted.current) { setBusy(false); setReadingFolder(false); }
+    }
+  };
   const chosen = sources.filter(source => selected.has(source.id));
   const submit = async (operation: 'compress' | 'extract' | 'convert') => {
     if (accountChanging()) return;
@@ -393,10 +424,12 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     {screen === 'workspace' && <>
       <div className={`surface universal-drop ${dragging ? 'drag-active' : ''}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); if (busy || spkBusy) return; void droppedSources(event.dataTransfer, capability?.limits.files).then(add).catch(caught => setError(caught.message)); }}>
         <div className="universal-drop-icon"><FileArchive size={30} strokeWidth={1.2} /></div><h2>Add your files</h2><p>Drop files or folders</p>
-        <div className="button-row"><button className="button primary" disabled={busy || spkBusy} onClick={() => input.current?.click()}><Plus size={16} /> Add Files</button><button className="button secondary" disabled={busy || spkBusy} onClick={() => folder.current?.click()}><FolderPlus size={16} /> Add Folder</button></div>
-        <input type="file" multiple hidden ref={input} aria-label="Add files to queue" onChange={event => { choose(Array.from(event.target.files || [])); event.target.value = ''; }} />
-        <input type="file" multiple hidden ref={folder} {...{ webkitdirectory: '' }} aria-label="Add folder to queue" onChange={event => { choose(Array.from(event.target.files || [])); event.target.value = ''; }} />
+        <div className="button-row"><button className="button primary" disabled={busy || spkBusy} onClick={() => input.current?.click()}><Plus size={16} /> Add Files</button><button className="button secondary" disabled={busy || spkBusy} onClick={() => void chooseFolder()}><FolderPlus size={16} /> Add Folder</button></div>
+        <input type="file" multiple className="file-picker-input" tabIndex={-1} ref={input} aria-label="Add files to queue" onChange={event => { choose(Array.from(event.target.files || [])); event.target.value = ''; }} />
+        <input type="file" multiple className="file-picker-input" tabIndex={-1} ref={folder} {...{ webkitdirectory: '' }} aria-label="Add folder to queue" onChange={event => { const files = Array.from(event.target.files || []); if (files.length) { choose(files); setFolderHelp(!files.some(file => file.webkitRelativePath)); } else setError('No files were selected from this folder. Select its files instead.'); event.target.value = ''; }} />
       </div>
+      {folderHelp && !readingFolder && <div className="processor-notice folder-selection-help" role="status"><span>Can’t select the folder? Select the files inside it instead, or add a ZIP.</span><button className="button secondary" disabled={busy || spkBusy} onClick={() => input.current?.click()}>Select files instead</button><button className="icon-button" aria-label="Dismiss folder help" onClick={() => setFolderHelp(false)}><X size={16} /></button></div>}
+      {readingFolder && <div className="upload-status" role="status"><Loader2 size={16} className="animate-spin" /><span>Reading folder…</span><button className="button secondary" onClick={() => folderController.current?.abort()}>Cancel</button></div>}
       {sources.length > 0 && <section className="surface source-panel" aria-label="Selected files">
         <div className="source-toolbar"><label className="selection-label"><input type="checkbox" checked={selected.size === sources.length} onChange={() => setSelected(selected.size === sources.length ? new Set() : new Set(sources.map(s => s.id)))} />Select all</label><span>{selected.size.toLocaleString()} selected · {formatFileSize(chosen.reduce((sum, source) => sum + source.size, 0))}</span><button className="icon-button" disabled={busy || spkBusy || !selected.size} aria-label="Remove selected files" onClick={removeSelectedSources}><Trash2 size={16} /></button></div>
         <div className="source-scroll" onScroll={event => setScroll(event.currentTarget.scrollTop)}><div style={{ height: sources.length * 64, position: 'relative' }}>{rendered.map((source, index) => <div className="source-row" key={source.id} style={{ top: (rowStart + index) * 64 }}><input type="checkbox" aria-label={`Select ${source.name}`} checked={selected.has(source.id)} onChange={() => toggleSource(source.id)} /><File size={19} strokeWidth={1.5} /><div><strong title={source.name}>{source.name}</strong><span>{source.directory ? 'Empty folder' : formatFileSize(source.size)}</span></div><span className="file-state">Waiting</span></div>)}</div></div>
