@@ -9,7 +9,7 @@
 .processing-options > p { padding:0 18px 18px; margin:14px 0 0; font-size:11px; line-height:1.8; }
 .processing-options > .button-row { justify-content:flex-start; padding:0 18px 18px; }
 .options-grid .select-field { width:100%; min-width:140px; }
-.universal-search { display:grid; grid-template-columns:minmax(160px,1fr) minmax(145px,auto) minmax(145px,auto); align-items:center; }
+.universal-search { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,145px),1fr)); align-items:center; }
 .universal-search .search-field { min-width:0; min-height:38px; padding:9px 12px; border:1px solid rgb(var(--border)); background:rgb(var(--card)); border-radius:8px; }
 .universal-search .select-field { width:100%; }
 .conversion-select .select-field { min-width:110px; }

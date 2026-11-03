@@ -1,0 +1,441 @@
+{
+  "scope": "Seven page states in light/dark at seven viewport widths, plus large and duplicate picker selection. This is a bounded browser stress matrix, not all 100 product proposals.",
+  "widths": [
+    320,
+    360,
+    390,
+    650,
+    768,
+    1024,
+    1440
+  ],
+  "height": 844,
+  "passed": 100,
+  "failed": 0,
+  "criteria": [
+    "Exactly one expected visible page heading",
+    "No document horizontal overflow",
+    "No visible control clipped horizontally",
+    "No unexpected alerts",
+    "Large selection remains virtualized",
+    "Duplicate selection leaves queue unchanged"
+  ],
+  "cases": [
+    {
+      "id": "light-320-Workspace",
+      "passed": true
+    },
+    {
+      "id": "light-320-Files & History",
+      "passed": true
+    },
+    {
+      "id": "light-320-Overview",
+      "passed": true
+    },
+    {
+      "id": "light-320-General",
+      "passed": true
+    },
+    {
+      "id": "light-320-Privacy",
+      "passed": true
+    },
+    {
+      "id": "light-320-Storage",
+      "passed": true
+    },
+    {
+      "id": "light-320-About",
+      "passed": true
+    },
+    {
+      "id": "light-360-Workspace",
+      "passed": true
+    },
+    {
+      "id": "light-360-Files & History",
+      "passed": true
+    },
+    {
+      "id": "light-360-Overview",
+      "passed": true
+    },
+    {
+      "id": "light-360-General",
+      "passed": true
+    },
+    {
+      "id": "light-360-Privacy",
+      "passed": true
+    },
+    {
+      "id": "light-360-Storage",
+      "passed": true
+    },
+    {
+      "id": "light-360-About",
+      "passed": true
+    },
+    {
+      "id": "light-390-Workspace",
+      "passed": true
+    },
+    {
+      "id": "light-390-Files & History",
+      "passed": true
+    },
+    {
+      "id": "light-390-Overview",
+      "passed": true
+    },
+    {
+      "id": "light-390-General",
+      "passed": true
+    },
+    {
+      "id": "light-390-Privacy",
+      "passed": true
+    },
+    {
+      "id": "light-390-Storage",
+      "passed": true
+    },
+    {
+      "id": "light-390-About",
+      "passed": true
+    },
+    {
+      "id": "light-650-Workspace",
+      "passed": true
+    },
+    {
+      "id": "light-650-Files & History",
+      "passed": true
+    },
+    {
+      "id": "light-650-Overview",
+      "passed": true
+    },
+    {
+      "id": "light-650-General",
+      "passed": true
+    },
+    {
+      "id": "light-650-Privacy",
+      "passed": true
+    },
+    {
+      "id": "light-650-Storage",
+      "passed": true
+    },
+    {
+      "id": "light-650-About",
+      "passed": true
+    },
+    {
+      "id": "light-768-Workspace",
+      "passed": true
+    },
+    {
+      "id": "light-768-Files & History",
+      "passed": true
+    },
+    {
+      "id": "light-768-Overview",
+      "passed": true
+    },
+    {
+      "id": "light-768-General",
+      "passed": true
+    },
+    {
+      "id": "light-768-Privacy",
+      "passed": true
+    },
+    {
+      "id": "light-768-Storage",
+      "passed": true
+    },
+    {
+      "id": "light-768-About",
+      "passed": true
+    },
+    {
+      "id": "light-1024-Workspace",
+      "passed": true
+    },
+    {
+      "id": "light-1024-Files & History",
+      "passed": true
+    },
+    {
+      "id": "light-1024-Overview",
+      "passed": true
+    },
+    {
+      "id": "light-1024-General",
+      "passed": true
+    },
+    {
+      "id": "light-1024-Privacy",
+      "passed": true
+    },
+    {
+      "id": "light-1024-Storage",
+      "passed": true
+    },
+    {
+      "id": "light-1024-About",
+      "passed": true
+    },
+    {
+      "id": "light-1440-Workspace",
+      "passed": true
+    },
+    {
+      "id": "light-1440-Files & History",
+      "passed": true
+    },
+    {
+      "id": "light-1440-Overview",
+      "passed": true
+    },
+    {
+      "id": "light-1440-General",
+      "passed": true
+    },
+    {
+      "id": "light-1440-Privacy",
+      "passed": true
+    },
+    {
+      "id": "light-1440-Storage",
+      "passed": true
+    },
+    {
+      "id": "light-1440-About",
+      "passed": true
+    },
+    {
+      "id": "dark-320-Workspace",
+      "passed": true
+    },
+    {
+      "id": "dark-320-Files & History",
+      "passed": true
+    },
+    {
+      "id": "dark-320-Overview",
+      "passed": true
+    },
+    {
+      "id": "dark-320-General",
+      "passed": true
+    },
+    {
+      "id": "dark-320-Privacy",
+      "passed": true
+    },
+    {
+      "id": "dark-320-Storage",
+      "passed": true
+    },
+    {
+      "id": "dark-320-About",
+      "passed": true
+    },
+    {
+      "id": "dark-360-Workspace",
+      "passed": true
+    },
+    {
+      "id": "dark-360-Files & History",
+      "passed": true
+    },
+    {
+      "id": "dark-360-Overview",
+      "passed": true
+    },
+    {
+      "id": "dark-360-General",
+      "passed": true
+    },
+    {
+      "id": "dark-360-Privacy",
+      "passed": true
+    },
+    {
+      "id": "dark-360-Storage",
+      "passed": true
+    },
+    {
+      "id": "dark-360-About",
+      "passed": true
+    },
+    {
+      "id": "dark-390-Workspace",
+      "passed": true
+    },
+    {
+      "id": "dark-390-Files & History",
+      "passed": true
+    },
+    {
+      "id": "dark-390-Overview",
+      "passed": true
+    },
+    {
+      "id": "dark-390-General",
+      "passed": true
+    },
+    {
+      "id": "dark-390-Privacy",
+      "passed": true
+    },
+    {
+      "id": "dark-390-Storage",
+      "passed": true
+    },
+    {
+      "id": "dark-390-About",
+      "passed": true
+    },
+    {
+      "id": "dark-650-Workspace",
+      "passed": true
+    },
+    {
+      "id": "dark-650-Files & History",
+      "passed": true
+    },
+    {
+      "id": "dark-650-Overview",
+      "passed": true
+    },
+    {
+      "id": "dark-650-General",
+      "passed": true
+    },
+    {
+      "id": "dark-650-Privacy",
+      "passed": true
+    },
+    {
+      "id": "dark-650-Storage",
+      "passed": true
+    },
+    {
+      "id": "dark-650-About",
+      "passed": true
+    },
+    {
+      "id": "dark-768-Workspace",
+      "passed": true
+    },
+    {
+      "id": "dark-768-Files & History",
+      "passed": true
+    },
+    {
+      "id": "dark-768-Overview",
+      "passed": true
+    },
+    {
+      "id": "dark-768-General",
+      "passed": true
+    },
+    {
+      "id": "dark-768-Privacy",
+      "passed": true
+    },
+    {
+      "id": "dark-768-Storage",
+      "passed": true
+    },
+    {
+      "id": "dark-768-About",
+      "passed": true
+    },
+    {
+      "id": "dark-1024-Workspace",
+      "passed": true
+    },
+    {
+      "id": "dark-1024-Files & History",
+      "passed": true
+    },
+    {
+      "id": "dark-1024-Overview",
+      "passed": true
+    },
+    {
+      "id": "dark-1024-General",
+      "passed": true
+    },
+    {
+      "id": "dark-1024-Privacy",
+      "passed": true
+    },
+    {
+      "id": "dark-1024-Storage",
+      "passed": true
+    },
+    {
+      "id": "dark-1024-About",
+      "passed": true
+    },
+    {
+      "id": "dark-1440-Workspace",
+      "passed": true
+    },
+    {
+      "id": "dark-1440-Files & History",
+      "passed": true
+    },
+    {
+      "id": "dark-1440-Overview",
+      "passed": true
+    },
+    {
+      "id": "dark-1440-General",
+      "passed": true
+    },
+    {
+      "id": "dark-1440-Privacy",
+      "passed": true
+    },
+    {
+      "id": "dark-1440-Storage",
+      "passed": true
+    },
+    {
+      "id": "dark-1440-About",
+      "passed": true
+    },
+    {
+      "id": "large-selection-1000",
+      "passed": true,
+      "files": 1000,
+      "renderedRows": 14
+    },
+    {
+      "id": "duplicate-selection-atomic",
+      "passed": true,
+      "remainingFiles": 1000,
+      "renderedRows": 14
+    }
+  ],
+  "initialFailures": [
+    "At 320px: body minimum width exceeded scrollbar-reduced content width on scrolling pages.",
+    "At the 650px breakpoint: fixed minimum filter columns overflowed the narrow desktop content panel."
+  ],
+  "fixes": [
+    "Allow body to use available content width.",
+    "Size filter columns with auto-fit and container-bounded minimums."
+  ],
+  "limitations": [
+    "Viewport tests are not physical device tests.",
+    "Browser download-to-disk confirmation is outside this page matrix."
+  ]
+}
