@@ -30,14 +30,18 @@ with tempfile.TemporaryDirectory(prefix='shante-release-', dir=dist) as temporar
     checksums = {path.relative_to(stage).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest() for path in files}
     (stage / 'SHA256SUMS.json').write_text(json.dumps(checksums, indent=2), encoding='utf-8')
     binary_hash = checksums[executable.relative_to(stage).as_posix()]
-    name = f'SHANTE-Core-0.1.0-{platform.system()}-{platform.machine()}-{binary_hash[:8]}.zip'
+    content_hash = hashlib.sha256(json.dumps(checksums, sort_keys=True).encode()).hexdigest()
+    name = f'SHANTE-Core-0.1.0-{platform.system()}-{platform.machine()}-{content_hash[:8]}.zip'
     archive = dist / name
     if archive.exists():
         raise SystemExit('Artifact already exists; preserve the prior verified archive')
     with zipfile.ZipFile(archive, 'x', zipfile.ZIP_DEFLATED) as bundle:
         for path in sorted(stage.rglob('*')):
             if path.is_file():
-                bundle.write(path, path.relative_to(stage))
+                entry = zipfile.ZipInfo(path.relative_to(stage).as_posix())
+                entry.compress_type = zipfile.ZIP_DEFLATED
+                entry.external_attr = (0o755 if path == executable else 0o644) << 16
+                bundle.writestr(entry, path.read_bytes())
     result = {'artifact': name, 'sha256': hashlib.sha256(archive.read_bytes()).hexdigest(),
               'bytes': archive.stat().st_size, 'binarySha256': binary_hash, 'probe': info,
               'scope': 'Native CLI only; existing Python service/web UI are separate'}
