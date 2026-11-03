@@ -1,6 +1,8 @@
 import { jsonRequest, request } from './client';
 
+export interface IdentityProvider { id: string; name: string; available: false; message: string }
 export interface AccountSession {
+  providers?: IdentityProvider[];
   authenticated: boolean;
   credentialsAllowed: boolean;
   account: null | { accountId: string; username: string; displayName: string; created: number; plan: 'free' };

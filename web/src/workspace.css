@@ -1696,3 +1696,22 @@ a{color:rgb(var(--accent));text-underline-offset:3px}button,input,a{touch-action
   .hamma-shell .job-toast { bottom:90px; }
   .hamma-shell .universal-search .select-field { flex:1; min-width:0; }
 }
+
+/* Keep shared page content and notifications above the home indicator. */
+@media (max-width: 650px) {
+  .hamma-shell .workspace-main { padding-bottom: calc(100px + env(safe-area-inset-bottom)); }
+  .hamma-shell .job-toast { bottom: calc(90px + env(safe-area-inset-bottom)); }
+}
+
+/* Keep form entry readable without automatic mobile focus zoom. */
+@media (max-width: 650px) {
+  .hamma-shell input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]),
+  .hamma-shell textarea, .hamma-shell select { font-size: 16px; max-width: 100%; }
+  .hamma-shell :is(.button-row, .processing-actions, .history-tools) { min-width: 0; flex-wrap: wrap; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .hamma-shell :is(.workspace-header, .processing-options, .job-toast, .account-card) {
+    backdrop-filter: none;
+    background: rgb(var(--card));
+  }
+}
