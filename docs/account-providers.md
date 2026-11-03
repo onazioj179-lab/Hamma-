@@ -2,6 +2,7 @@
 
 The existing username/password authority continues to support registration,
 sign-in, password changes and sign-out with HttpOnly server sessions.
+Shared mobile forms use 16px entry text, wrapping action rows and a reduced-transparency fallback.
 Shared mobile page spacing and notifications now preserve bottom safe-area insets.
 The account page now has compact responsive cards, accessible visibility toggles,
 keyboard focus indicators, mobile-friendly 16px input text, username autocorrect
