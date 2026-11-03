@@ -1,15 +1,18 @@
-# HAMMA
+# SHANTE — local HAMMA workspace
 
 **Make space. Keep everything.**
 
 A free local workspace to compress, extract, convert, and download files.
-Created by **Onazi Treasure Oj**.
+Created by **Onazi Treasure OJ**. The current local UI retains its HAMMA name;
+SHANTE CORE is the integrated native engine. This is not a launched subscription service.
+
+Build and verification instructions: [SHANTE CORE](native/README.md).
 
 ## Start HAMMA with one click on Windows
 
 Double-click **Start HAMMA.cmd** in this folder (or the HAMMA desktop shortcut).
 It builds changed app files, starts the local processor in the background, and
-opens the browser. Reopening it reuses the running server. Node.js 22+ and
+opens the browser. Reopening it reuses the running server. Node.js 22.12+ and
 Python 3.11+ must already be installed; the first launch installs npm dependencies.
 
 The default address is **http://127.0.0.1:5014**. Phones and other computers on
@@ -38,10 +41,11 @@ npm ci
 npm run start:local
 ```
 
-Open http://127.0.0.1:5010. Requires Node.js 22+, Python 3.11+, and optional
+Open http://127.0.0.1:5010. Requires Node.js 22.12+, Python 3.11+, and optional
 FFmpeg/FFprobe for media conversion. Jobs run in local background processes.
 Standard ZIP/TAR/GZIP/BZIP2/XZ operations, verified downloads, resumable uploads,
 retry/cancel controls and 500-record guest history are implemented. The browser SPK engine is available through the same Workspace file picker.
+Build [SHANTE CORE](native/README.md) to enable verified native Zstandard.
 
 See [supported formats, deployment and operational limits](docs/universal-processing.md).
 This local implementation does not yet provide accounts, synchronized storage,
@@ -79,12 +83,13 @@ your device. Standard file jobs transfer data only to the local service and use
 temporary local disk storage. A temporary cookie isolates your guest session.
 No private contents are sent to an AI service or third party.
 
-Optional local learning remembers size and timing measurements on this browser.
-It starts off. You can enable it, turn it off, or clear it in Settings.
+The active workspace uses essential storage and does not expose a learning or
+analytics opt-in. Historical optimizer components are separate from this path.
 SPK history remembers file names and operation details; you can disable or clear
 it separately. Standard job history and file retention are controlled in History.
 
-**Download SPK results before closing the page or starting again.** Standard job
+**Download SPK results before closing the page.** Each result remains available
+through subsequent operations until you delete it or close the page. Standard job
 outputs stay on local disk until their expiry while the service runs. HAMMA is
 not cloud storage. Clearing history or app cache never deletes downloaded copies.
 

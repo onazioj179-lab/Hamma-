@@ -6,7 +6,7 @@ export default defineConfig({
     globals: true,
     testTimeout: 60000, // 60 seconds for heavy tests
     hookTimeout: 30000,
-    pool: 'threads',
+    pool: 'forks',
     // WASM and stress suites allocate large buffers in each process.
     maxWorkers: 1,
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],

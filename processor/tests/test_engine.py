@@ -187,7 +187,7 @@ class MediaTests(EngineFixture):
         for target in ("wav", "flac", "mp3", "aac", "m4a", "ogg"):
             with self.subTest(target=target):
                 output = self.root / ("output." + target)
-                manifest = convert(source, output, target, self.context())
+                manifest = convert(source, output, target, self.context(), quality_mode='lossless' if target in ('wav', 'flac') else 'lossy')
                 self.assertTrue(manifest[0]["size"] > 0)
                 if target in ("wav", "flac"):
                     decoded = subprocess.run([shutil.which("ffmpeg"), "-v", "error", "-i", str(output), "-f", "s16le", "-"], capture_output=True, check=True).stdout
@@ -213,7 +213,7 @@ class MediaTests(EngineFixture):
         for target in ("webp", "png", "jpg"):
             with self.subTest(target=target):
                 output = self.root / ("out." + target)
-                convert(source, output, target, self.context())
+                convert(source, output, target, self.context(), quality_mode='lossy' if target == 'jpg' else 'lossless')
                 self.assertEqual(detect(output), target)
         with self.assertRaisesRegex(ProcessingError, "No audio"):
             convert(source, self.root / "out.wav", "wav", self.context())

@@ -1,6 +1,10 @@
-# Singularity Pack Technical Documentation
+# SHANTE / HAMMA technical documentation
 
-Complete technical documentation for the SPK compression platform and HAMMA EXTREME AI optimizer.
+The current native implementation is documented in [SHANTE CORE](../native/README.md).
+The versioned architecture
+notes below describe historical work and prototypes; their throughput, scale,
+GPU and completion claims are not current production guarantees. The Flutter
+client's simulated operations are not eligible for release.
 
 ## Quick Links
 
