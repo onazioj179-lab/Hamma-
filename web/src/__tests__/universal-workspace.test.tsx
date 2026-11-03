@@ -2,6 +2,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import * as processingClient from '../processing/client';
+import { changeAccount } from '../processing/account';
 import { useAppStore } from '../store/app';
 import { UniversalWorkspace } from '../components/workspace/UniversalWorkspace';
 
@@ -27,6 +28,39 @@ const select = async (files: File[]) => {
   Object.defineProperty(input, 'files', { value: files, configurable: true });
   await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })));
 };
+
+it('clears previous-owner jobs before auth resolves while preserving selected files', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  let finish!: (value: unknown) => void;
+  let member = false;
+  fetchMock.mockImplementation(async (url: string) => {
+    if (url.endsWith('/account/login')) return new Promise(resolve => { finish = resolve; });
+    if (url.includes('/jobs?')) return { ok: true, json: async () => ({ total: member ? 0 : 1, jobs: member ? [] : [{ id: 'guest-only', name: 'guest-private.zip', state: 'completed', operation: 'compress', target: 'zip', inputSize: 10, outputSize: 5, created: 1, fileExpires: 2, fileCount: 1, format: 'zip', downloadAvailable: false }] }) };
+    return initial(url);
+  });
+  await render('history');
+  expect(host.textContent).toContain('guest-private.zip');
+  await render(); await select([new File(['keep'], 'keep-selected.txt')]);
+  vi.spyOn(processingClient, 'upload').mockImplementation(async source => { source.upload = 'guest-upload'; throw new Error('Upload interrupted'); });
+  await act(async () => button('Compress').click());
+  let transition!: Promise<unknown>;
+  await act(async () => { transition = changeAccount('login', { username: 'alice', password: 'valid-password' }); });
+  await render('history'); expect(host.textContent).not.toContain('guest-private.zip');
+  member = true;
+  await act(async () => { finish({ ok: true, json: async () => ({}) }); await transition; });
+  await render();
+  expect(host.textContent).toContain('keep-selected.txt');
+  expect(host.textContent).toContain('1 selected');
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Remove selected files"]')!.click());
+  expect(document.querySelector('[role=alertdialog]')).toBeNull();
+  expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/uploads/guest-upload') && init?.method === 'DELETE')).toBe(false);
+});
+
+it('blocks account changes during foreground SPK processing', async () => {
+  await act(async () => root.render(<UniversalWorkspace visible screen="workspace" spkBusy onHistory={() => {}} />));
+  await expect(changeAccount('logout', {})).rejects.toThrow('Finish the current upload');
+  expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/account/'))).toBe(false);
+});
 
 it('adds files without processing them until a direct action and virtualizes large selections', async () => {
   await render();
@@ -278,7 +312,7 @@ it('requires explicit lossy consent and sends quality and metadata choices with 
   await chooseOption('Conversion quality', 'Allow quality loss');
   await chooseOption('Conversion metadata', 'Preserve supported tags');
   await act(async () => button('Convert').click());
-  expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({ operation: 'convert', target: 'mp3', qualityMode: 'lossy', metadataPolicy: 'preserve', requestId: 'quality-request' }));
+  expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({ operation: 'convert', target: 'mp3', qualityMode: 'lossy', metadataPolicy: 'preserve', requestId: 'quality-request' }), 'POST', { signal: expect.any(AbortSignal) });
   expect(key).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ qualityMode: 'lossy', metadataPolicy: 'preserve' })]));
 });
 

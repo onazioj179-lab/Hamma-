@@ -35,12 +35,14 @@ import zipfile
 
 from .engine import ARCHIVES, MEDIA, BLOCK, Context, ProcessingError, archive_formats, compress, convert, detect, extract, file_digest, safe_path
 from .worker_limits import apply_worker_limits
+from .accounts import Accounts, AccountError, plan as account_plan
+from .catalog import FileCatalog
 
 LOG = logging.getLogger("hamma.processor")
 TERMINAL = ("completed", "failed", "cancelled", "interrupted")
 ACTIVE = ("queued", "processing", "verifying")
 PROCESSOR_REVISION = ":".join(hashlib.sha256(path.read_bytes()).hexdigest() for path in
-                              (Path(__file__), Path(__file__).with_name("engine.py")))
+                              sorted(Path(__file__).parent.glob("*.py"), key=lambda path: path.name))
 RETENTION = {"24h": 86400, "7d": 604800, "30d": 2592000, "never": None}
 
 
@@ -216,10 +218,11 @@ class Store:
             rows = db.execute("SELECT owner,data FROM records WHERE " + " AND ".join(where) + " ORDER BY created,id,owner LIMIT ?", [*parameters, max(1, min(100, limit))]).fetchall()
         return [(row[0], json.loads(row[1])) for row in rows]
 
-    def reserved_bytes(self):
+    def reserved_bytes(self, owner=None):
         with self.connect() as db:
-            uploads = db.execute("SELECT coalesce(sum(json_extract(data,'$.size')),0) FROM records WHERE kind='upload'").fetchone()[0]
-            outputs = db.execute("SELECT coalesce(sum(coalesce(json_extract(data,'$.outputSize'),0)),0) FROM records WHERE kind='job' AND json_extract(data,'$.downloadAvailable')=1").fetchone()[0]
+            scope, parameters = (" AND owner=?", (owner,)) if owner is not None else ("", ())
+            uploads = db.execute("SELECT coalesce(sum(json_extract(data,'$.size')),0) FROM records WHERE kind='upload'" + scope, parameters).fetchone()[0]
+            outputs = db.execute("SELECT coalesce(sum(coalesce(json_extract(data,'$.outputSize'),0)),0) FROM records WHERE kind='job' AND json_extract(data,'$.downloadAvailable')=1" + scope, parameters).fetchone()[0]
         return uploads + outputs
 
     def upload_referenced(self, owner, upload_id, *, now=None, exclude_job=None):
@@ -370,6 +373,8 @@ class Service:
         self.running = {}
         self.restart_until = 0
         self.stop = threading.Event()
+        self.accounts = Accounts(self.store)
+        self.catalog = FileCatalog(self.store)
         self.secret = self.store.root / ".key"
         if not self.secret.exists():
             fd = os.open(self.secret, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -399,6 +404,10 @@ class Service:
     def defaults(self, owner):
         pref = self.store.get(owner, "settings", "settings")
         return pref or {"id": "settings", "created": time.time(), "historyRetention": "30d", "fileRetention": "24h"}
+
+    def owner_plan(self, owner):
+        account = self.accounts.by_owner(owner)
+        return account_plan(account['tier'] if account else 'guest', self.limits)
 
     def reserved(self):
         return self.store.reserved_bytes() + len(self.running) * self.limits["expanded"]
@@ -522,9 +531,10 @@ class Service:
             while len(self.running) < 2 and attempts < 16:
                 attempts += 1
                 owners = {entry[1] for entry in self.running.values()}
+                blocked = {owner for owner in owners if sum(entry[1] == owner for entry in self.running.values()) >= self.owner_plan(owner)['maxConcurrentJobs']}
                 candidates = self.store.queued(excluded_owners=owners)
                 if not candidates and owners:
-                    candidates = self.store.queued()
+                    candidates = self.store.queued(excluded_owners=blocked)
                 if not candidates:
                     break
                 owner, job = candidates[0]
@@ -576,6 +586,41 @@ class HTTPError(Exception):
 class LocalHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = os.name != "nt"
+    tls_context = None
+    transport_secure = False
+
+    def __init__(self, *args, **kwargs):
+        self.request_slots = threading.BoundedSemaphore(64)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request, client_address):
+        # Bound slow uploads and stalled TLS handshakes before creating threads.
+        # A TLS overload cannot safely receive a plaintext HTTP error response.
+        if not self.request_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.request_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.request_slots.release()
+
+    def get_request(self):
+        connection, address = super().get_request()
+        connection.settimeout(10)
+        if self.tls_context is not None:
+            try:
+                connection = self.tls_context.wrap_socket(connection, server_side=True, do_handshake_on_connect=False)
+            except Exception:
+                connection.close()
+                raise
+        return connection, address
 
     def server_bind(self):
         # Windows SO_REUSEADDR otherwise permits two listeners on one port.
@@ -613,10 +658,16 @@ def handler(service):
             self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; worker-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
             if getattr(self, "new_cookie", None):
                 self.send_header("Set-Cookie", self.new_cookie)
+            if getattr(self, "account_cookie", None):
+                self.send_header("Set-Cookie", self.account_cookie)
 
         def identity(self):
             self.new_cookie = None
+            self.account_cookie = None
+            self.account = None
+            self.account_token = None
             peer = ipaddress.ip_address(self.client_address[0])
+            self.credentials_allowed = peer.is_loopback or getattr(self.server, 'transport_secure', False)
             if service.lan_hosts and not (peer.is_private or peer.is_loopback):
                 raise HTTPError(403, "Private network only")
             host = self.headers.get("Host", "")
@@ -636,12 +687,36 @@ def handler(service):
             cookie_name = f"hamma_session_{self.server.server_port}"
             cookie = jar.get(cookie_name)
             parts = cookie.value.split(".") if cookie else []
-            if len(parts) != 2 or not re.fullmatch(r"[a-f0-9]{64}", parts[0]) or not hmac.compare_digest(service.sign(parts[0]), parts[1]):
+            if len(parts) != 2 or not re.fullmatch(r"[a-f0-9]{64}", parts[0]) or not re.fullmatch(r"[a-f0-9]{64}", parts[1]) or not hmac.compare_digest(service.sign(parts[0]), parts[1]):
                 session = secrets.token_hex(32)
-                self.new_cookie = f"{cookie_name}={session}.{service.sign(session)}; HttpOnly; SameSite=Strict; Path=/"
+                secure = '; Secure' if getattr(self.server, 'transport_secure', False) else ''
+                self.new_cookie = f"{cookie_name}={session}.{service.sign(session)}; HttpOnly; SameSite=Strict; Path=/{secure}"
             else:
                 session = parts[0]
             self.owner = hashlib.sha256(session.encode()).hexdigest()
+            self.guest_owner = self.owner
+            account_cookie = jar.get(f'shante_account_{self.server.server_port}')
+            parts = account_cookie.value.split('.') if account_cookie else []
+            if account_cookie and not self.credentials_allowed:
+                raise HTTPError(403, 'Use HTTPS for account access on a network connection.')
+            if len(parts) == 2 and re.fullmatch(r'[a-f0-9]{64}', parts[0]) and re.fullmatch(r'[a-f0-9]{64}', parts[1]) and hmac.compare_digest(service.sign('account:' + parts[0]), parts[1]):
+                self.account = service.accounts.resolve(parts[0])
+                if self.account:
+                    self.account_token = parts[0]
+                    self.owner = self.account['owner']
+            if account_cookie and not self.account:
+                self.set_account_cookie(None)
+            self.plan = account_plan(self.account['tier'] if self.account else 'guest', service.limits)
+
+        def set_account_cookie(self, token):
+            secure = '; Secure' if getattr(self.server, 'transport_secure', False) else ''
+            value = token + '.' + service.sign('account:' + token) if token else ''
+            self.account_cookie = f'shante_account_{self.server.server_port}={value}; HttpOnly; SameSite=Strict; Path=/; Max-Age={86400 if token else 0}{secure}'
+
+        def account_view(self):
+            return {'authenticated': self.account is not None,
+                    'account': service.accounts.public(self.account) if self.account else None,
+                    'plan': self.plan, 'billingEnabled': False, 'credentialsAllowed': self.credentials_allowed}
 
         def json_body(self):
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
@@ -685,6 +760,36 @@ def handler(service):
                     # If a launcher fails to stop us, scheduling resumes automatically.
                     service.restart_until = time.monotonic() + 30
                 return self.send(200, {"ready": True, "instance": service.instance_id})
+            if path == '/api/process/account/me' and method == 'GET':
+                return self.send(200, self.account_view())
+            if path in ('/api/process/account/register', '/api/process/account/login', '/api/process/account/logout', '/api/process/account/password-change') and method == 'POST':
+                if path.endswith('/logout'):
+                    if self.account_token:
+                        service.accounts.logout(self.account_token)
+                    self.set_account_cookie(None)
+                    self.account = None; self.owner = self.guest_owner
+                    self.plan = account_plan('guest', service.limits)
+                    return self.send(200, self.account_view())
+                if not self.credentials_allowed:
+                    raise HTTPError(403, 'Use HTTPS before entering account credentials on a network connection.')
+                service.accounts.admit(self.client_address[0])
+                if int(self.headers.get('Content-Length', '0')) > 16384:
+                    raise HTTPError(413, 'Account request is too large')
+                body = self.json_body()
+                if path.endswith('/register'):
+                    if set(body) - {'username', 'password', 'displayName'}:
+                        raise HTTPError(400, 'Unsupported account options')
+                    account, token = service.accounts.register(body.get('username'), body.get('password'), body.get('displayName'))
+                elif path.endswith('/login'):
+                    account, token = service.accounts.login(body.get('username'), body.get('password'))
+                else:
+                    if not self.account:
+                        raise HTTPError(401, 'Sign in before changing your password.')
+                    account, token = service.accounts.change_password(self.account, body.get('currentPassword'), body.get('newPassword'))
+                self.account = account; self.owner = account['owner']
+                self.plan = account_plan('free', service.limits)
+                self.set_account_cookie(token)
+                return self.send(201 if path.endswith('/register') else 200, self.account_view())
             if path == "/api/process/health" and method == "GET":
                 with service.lock:
                     running = len(service.running)
@@ -693,7 +798,7 @@ def handler(service):
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
                 return self.send(200, {"archives": archive_formats(), "nativeEngine": capability(), "conversions": MEDIA if shutil.which("ffmpeg") and shutil.which("ffprobe") else [],
-                                       "limits": service.limits, "processing": "local", "version": 1})
+                                       "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
             if path == "/api/process/settings":
                 if method == "GET":
                     return self.send(200, service.defaults(self.owner))
@@ -707,6 +812,11 @@ def handler(service):
             if path == "/api/process/deletion-preview" and method == "GET":
                 with service.lock:
                     return self.send(200, service.deletion_preview(self.owner))
+            if path == '/api/process/files' and method == 'GET':
+                query = parse_qs(url.query)
+                return self.send(200, service.catalog.page(self.owner, search=query.get('q', [''])[0],
+                    offset=max(0, int(query.get('offset', ['0'])[0])), limit=min(100, max(1, int(query.get('limit', ['50'])[0]))),
+                    duplicates=query.get('duplicates', ['0'])[0] == '1'))
             if path in ("/api/process/history", "/api/process/files") and method == "DELETE":
                 with service.lock:
                     token = self.headers.get("X-Hamma-Deletion-Token")
@@ -736,15 +846,17 @@ def handler(service):
                 body = self.json_body()
                 name = safe_path(body.get("name"), bool(body.get("directory")))
                 size = body.get("size")
-                if type(size) is not int or not 0 <= size <= service.limits["input"] or (body.get("directory") and size != 0):
+                if type(size) is not int or not 0 <= size <= self.plan['maxInputBytes'] or (body.get("directory") and size != 0):
                     raise HTTPError(413, "File size limit reached")
                 with service.lock:
-                    if service.store.count(self.owner, "upload") >= service.limits["files"]:
+                    if service.store.count(self.owner, "upload") >= self.plan['maxUploadFiles']:
                         raise HTTPError(413, "Too many files")
                     if service.store.count(kind="upload") >= service.max_uploads:
                         raise HTTPError(429, "Upload capacity reached. Delete unused uploads or wait for expiry.")
                     if service.reserved() + size > service.limits["storage"]:
                         raise HTTPError(507, "Storage full")
+                    if service.store.reserved_bytes(self.owner) + size > self.plan['maxStorageBytes']:
+                        raise HTTPError(413, 'Account storage limit reached')
                     record = {"id": secrets.token_hex(16), "created": time.time(), "name": name, "size": size, "directory": bool(body.get("directory")), "expires": time.time() + 86400, "offset": 0}
                     folder = service.store.folder(self.owner, record["id"])
                     folder.mkdir(mode=0o700, parents=True)
@@ -818,7 +930,7 @@ def handler(service):
                             existing.get('qualityMode', 'lossless') != quality_mode or existing.get('metadataPolicy', 'strip') != metadata_policy):
                             raise HTTPError(409, "Request identifier already used")
                         return self.send(200, service.public(self.owner, existing))
-                    if service.store.count(self.owner, states=(*ACTIVE, "paused")) >= 100:
+                    if service.store.count(self.owner, states=(*ACTIVE, "paused")) >= self.plan['maxQueuedJobs']:
                         raise HTTPError(429, "Queue full")
                     if service.store.count(kind='job', states=(*ACTIVE, 'paused')) >= service.max_queued_jobs:
                         raise HTTPError(429, 'Processor queue full')
@@ -855,7 +967,7 @@ def handler(service):
                     service.store.folder(self.owner, record["id"]).mkdir(mode=0o700, parents=True)
                     service.store.put(self.owner, "job", record)
                     # Bound guest history independently of file retention.
-                    service.store.trim_history(self.owner)
+                    service.store.trim_history(self.owner, limit=self.plan['historyRecords'])
                 LOG.info("Job queued: %s %s", record["id"], operation)
                 return self.send(202, service.public(self.owner, record))
             if path == "/api/process/jobs" and method == "GET":
@@ -916,7 +1028,7 @@ def handler(service):
                         elif action == "retry" and record["state"] in ("failed", "cancelled", "interrupted"):
                             if job_id in service.running:
                                 raise HTTPError(409, "Worker stopping")
-                            if service.store.count(self.owner, states=(*ACTIVE, "paused")) >= 100:
+                            if service.store.count(self.owner, states=(*ACTIVE, "paused")) >= self.plan['maxQueuedJobs']:
                                 raise HTTPError(429, "Queue full")
                             if service.store.count(kind='job', states=(*ACTIVE, 'paused')) >= service.max_queued_jobs:
                                 raise HTTPError(429, 'Processor queue full')
@@ -982,7 +1094,7 @@ def handler(service):
         def handle_request(self):
             try:
                 self.route()
-            except HTTPError as error:
+            except (HTTPError, AccountError) as error:
                 self.send(error.status, {"error": error.message}, error.retry_after)
             except (ValueError, TypeError, KeyError, ProcessingError):
                 self.send(400, {"error": "Invalid request"})
@@ -1006,9 +1118,16 @@ def main():
     parser.add_argument("--port", type=int, default=5010)
     parser.add_argument("--data", default=os.environ.get("HAMMA_DATA", ".hamma-data"))
     parser.add_argument("--web", default="web/dist")
+    parser.add_argument('--tls-cert', default=None, help='Operator-supplied TLS certificate chain')
+    parser.add_argument('--tls-key', default=None, help='Operator-supplied TLS private key')
     parser.add_argument("--lan", action="store_true", help="Allow explicitly named private-network addresses")
     parser.add_argument("--allow-host", action="append", default=[], help="Private IPv4 address used by phones")
     args = parser.parse_args()
+    from .transport import configure_tls, TLSConfigurationError
+    try:
+        transport = configure_tls(args.tls_cert, args.tls_key)
+    except TLSConfigurationError as error:
+        parser.error(str(error))
     if not ipaddress.ip_address(args.host).is_loopback and not args.lan:
         parser.error("Use --lan with explicit --allow-host addresses for private-network testing")
     if args.lan and not args.allow_host:
@@ -1019,10 +1138,16 @@ def main():
             parser.error("LAN hosts must be private IPv4 addresses")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     service = Service(args.data, args.web, lan_hosts=args.allow_host if args.lan else ())
-    server = LocalHTTPServer((args.host, args.port), handler(service))
+    try:
+        server = LocalHTTPServer((args.host, args.port), handler(service))
+    except BaseException:
+        service.close()
+        raise
+    server.tls_context = transport.context
+    server.transport_secure = transport.secure_cookies
     thread = threading.Thread(target=service.loop, daemon=True)
     thread.start()
-    LOG.info("HAMMA available at http://%s:%s", args.host, args.port)
+    LOG.info("HAMMA available at %s://%s:%s", 'https' if transport.secure_cookies else 'http', args.host, args.port)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -26,8 +26,12 @@ export function LocalOverview({ device, onHistory }: {
       } catch { if (!disposed) setStatus('offline'); }
       if (!disposed) timer = setTimeout(refresh, 10000);
     };
+    const clearOwner = () => { disposed = true; controller.abort(); clearTimeout(timer); setJobs([]); setStatus('loading'); };
+    const ownerChanged = () => setAttempt(value => value + 1);
+    window.addEventListener('hamma-owner-clearing', clearOwner);
+    window.addEventListener('hamma-owner-changed', ownerChanged);
     void refresh();
-    return () => { disposed = true; controller.abort(); clearTimeout(timer); };
+    return () => { disposed = true; controller.abort(); clearTimeout(timer); window.removeEventListener('hamma-owner-clearing', clearOwner); window.removeEventListener('hamma-owner-changed', ownerChanged); };
   }, [attempt]);
   useEffect(() => {
     const changed = (event: Event) => { setJobs((event as CustomEvent<Job[]>).detail); setStatus('ready'); };

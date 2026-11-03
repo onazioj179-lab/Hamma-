@@ -146,7 +146,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(first["pid"], os.getpid())
         self.assertEqual(first["activeJobs"], 0)
         self.assertEqual(first["processing"], "local")
-        self.assertRegex(first["revision"], r"^[0-9a-f]{64}:[0-9a-f]{64}$")
+        self.assertRegex(first["revision"], r"^[0-9a-f]{64}(:[0-9a-f]{64})+$")
         self.assertNotIn(str(self.service.store.root), json.dumps(first))
         self.assertNotIn("files", first)
 

@@ -48,8 +48,30 @@ retry/cancel controls and 500-record guest history are implemented. The browser 
 Build [SHANTE CORE](native/README.md) to enable verified native Zstandard.
 
 See [supported formats, deployment and operational limits](docs/universal-processing.md).
-This local implementation does not yet provide accounts, synchronized storage,
-encryption at rest, distributed workers or validated multi-terabyte processing.
+The Account page supports durable local Free accounts, sign-in, sign-out and
+password changes. Guest and account files remain separate; signing out returns
+to the same guest session. Passwords are hashed with scrypt, and sessions use
+HttpOnly cookies. These accounts belong to this processor installation.
+Billing is disabled. Synchronized storage, encryption at rest, distributed
+workers and validated multi-terabyte processing remain unfinished.
+
+Network account access requires HTTPS. Supply your certificate and private key
+explicitly (both files are required):
+
+```sh
+python -m processor.server --tls-cert /path/to/certificate.pem --tls-key /path/to/private-key.pem
+```
+
+The browser must trust that certificate. Existing explicit `--lan` and
+`--allow-host` restrictions still apply to private-network listeners; forwarded
+headers do not enable credential access over plaintext HTTP. Local loopback HTTP
+continues to work for development. The Windows launcher continues to use its
+existing HTTP mode, so use the explicit HTTPS command for network accounts.
+
+`GET /api/process/files` provides an owner-scoped retained-upload index with
+`q`, `offset`, `limit` (maximum 100), and `duplicates=1` filters. Duplicate results
+use matching stored checksums and sizes; incomplete or unhashed uploads are
+excluded. The index does not scan drives or expose local disk paths.
 
 ## Use the SPK browser workflow
 

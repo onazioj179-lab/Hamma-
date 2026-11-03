@@ -4,6 +4,7 @@ export interface Capability {
   conversions: string[];
   processing: 'local';
   limits: { input: number; expanded: number; files: number; seconds: number };
+  plan?: { historyRecords: number };
 }
 export interface Job {
   id: string; name: string; operation: 'compress' | 'extract' | 'convert'; target: string;

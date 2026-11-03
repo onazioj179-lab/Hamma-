@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowDownToLine, ArrowRightLeft, Check, ChevronLeft, ChevronRight, Download, File, FileArchive, FolderPlus, History, Loader2, Pause, Play, Plus, RefreshCw, Search, ShieldCheck, Trash2, X } from 'lucide-react';
 import { activeJob, droppedSources, jsonRequest, request, requestId, randomId, upload, type Capability, type Job, type Retention, type Source } from '../../processing/client';
 import { formatFileSize } from '../../utils/fileHelpers';
+import { accountChanging } from '../../processing/account';
 import '../../processing/processing.css';
 
 type Props = { visible: boolean; screen: 'workspace' | 'files' | 'history'; onHistory: () => void; spkResult?: { outputName: string; downloadUrl: string | null; historyId?: string; historyCreated?: number; originalSize?: number; resultSize?: number; operation?: 'compress' | 'extract' } | null; onSpkDownload?: () => void; spkReady?: boolean; spkBusy?: boolean; spkStatus?: ReactNode; onSpkSelect?: (files: File[], restore: boolean) => Promise<boolean> };
@@ -60,12 +61,14 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const deletionPreviewController = useRef<AbortController | null>(null);
   const refreshFlight = useRef<Promise<void> | null>(null);
   const mounted = useRef(true);
+  const ownerGeneration = useRef(0);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; abort.current?.abort(); refreshController.current?.abort(); deletionPreviewController.current?.abort(); }; }, []);
   useEffect(() => {
     if (!visible) { deletionPreviewController.current?.abort(); if (!mutation.current) setConfirmation(null); }
   }, [visible]);
 
   const refresh = useCallback((force = false): Promise<void> => {
+    if (accountChanging()) return Promise.resolve();
     if (refreshFlight.current && !force) return refreshFlight.current;
     refreshController.current?.abort();
     const controller = new AbortController(); refreshController.current = controller;
@@ -93,14 +96,41 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     return task;
   }, []);
   const connect = useCallback(async () => {
+    if (accountChanging()) return;
+    const generation = ownerGeneration.current;
     try {
       const caps = await request<Capability>('/capabilities');
+      if (generation !== ownerGeneration.current || accountChanging()) return;
       if (caps.processing !== 'local' || caps.version !== 1) throw new Error('Unavailable');
       setCapability(caps); setOffline(false);
-      setRetention(await request<Retention>('/settings'));
+      const settings = await request<Retention>('/settings');
+      if (generation !== ownerGeneration.current || accountChanging()) return;
+      setRetention(settings);
       await refresh(true);
-    } catch { if (mounted.current) { setOffline(true); setLoadingJobs(false); window.dispatchEvent(new CustomEvent('hamma-processor-status', { detail: 'offline' })); } }
+    } catch { if (mounted.current && generation === ownerGeneration.current && !accountChanging()) { setOffline(true); setLoadingJobs(false); window.dispatchEvent(new CustomEvent('hamma-processor-status', { detail: 'offline' })); } }
   }, [refresh]);
+  useEffect(() => {
+    const guard = (event: Event) => { if (busy || spkBusy || submitting.current || mutation.current || preparingDelete.current || savingRetention) event.preventDefault(); };
+    const clear = () => {
+      ownerGeneration.current += 1;
+      abort.current?.abort();
+      refreshController.current?.abort(); refreshFlight.current = null;
+      deletionPreviewController.current?.abort();
+      knownStates.current.clear(); activity.current = false;
+      setJobs([]); setJobSelected(new Set()); setConfirmation(null); setCapability(null); setLoadingJobs(true); setError('');
+      setUploadStatus(null);
+      window.dispatchEvent(new CustomEvent('hamma-job-count', { detail: 0 }));
+      window.dispatchEvent(new CustomEvent('hamma-jobs-updated', { detail: [] }));
+    };
+    const changed = () => {
+      setSources(previous => previous.map(source => ({ ...source, upload: undefined, uploaded: undefined })));
+      void connect();
+    };
+    window.addEventListener('hamma-owner-changing', guard);
+    window.addEventListener('hamma-owner-clearing', clear);
+    window.addEventListener('hamma-owner-changed', changed);
+    return () => { window.removeEventListener('hamma-owner-changing', guard); window.removeEventListener('hamma-owner-clearing', clear); window.removeEventListener('hamma-owner-changed', changed); };
+  }, [busy, spkBusy, savingRetention, connect]);
   useEffect(() => { void connect(); }, [connect]);
   useEffect(() => {
     const reconnect = () => { if (document.visibilityState === 'visible') void connect(); };
@@ -136,6 +166,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const choose = (files: File[]) => add(files.map(file => ({ id: randomId(), file, name: file.webkitRelativePath || file.name, size: file.size, directory: false })));
   const chosen = sources.filter(source => selected.has(source.id));
   const submit = async (operation: 'compress' | 'extract' | 'convert') => {
+    if (accountChanging()) return;
     if (submitting.current || spkBusy || !chosen.length) return;
     if (operation === 'convert' && ['mp3', 'aac', 'm4a', 'ogg', 'opus', 'jpg'].includes(conversion) && qualityMode !== 'lossy') {
       setError(`${conversion.toUpperCase()} can reduce quality. Choose Allow quality loss before converting.`);
@@ -165,6 +196,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     if (!capability) return;
     submitting.current = true; setBusy(true); setError('');
     const controller = new AbortController(); abort.current = controller;
+    const generation = ownerGeneration.current;
     const submitted = new Set<string>();
     try {
       const inputs: { source: Source; id: string }[] = [];
@@ -175,21 +207,22 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
           if (!await onSpkSelect([source.file], true)) throw new Error('SPK restoration did not complete.');
           submitted.add(source.id); continue;
         }
-        const id = await upload(source, controller.signal, offset => { source.uploaded = offset; setUploadStatus({ name: source.name, offset, size: source.size }); });
+        const id = await upload(source, controller.signal, offset => { if (generation === ownerGeneration.current) { source.uploaded = offset; setUploadStatus({ name: source.name, offset, size: source.size }); } });
         inputs.push({ source, id });
         if (operation !== 'compress') {
           const conversionOptions = operation === 'convert' ? { qualityMode, metadataPolicy } : {};
-          await jsonRequest('/jobs', { uploads: [id], operation, target: operation === 'extract' ? 'zip' : conversion, recursive, ...conversionOptions, requestId: await requestId([source.id, operation, conversion, recursive, conversionOptions]) });
+          await jsonRequest('/jobs', { uploads: [id], operation, target: operation === 'extract' ? 'zip' : conversion, recursive, ...conversionOptions, requestId: await requestId([generation, source.id, operation, conversion, recursive, conversionOptions]) }, 'POST', { signal: controller.signal });
           submitted.add(source.id);
         }
       }
       if (operation === 'compress') {
-        await jsonRequest('/jobs', { uploads: inputs.map(i => i.id), operation, target, requestId: await requestId([inputs.map(i => i.source.id), operation, target]) });
+        await jsonRequest('/jobs', { uploads: inputs.map(i => i.id), operation, target, requestId: await requestId([generation, inputs.map(i => i.source.id), operation, target]) }, 'POST', { signal: controller.signal });
         inputs.forEach(i => submitted.add(i.source.id));
       }
     } catch (caught) {
-      setError(controller.signal.aborted ? 'Upload paused. Select an action to resume.' : caught instanceof Error ? caught.message : 'Could not queue files');
+      if (generation === ownerGeneration.current) setError(controller.signal.aborted ? 'Upload paused. Select an action to resume.' : caught instanceof Error ? caught.message : 'Could not queue files');
     } finally {
+      if (generation !== ownerGeneration.current) submitted.clear();
       setSources(previous => previous.filter(s => !submitted.has(s.id)));
       setSelected(previous => new Set([...previous].filter(id => !submitted.has(id))));
       setBusy(false); submitting.current = false; setUploadStatus(null);
@@ -387,7 +420,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       </article>) : (!loadingJobs || offline) && <div className="processing-empty"><History size={22} strokeWidth={1.3} /><p>{query || filter || operationFilter ? 'No matching files' : screen === 'files' ? 'No downloads available' : 'No jobs yet'}</p></div>}</div>
       <div className="history-pagination"><span>{total.toLocaleString()} operations</span><div><button className="icon-button" aria-label="Previous history page" disabled={!page} onClick={() => { setPage(page - 1); setJobSelected(new Set()); }}><ChevronLeft size={17} /></button><span>{page + 1} / {Math.max(1, Math.ceil(total / 50))}</span><button className="icon-button" aria-label="Next history page" disabled={(page + 1) * 50 >= total} onClick={() => { setPage(page + 1); setJobSelected(new Set()); }}><ChevronRight size={17} /></button></div></div>
     </section>
-    {screen === 'history' && <details className="processing-options"><summary>Retention</summary><div className="options-grid"><label>History<SelectField disabled={savingRetention || offline} aria-label="History retention" value={retention.historyRetention} onChange={value => void saveRetention({ ...retention, historyRetention: value })}>{[['24h', '24 Hours'], ['7d', '7 Days'], ['30d', '30 Days'], ['never', 'Never']].map(([value, name]) => <option key={value} value={value}>{name}</option>)}</SelectField></label><label>Files<SelectField disabled={savingRetention || offline} aria-label="File retention" value={retention.fileRetention} onChange={value => void saveRetention({ ...retention, fileRetention: value })}>{[['24h', '24 Hours'], ['7d', '7 Days'], ['30d', '30 Days']].map(([value, name]) => <option key={value} value={value}>{name}</option>)}</SelectField></label></div><p>Applies to new jobs. Deleting history keeps files until their expiry. Deleting files removes inputs and outputs when no other job uses them. Downloaded copies stay on your device. Processor history keeps up to 500 records. Browser SPK outputs stay available until you close this page or delete them.</p><div className="button-row"><button className="button secondary" disabled={busy || spkBusy || acting || preparingDeletion || ((!capability || offline) && !archives.length && !legacyHistory.length && !Object.keys(outputs).length)} onClick={() => void confirmClear('history')}><Trash2 size={14} /> Clear history</button><button className="button secondary" disabled={busy || spkBusy || acting || preparingDeletion || ((!capability || offline) && !Object.values(outputs).some(output => output.downloadUrl))} onClick={() => void confirmClear('files')}><Trash2 size={14} /> Delete all files</button></div></details>}
+    {screen === 'history' && <details className="processing-options"><summary>Retention</summary><div className="options-grid"><label>History<SelectField disabled={savingRetention || offline} aria-label="History retention" value={retention.historyRetention} onChange={value => void saveRetention({ ...retention, historyRetention: value })}>{[['24h', '24 Hours'], ['7d', '7 Days'], ['30d', '30 Days'], ['never', 'Never']].map(([value, name]) => <option key={value} value={value}>{name}</option>)}</SelectField></label><label>Files<SelectField disabled={savingRetention || offline} aria-label="File retention" value={retention.fileRetention} onChange={value => void saveRetention({ ...retention, fileRetention: value })}>{[['24h', '24 Hours'], ['7d', '7 Days'], ['30d', '30 Days']].map(([value, name]) => <option key={value} value={value}>{name}</option>)}</SelectField></label></div><p>Applies to new jobs. Deleting history keeps files until their expiry. Deleting files removes inputs and outputs when no other job uses them. Downloaded copies stay on your device. Processor history is capped by your plan{capability?.plan ? ': ' + capability.plan.historyRecords.toLocaleString() + ' records' : ''}. Browser SPK outputs stay available until you close this page or delete them.</p><div className="button-row"><button className="button secondary" disabled={busy || spkBusy || acting || preparingDeletion || ((!capability || offline) && !archives.length && !legacyHistory.length && !Object.keys(outputs).length)} onClick={() => void confirmClear('history')}><Trash2 size={14} /> Clear history</button><button className="button secondary" disabled={busy || spkBusy || acting || preparingDeletion || ((!capability || offline) && !Object.values(outputs).some(output => output.downloadUrl))} onClick={() => void confirmClear('files')}><Trash2 size={14} /> Delete all files</button></div></details>}
     {confirmation && <ConfirmAction {...confirmation} onCancel={() => setConfirmation(null)} />}
   </section>;
 }

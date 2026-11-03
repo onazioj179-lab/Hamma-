@@ -10,6 +10,7 @@ import {
   Loader2,
   Settings2,
   ShieldCheck,
+  UserRound,
 } from 'lucide-react';
 import { useCompression } from './hooks/useCompression';
 import { useAppStore } from './store/app';
@@ -21,14 +22,16 @@ import {
 } from './components/ui/SettingsPanel';
 import { LocalOverview } from './components/workspace/LocalOverview';
 import { UniversalWorkspace } from './components/workspace/UniversalWorkspace';
+import { AccountPanel } from './components/ui/AccountPanel';
 
 const remoteServer = !['localhost', '127.0.0.1', '::1'].includes(location.hostname);
 
-type View = 'process' | 'files' | 'overview' | 'settings';
+type View = 'process' | 'files' | 'overview' | 'settings' | 'account';
 const navigation = [
   { key: 'process', label: 'Workspace', icon: LayoutGrid },
   { key: 'files', label: 'Files & History', icon: FolderOpen },
   { key: 'overview', label: 'Overview', icon: Files },
+  { key: 'account', label: 'Account', icon: UserRound },
 ] as const;
 
 export default function App() {
@@ -56,10 +59,12 @@ export default function App() {
     };
     const count = (event: Event) => setJobCount((event as CustomEvent<number>).detail);
     const connection = (event: Event) => setProcessorStatus((event as CustomEvent<string>).detail);
+    const clearOwner = () => { clearTimeout(timer); setNotice(''); setAnnouncement(''); setJobCount(0); };
+    window.addEventListener('hamma-owner-clearing', clearOwner);
     window.addEventListener('hamma-processor-status', connection);
     window.addEventListener('hamma-job-notice', notify);
     window.addEventListener('hamma-job-count', count);
-    return () => { clearTimeout(timer); window.removeEventListener('hamma-job-notice', notify); window.removeEventListener('hamma-job-count', count); window.removeEventListener('hamma-processor-status', connection); };
+    return () => { clearTimeout(timer); window.removeEventListener('hamma-owner-clearing', clearOwner); window.removeEventListener('hamma-job-notice', notify); window.removeEventListener('hamma-job-count', count); window.removeEventListener('hamma-processor-status', connection); };
   }, []);
 
   const [termsAccepted, setTermsAccepted] = useState(() => browserStorage.getItem('hamma-terms-v1') === 'accepted');
@@ -206,7 +211,6 @@ export default function App() {
               className={processorStatus === 'ready' ? 'status-dot' : 'status-dot pending'}
             />
             {isProcessing ? 'Processing' : processorStatus === 'ready' ? 'Connected' : processorStatus === 'offline' ? workerReady ? 'Browser only' : 'Disconnected' : 'Connecting'}
-            <span className="free-label">Free</span>
           </span>
         </header>
         <main
@@ -227,6 +231,7 @@ export default function App() {
             screen={view === 'files' ? 'history' : 'workspace'}
             onHistory={() => setView('files')}
           />
+              {view === 'account' && <AccountPanel />}
               {view === 'overview' && (
                 <LocalOverview
                   device={deviceInfo}
