@@ -109,13 +109,17 @@ class Store:
             row = db.execute("SELECT data FROM records WHERE id=? AND owner=? AND kind=?", (record_id, owner, kind)).fetchone()
         return json.loads(row[0]) if row else None
 
-    def patch(self, owner, kind, record_id, **updates):
+    def patch(self, owner, kind, record_id, *, expected_states=None, **updates):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT data FROM records WHERE id=? AND owner=? AND kind=?", (record_id, owner, kind)).fetchone()
             if not row:
                 return None
             previous = json.loads(row[0])
+            # Check and update under the same SQLite write transaction: a worker's
+            # stale progress/completion must never undo a cancellation or pause.
+            if expected_states is not None and previous.get("state") not in expected_states:
+                return previous
             if updates.get("state") == "completed" and previous.get("state") == "cancelled":
                 return previous
             record = {**previous, **updates}
@@ -283,13 +287,16 @@ def run_job(root, owner, job_id, limits, isolated=False):
     def report(**updates):
         now = time.monotonic()
         if "state" in updates or now - last_report[0] >= .2:
-            store.patch(owner, "job", job_id, **updates)
+            store.patch(owner, "job", job_id, expected_states=ACTIVE, **updates)
             last_report[0] = now
 
     ctx = Context(directory, limits, report)
     output = directory / ("output." + job["target"])
     try:
-        store.patch(owner, "job", job_id, state="processing", started=started, error=None)
+        current = store.patch(owner, "job", job_id, expected_states=ACTIVE,
+                              state="processing", started=started, error=None)
+        if not current or current.get("state") not in ACTIVE:
+            return
         manifest = []
         for upload in job["inputs"]:
             upload["path"] = str(store.folder(owner, upload["id"]) / "input")
@@ -308,7 +315,7 @@ def run_job(root, owner, job_id, limits, isolated=False):
             manifest = convert(Path(job["inputs"][0]["path"]), output, job["target"], ctx,
                                job.get('qualityMode', 'lossless'), job.get('metadataPolicy', 'strip'))
         ctx.check()
-        store.patch(owner, "job", job_id, state="verifying")
+        store.patch(owner, "job", job_id, expected_states=ACTIVE, state="verifying")
         digest = file_digest(output, ctx)
         if digest["size"] > limits["expanded"]:
             raise ProcessingError("Output size limit reached")
@@ -320,7 +327,7 @@ def run_job(root, owner, job_id, limits, isolated=False):
         stem = leaf if job["operation"] == "compress" and job["target"] == "zstd" else leaf.rsplit(".", 1)[0] or "files"
         output_name = ("extracted" if job["operation"] == "extract" else stem) + "." + extension
         ctx.check()
-        store.patch(owner, "job", job_id, state="completed", processed=job["inputSize"],
+        store.patch(owner, "job", job_id, expected_states=ACTIVE, state="completed", processed=job["inputSize"],
                     error=None,
                     outputSize=digest["size"], sha256=digest["sha256"], manifest=manifest,
                     outputFile=output.name, outputName=output_name, finished=time.time(),
@@ -335,7 +342,7 @@ def run_job(root, owner, job_id, limits, isolated=False):
         elif isinstance(error, PermissionError):
             message = "Missing permissions"
         state = "cancelled" if (directory / "cancel").exists() else "failed"
-        store.patch(owner, "job", job_id, state=state, error=message, finished=time.time(), duration=time.time() - started, downloadAvailable=False)
+        store.patch(owner, "job", job_id, expected_states=ACTIVE, state=state, error=message, finished=time.time(), duration=time.time() - started, downloadAvailable=False)
         output.unlink(missing_ok=True)
     finally:
         shutil.rmtree(directory / "expanded", ignore_errors=True)
