@@ -1,7 +1,7 @@
 name: SHANTE native kernel
 on:
   pull_request:
-    paths: ['native/**', 'processor/**', 'scripts/build-shante.ps1', '.github/workflows/shante-core.yml']
+    paths: ['native/**', '!native/**/*.md', 'processor/**', 'scripts/*shante*', '.github/workflows/shante-core.yml']
   workflow_dispatch:
 permissions:
   contents: read
