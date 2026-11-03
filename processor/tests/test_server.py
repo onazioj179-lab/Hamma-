@@ -15,7 +15,7 @@ from urllib.error import HTTPError
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 import zipfile
 
-from processor.server import LocalHTTPServer, Service, handler, run_job
+from processor.server import ACTIVE, LocalHTTPServer, Service, Store, handler, run_job
 from test_engine import LIMITS
 
 
@@ -382,6 +382,52 @@ class ServerTests(unittest.TestCase):
         final = self.call("/jobs/" + job["id"])
         self.assertEqual(final["state"], "cancelled")
         self.assertFalse(final["downloadAvailable"])
+
+    def test_cancel_commits_before_delayed_worker_initial_progress(self):
+        job = self.job()
+        owner = self.service.store.list()[0][0]
+        worker_waiting, release_worker = threading.Event(), threading.Event()
+        original_patch = Store.patch
+
+        def delayed_patch(store, record_owner, kind, record_id, **updates):
+            if threading.current_thread() is worker and updates.get('state') == 'processing':
+                worker_waiting.set()
+                if not release_worker.wait(10):
+                    raise RuntimeError('Test did not release worker')
+            return original_patch(store, record_owner, kind, record_id, **updates)
+
+        worker = threading.Thread(target=run_job, args=(self.temp.name, owner, job['id'], LIMITS))
+        with patch.object(Store, 'patch', delayed_patch):
+            worker.start()
+            try:
+                self.assertTrue(worker_waiting.wait(10))
+                cancelled = self.call('/jobs/' + job['id'] + '/cancel', {}, 'POST')
+                self.assertEqual(cancelled['state'], 'cancelled')
+            finally:
+                release_worker.set()
+                worker.join(10)
+        self.assertFalse(worker.is_alive())
+        final = self.call('/jobs/' + job['id'])
+        self.assertEqual(final['state'], 'cancelled')
+        self.assertEqual(final['error'], 'Cancelled')
+        self.assertFalse(final['downloadAvailable'])
+
+    def test_late_worker_updates_preserve_terminal_state_and_explicit_retry_works(self):
+        job = self.job()
+        owner = self.service.store.list()[0][0]
+        for state in ('cancelled', 'completed', 'failed', 'interrupted', 'paused'):
+            with self.subTest(state=state):
+                self.service.store.patch(owner, 'job', job['id'], state='queued')
+                original = self.service.store.patch(owner, 'job', job['id'], state=state, processed=7)
+                self.assertEqual(original['state'], state)
+                for updates in ({'state': 'processing'}, {'state': 'verifying'},
+                                {'state': 'completed', 'downloadAvailable': True},
+                                {'state': 'failed', 'error': 'late error'}, {'processed': 100}):
+                    self.assertEqual(self.service.store.patch(owner, 'job', job['id'],
+                        expected_states=ACTIVE, **updates), original)
+        self.service.store.patch(owner, 'job', job['id'], state='cancelled')
+        retried = self.call('/jobs/' + job['id'] + '/retry', {}, 'POST')
+        self.assertEqual(retried['state'], 'queued')
 
     def test_second_server_cannot_share_the_same_listener(self):
         with self.assertRaises(OSError):

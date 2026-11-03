@@ -169,7 +169,9 @@ export function SettingsPanel({ section, onSectionChange, busy, onHistory }: Pro
             <div className="section-heading">
               <h2>Cookies & local storage</h2>
               <p>
-                A temporary session cookie protects local processing jobs.
+                A guest session cookie protects local processing jobs. Signing in
+                adds an account cookie that expires after one day. Account
+                passwords are stored as hashes on the processor computer.
                 Essential browser storage remembers appearance, download
                 preferences, and your privacy choice. History has separate retention controls.
               </p>
