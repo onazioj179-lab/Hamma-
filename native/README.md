@@ -75,7 +75,8 @@ verification and tracked codec allocation peak/outstanding bytes.
 - Output uses an exclusive temporary file, a flush/fsync and exclusive
   publication. Existing outputs are never replaced. Compression decodes and
   byte-compares the new frame before publication. The Python integration also
-  checks a separate decoded result against the original SHA-256.
+  checks the source SHA-256 before and after the native operation. Verification
+  streams against the original handle without a second full-size decoded file.
 - Codec allocations use a thread-safe capped allocator. The adapter selects a
   16–128 MiB codec cap based on reported memory; CLI caps range 1–512 MiB. This
   cap excludes two 256 KiB streaming buffers, verification buffers, C++/OS

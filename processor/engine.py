@@ -250,15 +250,14 @@ def compress(inputs: list[dict], output: Path, target: str, ctx: Context):
             raise ProcessingError("Choose one file for this format")
         source = Path(inputs[0]["path"])
         original = file_digest(source, ctx)
+        # The kernel decodes and byte-compares against the original through the
+        # same open handle before publishing. Recheck its source SHA-256 here;
+        # materializing a second full-size decoded file would exceed the job's
+        # temporary-storage reservation for large compressible inputs.
         run("compress", source, output, ctx)
         ctx.report(state="verifying")
-        verification = ctx.root / "native-verify"
-        try:
-            run("decompress", output, verification, ctx, output_limit=original["size"], progress=False)
-            if file_digest(verification, ctx) != original:
-                raise ProcessingError("Integrity check failed")
-        finally:
-            verification.unlink(missing_ok=True)
+        if file_digest(source, ctx) != original:
+            raise ProcessingError("Input changed during verification")
         manifest.append({"name": names[0][1], **original})
     elif target == "zip":
         with BoundedWriter(output, ctx) as bounded, zipfile.ZipFile(bounded, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as archive:
