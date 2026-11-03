@@ -35,6 +35,8 @@ export default function App() {
   const { workerReady, isProcessing, result, cancel, download, deviceInfo } =
     controller;
   const recent = useAppStore((state) => state.recentArchives);
+  const outputs = useAppStore(state => state.sessionOutputs);
+  const localCount = new Set([...recent.map(entry => entry.id), ...Object.values(outputs).filter(output => !output.hidden).map(output => output.archive.id)]).size;
   const { privacyChoice, setPrivacyChoice } = usePreferences();
   const [view, setView] = useState<View>('process');
   useEffect(() => { if (privacyChoice === 'learning') setPrivacyChoice('essential'); }, [privacyChoice, setPrivacyChoice]);
@@ -42,6 +44,7 @@ export default function App() {
   const mainRef = useRef<HTMLElement>(null);
   const [announcement, setAnnouncement] = useState('');
   const [jobCount, setJobCount] = useState(0);
+  const [processorStatus, setProcessorStatus] = useState('connecting');
   const [notice, setNotice] = useState('');
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
@@ -51,9 +54,11 @@ export default function App() {
       clearTimeout(timer); timer = setTimeout(() => setNotice(''), 8000);
     };
     const count = (event: Event) => setJobCount((event as CustomEvent<number>).detail);
+    const connection = (event: Event) => setProcessorStatus((event as CustomEvent<string>).detail);
+    window.addEventListener('hamma-processor-status', connection);
     window.addEventListener('hamma-job-notice', notify);
     window.addEventListener('hamma-job-count', count);
-    return () => { clearTimeout(timer); window.removeEventListener('hamma-job-notice', notify); window.removeEventListener('hamma-job-count', count); };
+    return () => { clearTimeout(timer); window.removeEventListener('hamma-job-notice', notify); window.removeEventListener('hamma-job-count', count); window.removeEventListener('hamma-processor-status', connection); };
   }, []);
 
   const [termsAccepted, setTermsAccepted] = useState(() => localStorage.getItem('hamma-terms-v1') === 'accepted');
@@ -149,8 +154,8 @@ export default function App() {
             >
               <Icon size={17} strokeWidth={1.7} />
               <span>{label}</span>
-              {key === 'files' && recent.length + jobCount > 0 && (
-                <small>{recent.length + jobCount}</small>
+              {key === 'files' && localCount + jobCount > 0 && (
+                <small>{localCount + jobCount}</small>
               )}
               {key === 'process' && isProcessing && (
                 <span className="running-dot" />
@@ -197,9 +202,9 @@ export default function App() {
           </div>
           <span className="engine-status">
             <span
-              className={workerReady ? 'status-dot' : 'status-dot pending'}
+              className={processorStatus === 'ready' ? 'status-dot' : 'status-dot pending'}
             />
-            {isProcessing ? 'Processing' : workerReady ? 'Ready' : 'Starting'}
+            {isProcessing ? 'Processing' : processorStatus === 'ready' ? 'Connected' : processorStatus === 'offline' ? workerReady ? 'Browser only' : 'Disconnected' : 'Connecting'}
             <span className="free-label">Free</span>
           </span>
         </header>
@@ -232,6 +237,7 @@ export default function App() {
                   section={section}
                   onSectionChange={setSection}
                   busy={isProcessing}
+                  onHistory={() => setView('files')}
                 />
               )}
           <footer className="workspace-footer">

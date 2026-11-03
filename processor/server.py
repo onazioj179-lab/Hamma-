@@ -1,6 +1,6 @@
 """Local-only HTTP service. Start with python -m processor.server.
 
-The service deliberately refuses non-loopback binds. Public, multi-tenant hosting
+The service requires explicit private hosts for non-loopback binds. Public, multi-tenant hosting
 requires an authenticated gateway and stronger per-worker OS sandboxing.
 """
 from __future__ import annotations
@@ -38,6 +38,8 @@ from .engine import ARCHIVES, MEDIA, BLOCK, Context, ProcessingError, compress, 
 LOG = logging.getLogger("hamma.processor")
 TERMINAL = ("completed", "failed", "cancelled", "interrupted")
 ACTIVE = ("queued", "processing", "verifying")
+PROCESSOR_REVISION = ":".join(hashlib.sha256(path.read_bytes()).hexdigest() for path in
+                              (Path(__file__), Path(__file__).with_name("engine.py")))
 RETENTION = {"24h": 86400, "7d": 604800, "30d": 2592000, "never": None}
 
 
@@ -192,6 +194,7 @@ class Service:
     def __init__(self, root, web=None, limits=None, lan_hosts=()):
         self.store = Store(root)
         self.lan_hosts = frozenset(lan_hosts)
+        self.instance_id = secrets.token_hex(16)
         self.instance_lock = (self.store.root / ".server.lock").open("a+b")
         self.instance_lock.write(b"\0")
         self.instance_lock.flush()
@@ -211,6 +214,7 @@ class Service:
                                  "ratio": 1000, "depth": 8, "seconds": 1800, "storage": 20 * 1024**3}
         self.lock = threading.RLock()
         self.running = {}
+        self.restart_until = 0
         self.stop = threading.Event()
         self.secret = self.store.root / ".key"
         if not self.secret.exists():
@@ -339,6 +343,8 @@ class Service:
                     if record and record["state"] != "completed":
                         self.clean_work(owner, job_id)
                     del self.running[job_id]
+            if time.monotonic() < self.restart_until:
+                return
             for owner, job in self.store.list():
                 if len(self.running) >= 2:
                     break
@@ -475,6 +481,23 @@ def handler(service):
                         raise HTTPError(429, "Too many requests")
                 if method in ("POST", "PUT", "DELETE") and self.headers.get("X-Hamma-Request") != "1":
                     raise HTTPError(403, "Request authorization required")
+            if path == "/api/process/prepare-restart" and method == "POST":
+                if not ipaddress.ip_address(self.client_address[0]).is_loopback:
+                    raise HTTPError(403, "Restart preparation is local only")
+                if self.headers.get("X-Hamma-Instance") != service.instance_id:
+                    raise HTTPError(409, "Processor instance changed")
+                with service.lock:
+                    if service.running:
+                        raise HTTPError(409, "Finish or cancel active jobs before restarting")
+                    # Prevent a queued worker from starting between the health check and exit.
+                    # If a launcher fails to stop us, scheduling resumes automatically.
+                    service.restart_until = time.monotonic() + 30
+                return self.send(200, {"ready": True, "instance": service.instance_id})
+            if path == "/api/process/health" and method == "GET":
+                with service.lock:
+                    running = len(service.running)
+                return self.send(200, {"version": 1, "processing": "local", "instance": service.instance_id,
+                                       "pid": os.getpid(), "revision": PROCESSOR_REVISION, "activeJobs": running})
             if path == "/api/process/capabilities" and method == "GET":
                 return self.send(200, {"archives": ARCHIVES, "conversions": MEDIA if shutil.which("ffmpeg") and shutil.which("ffprobe") else [],
                                        "limits": service.limits, "processing": "local", "version": 1})

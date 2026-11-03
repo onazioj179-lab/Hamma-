@@ -2,6 +2,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import * as processingClient from '../processing/client';
+import { useAppStore } from '../store/app';
 import { UniversalWorkspace } from '../components/workspace/UniversalWorkspace';
 
 vi.hoisted(() => { Object.defineProperty(window, 'matchMedia', { configurable: true, value: vi.fn(() => ({ matches: false, addEventListener: vi.fn() })) }); });
@@ -12,6 +13,7 @@ let fetchMock: ReturnType<typeof vi.fn>;
 const caps = { archives: ['zip', 'gzip'], conversions: ['wav', 'png'], processing: 'local', version: 1, limits: { input: 1e9, expanded: 1e9, files: 5000 } };
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  useAppStore.setState({ sessionOutputs: {}, recentArchives: [], result: null });
   host = document.createElement('div'); document.body.append(host); root = createRoot(host);
   fetchMock = vi.fn(async (url: string) => ({ ok: true, json: async () => url.endsWith('/capabilities') ? caps : url.endsWith('/settings') ? { fileRetention: '24h', historyRetention: '30d' } : { jobs: [], total: 0 } }));
   vi.stubGlobal('fetch', fetchMock);
@@ -109,4 +111,42 @@ it('uses the shared file picker for SPK and keeps the current result on its orig
     expect(host.querySelector('.source-row')).toBeNull();
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/uploads'))).toBe(false);
   } finally { await act(async () => useAppStore.setState({ recentArchives: [] })); }
+});
+
+it('restores a batch to independently downloadable outputs and keeps hidden files accessible', async () => {
+  Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
+  const restore = vi.fn(async (files: File[]) => {
+    const name = files[0].name.replace('.spk', '');
+    useAppStore.getState().setResult({ originalSize: 4, resultSize: 8, ratio: 2, duration: 1, speedMbps: 1, outputName: name, downloadUrl: 'blob:' + name });
+    useAppStore.getState().addRecentArchive({ fileName: files[0].name, originalSize: 8, compressedSize: 4, ratio: .5, type: 'decompress', mode: 'auto' });
+    return true;
+  });
+  await act(async () => root.render(<UniversalWorkspace visible screen="workspace" onHistory={() => {}} spkReady onSpkSelect={restore} />));
+  await select([new File(['one'], 'first.txt.spk'), new File(['two'], 'second.txt.spk')]);
+  await act(async () => button('Extract').click());
+  expect(restore).toHaveBeenCalledTimes(2);
+  expect(host.querySelectorAll('a[download]')).toHaveLength(2);
+  await act(async () => useAppStore.getState().clearRecentArchives());
+  expect(host.querySelectorAll('.processing-job')).toHaveLength(0);
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Filter by operation"]')!.click());
+  const downloads = [...document.querySelectorAll<HTMLElement>('[role=option]')].find(option => option.textContent === 'Available downloads')!;
+  await act(async () => downloads.click());
+  expect(host.querySelectorAll('a[download]')).toHaveLength(2);
+  const first = Object.keys(useAppStore.getState().sessionOutputs)[0];
+  await act(async () => useAppStore.getState().deleteSessionOutput(first));
+  expect(host.querySelectorAll('a[download]')).toHaveLength(1);
+  expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:first.txt');
+});
+it('reconnects and refreshes the list after an initial job-list failure', async () => {
+  let unavailable = true;
+  fetchMock.mockImplementation(async (url: string) => {
+    if (url.includes('/jobs?') && unavailable) throw new Error('Connection lost');
+    return { ok: true, json: async () => url.endsWith('/capabilities') ? caps : url.endsWith('/settings') ? { fileRetention: '24h', historyRetention: '30d' } : { jobs: [{ id: 'recovered', name: 'recovered.zip', operation: 'compress', target: 'zip', state: 'completed', inputSize: 10, outputSize: 5, created: 1, fileExpires: 2, historyExpires: null, format: 'zip', fileCount: 1, entries: 1, downloadAvailable: false }], total: 1 } };
+  });
+  await render();
+  expect(host.textContent).toContain('Local processor unavailable');
+  unavailable = false;
+  await act(async () => button('Reconnect').click());
+  expect(host.textContent).toContain('recovered.zip');
+  expect(host.textContent).not.toContain('Local processor unavailable');
 });

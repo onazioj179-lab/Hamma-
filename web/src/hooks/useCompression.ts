@@ -5,7 +5,6 @@
  * Features:
  * - Automatic device capability detection
  * - Fallback chain for mobile devices (iOS Safari, Android)
- * - Works on 1M+ simultaneous users
  * - No SharedArrayBuffer requirement on mobile
  */
 
@@ -58,6 +57,16 @@ export function useCompression() {
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
   const [currentStrategy, setCurrentStrategy] = useState<CompressionStrategy>('main-js');
 
+  const prepareEngine = useCallback((fallback = false) => {
+    const engine = new AdaptiveEngine({ enableFallbackChain: true, enableProgress: true, compressionLevel: 10, ...(fallback ? { forceStrategy: 'main-js' as const } : {}) });
+    engine.onProgress((progressData: EngineProgress) => {
+      if (engineRef.current !== engine || !jobIdRef.current || !['preparing', 'processing', 'finalizing'].includes(useAppStore.getState().operationStatus)) return;
+      setCurrentStrategy(progressData.strategy);
+      updateProgress({ bytesProcessed: progressData.bytesProcessed || 0, totalBytes: progressData.totalBytes || 0, chunksProcessed: 0, totalChunks: 0, speed: progressData.speed, eta: progressData.eta, compressionRatio: 0, phase: progressData.phase });
+    });
+    return engine;
+  }, [updateProgress]);
+
   // Initialize AdaptiveEngine with capability detection
   useEffect(() => {
     let disposed = false;
@@ -90,42 +99,19 @@ export function useCompression() {
           cores: info.cores,
         });
         
-        // Auto-select compression: always use extreme (10000:1) for best results
+        // Compression level is a tuning choice; savings depend on the input.
         // The engine will automatically optimize based on file content
         const compressionLevel = 10; // Always use extreme compression
         console.log(`[useCompression] Auto compression level: ${compressionLevel} (extreme)`);
         
-        const engine = new AdaptiveEngine({
-          enableFallbackChain: true,
-          enableProgress: true,
-          compressionLevel, // Pass compression level to engine
-          verbose: false, // Enable for debugging: typeof window !== 'undefined' && window.location.hostname === 'localhost'
-        });
-        
-        engine.onProgress((progressData: EngineProgress) => {
-          setCurrentStrategy(progressData.strategy);
-          updateProgress({
-            bytesProcessed: progressData.bytesProcessed || 0,
-            totalBytes: progressData.totalBytes || 0,
-            chunksProcessed: 0,
-            totalChunks: 0,
-            speed: progressData.speed,
-            eta: progressData.eta,
-            compressionRatio: 0,
-            phase: progressData.phase,
-          });
-        });
-        
+        const engine = prepareEngine();
         engineRef.current = engine;
         setEngineReady(true);
       } catch (err) {
         if (disposed) return;
         console.error('[useCompression] Engine init failed:', err);
         // Still create engine with fallback
-        const engine = new AdaptiveEngine({
-          forceStrategy: 'main-js', // Force JS fallback
-          enableFallbackChain: true,
-        });
+        const engine = prepareEngine(true);
         engineRef.current = engine;
         setEngineReady(true);
       }
@@ -138,11 +124,8 @@ export function useCompression() {
       jobIdRef.current = null;
       engineRef.current?.abort();
       engineRef.current = null;
-      if (downloadUrlRef.current) {
-        URL.revokeObjectURL(downloadUrlRef.current);
-      }
     };
-  }, [updateProgress]);
+  }, [prepareEngine]);
 
   const hasActiveJob = () => ['initializing', 'preparing', 'processing', 'finalizing'].includes(useAppStore.getState().operationStatus);
 
@@ -192,7 +175,6 @@ export function useCompression() {
       }
       
       const url = URL.createObjectURL(blob);
-      if (downloadUrlRef.current) URL.revokeObjectURL(downloadUrlRef.current);
       downloadUrlRef.current = url;
 
       const fileName = file.name;
@@ -267,7 +249,6 @@ export function useCompression() {
       if (jobIdRef.current !== jobId) return;
       const outputName = `${file.name.replace(/\.spk$/i, '') || 'restored'}${zip ? '.zip' : ''}`;
       const url = URL.createObjectURL(new Blob([new Uint8Array(output)]));
-      if (downloadUrlRef.current) URL.revokeObjectURL(downloadUrlRef.current);
       downloadUrlRef.current = url;
       const duration = Math.max(1, Date.now() - started);
       completeOperation();
@@ -435,8 +416,11 @@ export function useCompression() {
               const chunkData = new Uint8Array(await chunk.arrayBuffer());
               
               // Compress chunk
+              if (jobIdRef.current !== jobId) throw new Error('Operation cancelled');
               const result = await engineRef.current!.compress(chunkData, `file_${i}_chunk`);
-              if (!result.success || !result.data) throw new Error(result.error || `Failed to compress ${file.name}`);
+              if (jobIdRef.current !== jobId) throw new Error('Operation cancelled');
+              if (jobIdRef.current !== jobId) throw new Error('Operation cancelled');
+            if (!result.success || !result.data) throw new Error(result.error || `Failed to compress ${file.name}`);
               if (result.success && result.data) {
                 const compressedData = result.data instanceof Blob
                   ? new Uint8Array(await result.data.arrayBuffer())
@@ -458,14 +442,14 @@ export function useCompression() {
                 lastProgressUpdate = now;
                 const bytesProcessedTotal = filesProcessed * (totalSize / files.length) + (fileOffset / file.size) * file.size;
                 const elapsed = (now - startTime) / 1000;
-                const speed = bytesWritten / elapsed;
+                const speed = bytesWritten / Math.max(0.001, elapsed);
                 
                 updateProgress({
                   bytesProcessed: bytesProcessedTotal,
                   totalBytes: totalSize,
                   chunksProcessed: filesProcessed,
                   totalChunks: files.length,
-                  speed: speed / 1024 / 1024,
+                  speed,
                   eta: (totalSize - bytesProcessedTotal) / speed,
                   compressionRatio: bytesWritten > 0 ? (1 - bytesWritten / bytesProcessedTotal) * 100 : 0,
                   phase: 'compressing',
@@ -480,7 +464,9 @@ export function useCompression() {
           } else {
             // Small file - read and compress whole thing
             const fileData = new Uint8Array(await file.arrayBuffer());
+            if (jobIdRef.current !== jobId) throw new Error('Operation cancelled');
             const result = await engineRef.current!.compress(fileData, `file_${i}`);
+            if (jobIdRef.current !== jobId) throw new Error('Operation cancelled');
             if (!result.success || !result.data) throw new Error(result.error || `Failed to compress ${file.name}`);
             
             if (result.success && result.data) {
@@ -504,7 +490,7 @@ export function useCompression() {
           if (filesProcessed % 50 === 0 || now - lastProgressUpdate >= PROGRESS_UPDATE_INTERVAL) {
             lastProgressUpdate = now;
             const elapsed = (now - startTime) / 1000;
-            const speed = bytesWritten / elapsed;
+            const speed = bytesWritten / Math.max(0.001, elapsed);
             const bytesProcessedTotal = filesProcessed * (totalSize / files.length);
             const remaining = files.length - filesProcessed;
             const eta = remaining * (elapsed / filesProcessed);
@@ -514,7 +500,7 @@ export function useCompression() {
               totalBytes: totalSize,
               chunksProcessed: filesProcessed,
               totalChunks: files.length,
-              speed: speed / 1024 / 1024,
+              speed,
               eta,
               compressionRatio: bytesWritten > 0 ? (1 - bytesWritten / bytesProcessedTotal) * 100 : 0,
               phase: 'compressing',
@@ -531,6 +517,7 @@ export function useCompression() {
         }
       }
 
+      if (jobIdRef.current !== jobId) throw new Error('Operation cancelled');
       // Write footer
       const footer = new TextEncoder().encode('SPK_END');
       await writable.write(footer);
@@ -548,6 +535,7 @@ export function useCompression() {
         duration,
         speedMbps: ((totalSize / 1024 / 1024) / (duration / 1000)) * 8,
         outputName: `${archiveName}.spk`,
+        fileCount: files.length,
         downloadUrl: '',
       };
       
@@ -636,6 +624,7 @@ export function useCompression() {
         const file = files[j];
         try {
           const data = new Uint8Array(await file.arrayBuffer());
+          if (jobIdRef.current !== jobId) throw new Error('Operation cancelled');
           blobParts.push(data);
           totalBytesRead += data.length;
           filesProcessed++;
@@ -651,8 +640,8 @@ export function useCompression() {
         totalBytes: totalSize,
         chunksProcessed: filesProcessed,
         totalChunks: files.length,
-        speed: totalBytesRead / elapsed / 1024 / 1024,
-        eta: (totalSize - totalBytesRead) / (totalBytesRead / elapsed),
+        speed: totalBytesRead / Math.max(0.001, elapsed),
+        eta: totalBytesRead ? (totalSize - totalBytesRead) / (totalBytesRead / Math.max(0.001, elapsed)) : 0,
         compressionRatio: 0,
         phase: 'reading',
       });
@@ -660,6 +649,7 @@ export function useCompression() {
       await new Promise(r => setTimeout(r, 5)); // Yield
     }
 
+    if (jobIdRef.current !== jobId) return;
     // Create container blob
     const containerBlob = new Blob(blobParts, { type: 'application/octet-stream' });
     blobParts.length = 0; // Free memory
@@ -677,6 +667,7 @@ export function useCompression() {
     });
 
     const containerData = new Uint8Array(await containerBlob.arrayBuffer());
+    if (jobIdRef.current !== jobId) return;
     const result = await engineRef.current!.compress(containerData, `${archiveName}.spk`);
     if (jobIdRef.current !== jobId) return;
 
@@ -694,7 +685,6 @@ export function useCompression() {
     }
     
     const url = URL.createObjectURL(blob);
-    if (downloadUrlRef.current) URL.revokeObjectURL(downloadUrlRef.current);
     downloadUrlRef.current = url;
     
     completeOperation();
@@ -705,6 +695,7 @@ export function useCompression() {
       duration: result.duration,
       speedMbps: ((totalSize / 1024 / 1024) / (Math.max(1, result.duration) / 1000)) * 8,
       outputName: `${archiveName}.spk`,
+      fileCount: files.length,
       downloadUrl: url,
     });
 
@@ -737,18 +728,16 @@ export function useCompression() {
   const cancel = useCallback(() => {
     if (engineRef.current) {
       engineRef.current.abort();
+      engineRef.current = prepareEngine();
       console.log('[useCompression] Compression aborted by user');
     }
     jobIdRef.current = null;
     resetOperation();
-  }, [resetOperation]);
+  }, [resetOperation, prepareEngine]);
 
   // Reset state
   const reset = useCallback(() => {
-    if (downloadUrlRef.current) {
-      URL.revokeObjectURL(downloadUrlRef.current);
-      downloadUrlRef.current = null;
-    }
+    downloadUrlRef.current = null;
     jobIdRef.current = null;
     resetOperation();
   }, [resetOperation]);

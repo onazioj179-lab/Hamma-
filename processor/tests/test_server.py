@@ -66,6 +66,32 @@ class ServerTests(unittest.TestCase):
             function()
         self.assertEqual(raised.exception.code, status, raised.exception.read().decode())
 
+    def test_restart_preparation_is_instance_bound_and_keeps_queued_jobs_intact(self):
+        queued = self.job()
+        self.assert_status(409, lambda: self.call("/prepare-restart", method="POST", headers={"X-Hamma-Instance": "wrong"}))
+        self.assertEqual(self.service.restart_until, 0)
+        self.service.running["busy"] = ()
+        try:
+            self.assert_status(409, lambda: self.call("/prepare-restart", method="POST", headers={"X-Hamma-Instance": self.service.instance_id}))
+        finally:
+            self.service.running.pop("busy")
+        prepared = self.call("/prepare-restart", method="POST", headers={"X-Hamma-Instance": self.service.instance_id})
+        self.assertTrue(prepared["ready"])
+        self.service.tick()
+        self.assertEqual(self.call("/jobs/" + queued["id"])["state"], "queued")
+        self.assertEqual(len(self.service.running), 0)
+
+    def test_health_identifies_live_instance_without_file_metadata(self):
+        first = self.call("/health")
+        second = self.call("/health")
+        self.assertEqual(first["instance"], second["instance"])
+        self.assertEqual(first["pid"], os.getpid())
+        self.assertEqual(first["activeJobs"], 0)
+        self.assertEqual(first["processing"], "local")
+        self.assertRegex(first["revision"], r"^[0-9a-f]{64}:[0-9a-f]{64}$")
+        self.assertNotIn(str(self.service.store.root), json.dumps(first))
+        self.assertNotIn("files", first)
+
     def test_resumable_chunks_real_job_hash_download_and_ranges(self):
         source = self.upload(b"Real content" * 100, split=True)
         job = self.execute(self.job(source))

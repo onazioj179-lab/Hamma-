@@ -11,23 +11,31 @@ export function LocalOverview({ device, onHistory }: {
   onHistory: () => void;
 }) {
   const recent = useAppStore(state => state.recentArchives);
+  const outputs = useAppStore(state => state.sessionOutputs);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [status, setStatus] = useState<'loading' | 'ready' | 'offline'>('loading');
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let disposed = false;
+    const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     const refresh = async () => {
       try {
-        const records = await loadJobs();
+        const records = await loadJobs(controller.signal);
         if (!disposed) { setJobs(records); setStatus('ready'); }
       } catch { if (!disposed) setStatus('offline'); }
       if (!disposed) timer = setTimeout(refresh, 10000);
     };
     void refresh();
-    return () => { disposed = true; clearTimeout(timer); };
+    return () => { disposed = true; controller.abort(); clearTimeout(timer); };
   }, [attempt]);
-  const all = combineActivity(jobs, recent);
+  useEffect(() => {
+    const changed = (event: Event) => { setJobs((event as CustomEvent<Job[]>).detail); setStatus('ready'); };
+    const connection = (event: Event) => { const value = (event as CustomEvent<string>).detail; if (value === 'offline') setStatus('offline'); };
+    window.addEventListener('hamma-jobs-updated', changed); window.addEventListener('hamma-processor-status', connection);
+    return () => { window.removeEventListener('hamma-jobs-updated', changed); window.removeEventListener('hamma-processor-status', connection); };
+  }, []);
+  const all = combineActivity(jobs, recent, outputs);
   const completed = all.filter(job => job.state === 'completed');
   const compressions = completed.filter(job => job.operation === 'compress' && job.outputSize !== null);
   const input = compressions.reduce((sum, job) => sum + job.inputSize, 0);
@@ -55,7 +63,7 @@ export function LocalOverview({ device, onHistory }: {
       <section className="surface settings-group"><div className="section-heading"><h2>Workspace status</h2><p>{status === 'ready' ? 'Processor connected' : status === 'offline' ? 'Processor disconnected' : 'Connecting to processor'}</p></div><dl className="overview-status"><dt>In progress</dt><dd>{active}</dd><dt>Needs attention</dt><dd>{failed}</dd><dt>Browser engine</dt><dd>{device ? `${device.platform} · ${device.cores} processors` : 'Initializing'}</dd></dl><p className="footnote">History belongs to this browser session. Shared links let each person work with their own files.</p></section>
     </div>
     <section className="surface settings-group"><div className="section-line"><h2>Recent activity</h2><button className="text-button" onClick={onHistory}>See all <ArrowRight size={14} /></button></div>{latest.length ? <div className="overview-recent">{latest.map(job => <button key={job.id} onClick={onHistory}><span className={`operation-tag tag-${job.operation}`}>{job.operation}</span><span><strong>{job.outputName || job.name}</strong><small>{new Date(job.created * 1000).toLocaleString()}</small></span><span className={`file-state state-${job.state}`}>{job.state}</span></button>)}</div> : <p className="footnote">Add files in Workspace to start your first operation.</p>}</section>
-    <p className="footnote">Totals cover retained session jobs and up to 20 browser SPK records. Savings count completed compressions only; extraction and conversion do not inflate them.</p>
+    <p className="footnote">Totals cover retained processor jobs, browser records, and visible SPK outputs in this session. Savings count completed compressions only; extraction and conversion do not inflate them.</p>
   </section>;
 }
 function Metric({ label, value, detail }: { label: string; value: string; detail: string }) {

@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { droppedSources, randomId, requestId, upload, type Source } from '../processing/client';
+import { droppedSources, randomId, requestId, upload, request, type Source } from '../processing/client';
 
 afterEach(() => vi.unstubAllGlobals());
 const response = (value: unknown, ok = true) => ({ ok, json: async () => value });
@@ -37,8 +37,8 @@ it('keeps an existing upload ID when resuming and honors cancellation', async ()
   vi.stubGlobal('fetch', fetch);
   const controller = new AbortController(); controller.abort();
   await expect(upload(source, controller.signal, () => {})).rejects.toThrow();
-  expect(fetch).toHaveBeenCalledOnce();
-  expect(fetch.mock.calls[0][0]).toBe('/api/process/uploads/existing');
+  expect(fetch).not.toHaveBeenCalled();
+  expect(source.upload).toBe('existing');
 });
 
 it('preserves empty folders in directory drops', async () => {
@@ -52,4 +52,35 @@ it('preserves empty folders in directory drops', async () => {
 it('rejects oversized drops instead of silently skipping files', async () => {
   const transfer = { items: [], files: [new File(['a'], 'a'), new File(['b'], 'b')] } as unknown as DataTransfer;
   await expect(droppedSources(transfer, 1)).rejects.toThrow('Nothing was added');
+});
+
+it('recreates an expired upload and sends the original bytes from the beginning', async () => {
+  const source: Source = { id: 'retry', upload: 'expired', file: new File(['123'], 'file.txt'), name: 'file.txt', size: 3, directory: false };
+  const fetch = vi.fn()
+    .mockResolvedValueOnce({ ok: false, status: 410, json: async () => ({ error: 'Expired' }) })
+    .mockResolvedValueOnce(response({ id: 'fresh' }))
+    .mockResolvedValueOnce(response({ offset: 0 }))
+    .mockResolvedValueOnce(response({ offset: 3 }));
+  vi.stubGlobal('fetch', fetch);
+  expect(await upload(source, new AbortController().signal, () => {})).toBe('fresh');
+  expect(source.upload).toBe('fresh');
+  expect(fetch.mock.calls[3][0]).toBe('/api/process/uploads/fresh');
+  expect(fetch.mock.calls[3][1].body.size).toBe(3);
+});
+it('times out a stalled processor and cleans up cancellation', async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+    init.signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+  })));
+  try {
+    const pending = request('/capabilities');
+    const failed = expect(pending).rejects.toThrow('took too long');
+    await vi.advanceTimersByTimeAsync(30001);
+    await failed;
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { vi.useRealTimers(); }
+});
+it('reports unreadable processor responses without displaying server HTML', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 502, json: async () => { throw new Error('<html>proxy failure</html>'); } })));
+  await expect(request('/jobs')).rejects.toThrow('unreadable response');
 });
