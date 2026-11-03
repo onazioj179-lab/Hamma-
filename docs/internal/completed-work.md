@@ -1,5 +1,9 @@
 # Completed authorized work
 
+## Worker recovery follow-up (2026-11-02)
+
+Worker creation/start failures now mark the affected job interrupted with retry guidance and a finish timestamp, then continue scheduling other jobs. Restart recovery removes unfinished output and expanded files even when a crash followed persistence of a failed/cancelled/interrupted state. Completed downloads and queued jobs survive recovery. Retry clears prior start/finish timestamps. Regression coverage verifies worker-start failures, successful retry, restart cleanup and completed-output checksums. Missing/incomplete input regression coverage also protects the repaired job intake validation.
+
 Implemented session-owned SPK output URLs, independent batch results, history visibility separate from file lifetime, deletion controls, operation/download filters, metadata durations/file counts, cancellation isolation, correct byte-per-second progress units, expired upload recreation, early abort and network deadlines, reconnect refresh, live processor status and Overview synchronization.
 
 Implemented launcher serialization, live-instance/process-start validation, processor code revision checking and local instance-bound restart preparation. Added focused regressions. No new engine language, index database, distributed system, analytics or product feature candidate was activated from the proposal list.

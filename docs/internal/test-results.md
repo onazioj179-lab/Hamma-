@@ -1,5 +1,13 @@
 # Test results
 
+## Worker recovery follow-up (2026-11-02)
+
+- Complete processor suite: 47 passed. Log: validation/reliability-processor-tests.log (ignored local artifact).
+- Focused worker-start failure regression passed after switching failure injection to Process.start; retry completes successfully.
+- Complete web suite: 415 passed, 23 browser-worker cases skipped. Native WASM tests used the existing fallback; native execution is not verified.
+- Production TypeScript/Vite build passed. Existing Browserslist data-age notice remains.
+- git diff --check passed. Real phone file-save completion and power-loss durability remain unverified.
+
 - npm run test:web: 28 files passed, 1 skipped; 411 tests passed, 23 skipped. Log: .hamma-data/final-web-tests.log (local, ignored).
 - python -m unittest discover -s processor/tests: 36 tests passed after repairing the restart scheduler gate. Log: .hamma-data/final-processor-tests.log (local, ignored).
 - npm run build: TypeScript/Vite production build passed; web/dist/index.html and bundled assets produced.
