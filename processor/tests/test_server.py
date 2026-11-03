@@ -333,6 +333,33 @@ class ServerTests(unittest.TestCase):
             time.sleep(.1)
         self.assertFalse(self.service.running)
 
+    def test_native_zstandard_jobs_use_existing_queue_downloads_and_extraction(self):
+        from processor.native import capability
+        if not capability():
+            self.skipTest('SHANTE C++ engine has not been built')
+        capabilities = self.call('/capabilities')
+        self.assertIn('zstd', capabilities['archives'])
+        self.assertEqual(capabilities['nativeEngine']['engine'], 'shante-core')
+        self.assertFalse(capabilities['nativeEngine']['gpuAcceleration'])
+        data = b'Native persistent queue fixture\n' * 500
+        job = self.job(self.upload(data, 'original.txt'), target='zstd')
+        self.service.tick()
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            current = self.call('/jobs/' + job['id'])
+            if current['state'] in ('completed', 'failed', 'interrupted'):
+                break
+            time.sleep(.1)
+        self.assertEqual(current['state'], 'completed', current)
+        packed = self.call(current['download'].removeprefix('/api/process'), raw=True)
+        self.assertEqual(hashlib.sha256(packed).hexdigest(), current['sha256'])
+        self.assertEqual(packed[:4], b'\x28\xb5\x2f\xfd')
+        source = self.upload(packed, 'original.txt.zstd')
+        restored = self.execute(self.job(source, operation='extract', target='zip'))
+        output = self.call(restored['download'].removeprefix('/api/process'), raw=True)
+        with zipfile.ZipFile(io.BytesIO(output)) as archive:
+            self.assertEqual(archive.read('original.txt'), data)
+
     def test_running_worker_cancellation_stays_final(self):
         job = self.job(self.upload(os.urandom(2 * 1024**2), name="cancel.bin"))
         self.service.tick()

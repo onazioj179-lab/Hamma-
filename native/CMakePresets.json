@@ -1,0 +1,9 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {"name": "release", "generator": "Ninja", "binaryDir": "${sourceDir}/build", "cacheVariables": {"CMAKE_BUILD_TYPE": "Release", "BUILD_TESTING": "ON"}},
+    {"name": "sanitize", "inherits": "release", "binaryDir": "${sourceDir}/build-sanitize", "cacheVariables": {"CMAKE_BUILD_TYPE": "Debug", "SHANTE_SANITIZERS": "ON"}}
+  ],
+  "buildPresets": [{"name": "release", "configurePreset": "release"}, {"name": "sanitize", "configurePreset": "sanitize"}],
+  "testPresets": [{"name": "release", "configurePreset": "release", "output": {"outputOnFailure": true}}, {"name": "sanitize", "configurePreset": "sanitize", "output": {"outputOnFailure": true}}]
+}

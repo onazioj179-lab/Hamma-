@@ -33,7 +33,7 @@ import time
 from urllib.parse import parse_qs, urlsplit, quote
 import zipfile
 
-from .engine import ARCHIVES, MEDIA, BLOCK, Context, ProcessingError, compress, convert, detect, extract, file_digest, safe_path
+from .engine import ARCHIVES, MEDIA, BLOCK, Context, ProcessingError, archive_formats, compress, convert, detect, extract, file_digest, safe_path
 
 LOG = logging.getLogger("hamma.processor")
 TERMINAL = ("completed", "failed", "cancelled", "interrupted")
@@ -520,7 +520,8 @@ def handler(service):
                 return self.send(200, {"version": 1, "processing": "local", "instance": service.instance_id,
                                        "pid": os.getpid(), "revision": PROCESSOR_REVISION, "activeJobs": running})
             if path == "/api/process/capabilities" and method == "GET":
-                return self.send(200, {"archives": ARCHIVES, "conversions": MEDIA if shutil.which("ffmpeg") and shutil.which("ffprobe") else [],
+                from .native import capability
+                return self.send(200, {"archives": archive_formats(), "nativeEngine": capability(), "conversions": MEDIA if shutil.which("ffmpeg") and shutil.which("ffprobe") else [],
                                        "limits": service.limits, "processing": "local", "version": 1})
             if path == "/api/process/settings":
                 if method == "GET":
@@ -615,7 +616,7 @@ def handler(service):
                 operation, target = body.get("operation"), body.get("target")
                 if not isinstance(ids, list) or not ids or len(ids) > service.limits["files"] or not all(isinstance(i, str) for i in ids) or len(set(ids)) != len(ids):
                     raise HTTPError(400, "Invalid file selection")
-                if (operation == "compress" and target not in ARCHIVES or operation == "extract" and target != "zip" or
+                if (operation == "compress" and target not in archive_formats() or operation == "extract" and target != "zip" or
                     operation == "convert" and target not in MEDIA or operation not in ("compress", "extract", "convert")):
                     raise HTTPError(400, "Unsupported operation")
                 if operation != "compress" and len(ids) != 1:
