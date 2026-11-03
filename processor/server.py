@@ -37,9 +37,11 @@ from .engine import ARCHIVES, MEDIA, BLOCK, Context, ProcessingError, archive_fo
 from .worker_limits import apply_worker_limits
 from .accounts import Accounts, AccountError, plan as account_plan
 from .catalog import FileCatalog
+from .capabilities import action_registry
 
 LOG = logging.getLogger("hamma.processor")
 TERMINAL = ("completed", "failed", "cancelled", "interrupted")
+
 ACTIVE = ("queued", "processing", "verifying")
 PROCESSOR_REVISION = ":".join(hashlib.sha256(path.read_bytes()).hexdigest() for path in
                               sorted(Path(__file__).parent.glob("*.py"), key=lambda path: path.name))
@@ -804,7 +806,7 @@ def handler(service):
                                        "pid": os.getpid(), "revision": PROCESSOR_REVISION, "activeJobs": running})
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
-                return self.send(200, {"archives": archive_formats(), "nativeEngine": capability(), "conversions": MEDIA if shutil.which("ffmpeg") and shutil.which("ffprobe") else [],
+                return self.send(200, {"archives": archive_formats(), "nativeEngine": capability(), "actionRegistry": action_registry(), "conversions": MEDIA if shutil.which("ffmpeg") and shutil.which("ffprobe") else [],
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
             if path == "/api/process/settings":
                 if method == "GET":
