@@ -1,0 +1,21 @@
+name: Web application
+on:
+  pull_request:
+    paths: ['web/**', 'package.json', 'package-lock.json', '.github/workflows/web.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=low
+      - run: npm run typecheck
+      - run: npm run test:web
+      - run: npm run build

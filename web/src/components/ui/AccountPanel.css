@@ -1,0 +1,13 @@
+.account-panel { max-width: 800px; margin: 0 auto; display: grid; gap: 20px; }
+.account-panel h1 { margin: 0 0 10px; }
+.account-panel h2 { font-size: 18px; margin: 0 0 12px; }
+.account-panel p { line-height: 1.6; }
+.account-card { border: 1px solid rgb(var(--border)); border-radius: 12px; padding: 22px; background: rgb(var(--card)); }
+.account-form { display: grid; gap: 16px; max-width: 520px; }
+.account-form label { display: grid; gap: 8px; }
+.account-form input { min-height: 44px; width: 100%; box-sizing: border-box; border-radius: 6px; border: 1px solid rgb(var(--border)); background: rgb(var(--background)); color: inherit; padding: 10px; font: inherit; }
+.account-panel button { min-height: 44px; }
+.account-limits { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.account-limits div { display: grid; gap: 5px; }
+.account-limits dd { margin: 0; font-weight: 600; }
+@media(max-width: 540px) { .account-card { padding: 16px; } .account-limits { grid-template-columns: 1fr; } }

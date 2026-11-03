@@ -53,6 +53,16 @@ class ServerTests(unittest.TestCase):
                     self.assertIn("error", json.loads(caught.exception.read()))
         self.assertIn("id", self.upload())
 
+    def test_conversion_quality_is_enforced_before_queueing_and_bound_to_request_identity(self):
+        source = self.upload()
+        self.assert_status(400, lambda: self.job(source, operation='convert', target='mp3'))
+        self.assertEqual(self.call('/jobs')['total'], 0)
+        accepted = self.job(source, operation='convert', target='mp3', qualityMode='lossy', metadataPolicy='strip', requestId='d' * 64)
+        self.assertEqual(accepted['qualityMode'], 'lossy')
+        self.assertEqual(accepted['metadataPolicy'], 'strip')
+        self.assert_status(409, lambda: self.job(source, operation='convert', target='mp3', qualityMode='lossy', metadataPolicy='preserve', requestId='d' * 64))
+        self.assert_status(400, lambda: self.job(source, operation='convert', target='wav', metadataPolicy='invalid'))
+
     def upload(self, data=b"test data", name="nested/世界.txt", split=False):
         record = self.call("/uploads", {"name": name, "size": len(data)}, "POST")
         if split:
@@ -136,7 +146,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(first["pid"], os.getpid())
         self.assertEqual(first["activeJobs"], 0)
         self.assertEqual(first["processing"], "local")
-        self.assertRegex(first["revision"], r"^[0-9a-f]{64}:[0-9a-f]{64}$")
+        self.assertRegex(first["revision"], r"^[0-9a-f]{64}(:[0-9a-f]{64})+$")
         self.assertNotIn(str(self.service.store.root), json.dumps(first))
         self.assertNotIn("files", first)
 

@@ -4,11 +4,12 @@ export interface Capability {
   conversions: string[];
   processing: 'local';
   limits: { input: number; expanded: number; files: number; seconds: number };
+  plan?: { historyRecords: number };
 }
 export interface Job {
   id: string; name: string; operation: 'compress' | 'extract' | 'convert'; target: string;
   state: string; inputSize: number; outputSize: number | null; processed: number;
-  created: number; duration?: number; error?: string; entries: number;
+  created: number; finished?: number | null; duration?: number; error?: string; entries: number; hidden?: boolean;
   download?: string; downloadAvailable: boolean; outputName?: string;
   fileExpires: number; historyExpires: number | null; fileCount: number; format: string;
   expanded?: number; mediaSeconds?: number; track?: number; tracks?: number;

@@ -57,6 +57,7 @@ afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 const button = (name: string) =>
   Array.from(host.querySelectorAll('button')).find(
@@ -72,6 +73,16 @@ it('keeps the real result available across navigation without requiring an accou
   await act(async () => button('Overview').click());
   expect(host.textContent).toContain('0 B');
   expect(host.textContent).not.toContain('Local performance learning');
+});
+
+it('opens real account controls while retaining browser outputs across navigation', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ authenticated: false, credentialsAllowed: true, account: null, billingEnabled: false, plan: { tier: 'guest', historyRecords: 500, maxQueuedJobs: 100, maxConcurrentJobs: 1, maxUploadFiles: 5000, maxInputBytes: 1e9, maxStorageBytes: 1e10 } }) })));
+  await act(async () => button('Account').click());
+  expect(host.querySelector('#account-title')?.textContent).toBe('Account');
+  expect(host.textContent).toContain('Guest workspace');
+  expect(host.querySelector('input[autocomplete="current-password"]')).not.toBeNull();
+  await act(async () => button('Files & History').click());
+  expect(host.querySelector('a[download="real.spk"]')?.getAttribute('href')).toBe('blob:current');
 });
 it('opens the persistent settings panel and honors privacy controls', async () => {
   await act(async () => button('Settings').click());

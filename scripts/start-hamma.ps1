@@ -28,7 +28,8 @@ try {
   $addresses = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {
     $_.AddressState -eq 'Preferred' -and $_.IPAddress -match '^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)'
   } | Select-Object -ExpandProperty IPAddress -Unique | Sort-Object)
-  $revision = (@(Get-FileHash -Algorithm SHA256 -LiteralPath 'processor/server.py','processor/engine.py') | ForEach-Object { $_.Hash.ToLowerInvariant() }) -join ':'
+  $revision = & $python -c 'from processor.server import PROCESSOR_REVISION; print(PROCESSOR_REVISION)'
+  if ($LASTEXITCODE -ne 0 -or $revision -notmatch '^[0-9a-f]{64}(:[0-9a-f]{64})+$') { throw 'Processor revision check failed.' }
   $manifestPath = Join-Path $workspace '.hamma-data/launcher.json'
   $localUrl = "http://127.0.0.1:$Port"
   $health = $null

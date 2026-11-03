@@ -2,6 +2,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import * as processingClient from '../processing/client';
+import { changeAccount } from '../processing/account';
 import { useAppStore } from '../store/app';
 import { UniversalWorkspace } from '../components/workspace/UniversalWorkspace';
 
@@ -13,19 +14,53 @@ let fetchMock: ReturnType<typeof vi.fn>;
 const caps = { archives: ['zip', 'gzip'], conversions: ['wav', 'png'], processing: 'local', version: 1, limits: { input: 1e9, expanded: 1e9, files: 5000 } };
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  useAppStore.setState({ sessionOutputs: {}, recentArchives: [], result: null });
+  useAppStore.setState({ sessionOutputs: {}, recentArchives: [], history: [], result: null });
   host = document.createElement('div'); document.body.append(host); root = createRoot(host);
-  fetchMock = vi.fn(async (url: string) => ({ ok: true, json: async () => url.endsWith('/capabilities') ? caps : url.endsWith('/settings') ? { fileRetention: '24h', historyRetention: '30d' } : { jobs: [], total: 0 } }));
+  fetchMock = vi.fn(async (url: string) => ({ ok: true, json: async () => url.endsWith('/capabilities') ? caps : url.endsWith('/settings') ? { fileRetention: '24h', historyRetention: '30d' } : url.endsWith('/deletion-preview') ? { historyRecords: 2, inputFiles: 3, outputFiles: 1, activeJobs: 0, historyToken: 'history-snapshot', filesToken: 'files-snapshot' } : { jobs: [], total: 0 } }));
   vi.stubGlobal('fetch', fetchMock);
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 const render = async (screen: 'workspace' | 'history' | 'files' = 'workspace') => { await act(async () => root.render(<UniversalWorkspace visible screen={screen} onHistory={() => {}} />)); };
 const button = (text: string) => Array.from(host.querySelectorAll('button')).find(b => b.textContent?.trim() === text)!;
+const confirmButton = (text: string) => Array.from(document.querySelectorAll<HTMLButtonElement>('[role=alertdialog] button')).find(b => b.textContent?.trim() === text)!;
 const select = async (files: File[]) => {
   const input = host.querySelector<HTMLInputElement>('input[aria-label="Add files to queue"]')!;
   Object.defineProperty(input, 'files', { value: files, configurable: true });
   await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })));
 };
+
+it('clears previous-owner jobs before auth resolves while preserving selected files', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  let finish!: (value: unknown) => void;
+  let member = false;
+  fetchMock.mockImplementation(async (url: string) => {
+    if (url.endsWith('/account/login')) return new Promise(resolve => { finish = resolve; });
+    if (url.includes('/jobs?')) return { ok: true, json: async () => ({ total: member ? 0 : 1, jobs: member ? [] : [{ id: 'guest-only', name: 'guest-private.zip', state: 'completed', operation: 'compress', target: 'zip', inputSize: 10, outputSize: 5, created: 1, fileExpires: 2, fileCount: 1, format: 'zip', downloadAvailable: false }] }) };
+    return initial(url);
+  });
+  await render('history');
+  expect(host.textContent).toContain('guest-private.zip');
+  await render(); await select([new File(['keep'], 'keep-selected.txt')]);
+  vi.spyOn(processingClient, 'upload').mockImplementation(async source => { source.upload = 'guest-upload'; throw new Error('Upload interrupted'); });
+  await act(async () => button('Compress').click());
+  let transition!: Promise<unknown>;
+  await act(async () => { transition = changeAccount('login', { username: 'alice', password: 'valid-password' }); });
+  await render('history'); expect(host.textContent).not.toContain('guest-private.zip');
+  member = true;
+  await act(async () => { finish({ ok: true, json: async () => ({}) }); await transition; });
+  await render();
+  expect(host.textContent).toContain('keep-selected.txt');
+  expect(host.textContent).toContain('1 selected');
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Remove selected files"]')!.click());
+  expect(document.querySelector('[role=alertdialog]')).toBeNull();
+  expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/uploads/guest-upload') && init?.method === 'DELETE')).toBe(false);
+});
+
+it('blocks account changes during foreground SPK processing', async () => {
+  await act(async () => root.render(<UniversalWorkspace visible screen="workspace" spkBusy onHistory={() => {}} />));
+  await expect(changeAccount('logout', {})).rejects.toThrow('Finish the current upload');
+  expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/account/'))).toBe(false);
+});
 
 it('adds files without processing them until a direct action and virtualizes large selections', async () => {
   await render();
@@ -51,6 +86,7 @@ it('renders a new selection after removing a scrolled 5000-file batch', async ()
   await act(async () => scroller.dispatchEvent(new Event('scroll', { bubbles: true })));
   expect(host.querySelectorAll('.source-row').length).toBeLessThanOrEqual(14);
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Remove selected files"]')!.click());
+  expect(document.querySelector('[role=alertdialog]')).toBeNull();
   await select([new File(['new'], 'visible-after-stress.txt')]);
   expect(host.querySelector('.source-row')?.textContent).toContain('visible-after-stress.txt');
 });
@@ -70,8 +106,13 @@ it('keeps file deletion distinct from history deletion and exposes retention cho
   expect(document.querySelectorAll('[role=listbox] [role=option]')).toHaveLength(4);
   await act(async () => host.querySelector<HTMLButtonElement>('[role=combobox][aria-label="History retention"]')!.click());
   await act(async () => button('Clear history').click());
+  expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
+  expect(document.querySelector('[role=alertdialog]')?.textContent).toContain('2 processor history records');
+  await act(async () => confirmButton('Clear history').click());
   expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/history') && init.method === 'DELETE')).toBe(true);
   await act(async () => button('Delete all files').click());
+  expect(document.querySelector('[role=alertdialog]')?.textContent).toContain('3 uploaded items');
+  await act(async () => confirmButton('Delete files').click());
   expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/files') && init.method === 'DELETE')).toBe(true);
 });
 
@@ -199,4 +240,145 @@ it('bounds rendered history rows while paging and searching 500 retained jobs', 
   await act(async () => search.dispatchEvent(new Event('input', { bubbles: true })));
   expect(host.querySelectorAll('.processing-job')).toHaveLength(1);
   expect(host.querySelector('.processing-job')?.textContent).toContain('history-stress-499.zip');
+});
+
+it('deletes only the selected operations captured by a confirmed bulk action', async () => {
+  const records = ['one', 'two', 'later'].map(id => ({ id, name: id + '.zip', state: 'completed', operation: 'compress', target: 'zip', inputSize: 100, outputSize: 50, created: 1, finished: 2, fileExpires: 3, fileCount: 1, format: 'zip', downloadAvailable: true }));
+  fetchMock.mockImplementation(async (url: string) => ({ ok: true, json: async () => url.endsWith('/capabilities') ? caps : url.endsWith('/settings') ? { fileRetention: '24h', historyRetention: '30d' } : { jobs: records, total: records.length } }));
+  await render('history');
+  for (const name of ['one.zip', 'two.zip']) await act(async () => host.querySelector<HTMLInputElement>(`[aria-label="Select job ${name}"]`)!.click());
+  await act(async () => button('Delete files').click());
+  expect(document.querySelector('[role=alertdialog]')?.textContent).toContain('2 selected operations');
+  expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
+  // Simulate a later state change; confirmation must retain its reviewed IDs.
+  await act(async () => host.querySelector<HTMLInputElement>('[aria-label="Select job later.zip"]')!.click());
+  await act(async () => confirmButton('Delete files').click());
+  const deleted = fetchMock.mock.calls.filter(([, init]) => init?.method === 'DELETE').map(([url]) => url).sort();
+  expect(deleted).toEqual(['/api/process/jobs/one/files', '/api/process/jobs/two/files']);
+});
+
+it('uses deletion preview tokens and leaves browser files intact when the server selection changes', async () => {
+  Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
+  const entry = { id: 'local', fileName: 'local.txt', originalSize: 10, compressedSize: 5, ratio: .5, date: 1000, type: 'compress' as const, mode: 'auto' as const };
+  useAppStore.setState({ recentArchives: [entry], sessionOutputs: { local: { archive: entry, outputName: 'local.spk', downloadUrl: 'blob:local', savedToDevice: false } } });
+  const initial = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/files') && init?.method === 'DELETE') return { ok: false, status: 409, json: async () => ({ error: 'Selection changed. Review again.' }) };
+    return initial(url, init);
+  });
+  await render('history');
+  await act(async () => button('Delete all files').click());
+  expect(document.querySelector('[role=alertdialog]')?.textContent).toContain('1 temporary browser download');
+  await act(async () => confirmButton('Cancel').click());
+  expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
+  await act(async () => button('Delete all files').click());
+  await act(async () => confirmButton('Delete files').click());
+  const deletion = fetchMock.mock.calls.find(([url, init]) => url.endsWith('/files') && init?.method === 'DELETE')!;
+  expect(deletion[1].headers['X-Hamma-Deletion-Token']).toBe('files-snapshot');
+  expect(host.querySelector('[role=alert]')?.textContent).toContain('Selection changed');
+  expect(useAppStore.getState().sessionOutputs.local.downloadUrl).toBe('blob:local');
+  expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+});
+
+it('fails closed if an accurate server deletion preview is unavailable', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string) => {
+    if (url.endsWith('/deletion-preview')) throw new Error('Preview unavailable');
+    return initial(url);
+  });
+  await render('history');
+  await act(async () => button('Delete all files').click());
+  expect(document.querySelector('[role=alertdialog]')).toBeNull();
+  expect(host.querySelector('[role=alert]')?.textContent).toContain('Preview unavailable');
+  expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
+});
+
+it('requires explicit lossy consent and sends quality and metadata choices with the job identity', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities') ? { ok: true, json: async () => ({ ...caps, conversions: ['wav', 'png', 'mp3'] }) } : initial(url));
+  const upload = vi.spyOn(processingClient, 'upload').mockResolvedValue('uploaded');
+  const key = vi.spyOn(processingClient, 'requestId').mockResolvedValue('quality-request');
+  const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({ id: 'quality-job' });
+  await render(); await select([new File(['fixture'], 'music.wav')]);
+  const chooseOption = async (name: string, optionText: string) => {
+    await act(async () => host.querySelector<HTMLButtonElement>(`[aria-label="${name}"]`)!.click());
+    const option = [...document.querySelectorAll<HTMLElement>('[role=option]')].find(item => item.textContent === optionText)!;
+    await act(async () => option.click());
+  };
+  await chooseOption('Conversion format', 'mp3');
+  await act(async () => button('Convert').click());
+  expect(host.querySelector('[role=alert]')?.textContent).toContain('Choose Allow quality loss');
+  expect(upload).not.toHaveBeenCalled(); expect(submit).not.toHaveBeenCalled();
+  await chooseOption('Conversion quality', 'Allow quality loss');
+  await chooseOption('Conversion metadata', 'Preserve supported tags');
+  await act(async () => button('Convert').click());
+  expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({ operation: 'convert', target: 'mp3', qualityMode: 'lossy', metadataPolicy: 'preserve', requestId: 'quality-request' }), 'POST', { signal: expect.any(AbortSignal) });
+  expect(key).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ qualityMode: 'lossy', metadataPolicy: 'preserve' })]));
+});
+
+it('cancels a deletion preview when the user leaves the processing page', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  let aborted = false;
+  fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+    if (url.endsWith('/deletion-preview')) return new Promise((_resolve, reject) => {
+      init!.signal!.addEventListener('abort', () => { aborted = true; reject(new DOMException('Aborted', 'AbortError')); }, { once: true });
+    });
+    return initial(url, init);
+  });
+  await render('history');
+  await act(async () => button('Delete all files').click());
+  await act(async () => root.render(<UniversalWorkspace visible={false} screen="history" onHistory={() => {}} />));
+  expect(aborted).toBe(true);
+  expect(document.querySelector('[role=alertdialog]')).toBeNull();
+  expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
+});
+
+it('confirms removal of an uploaded selection and preserves it when cancellation is chosen', async () => {
+  vi.spyOn(processingClient, 'upload').mockImplementation(async source => { source.upload = 'partial-upload'; throw new Error('Upload interrupted'); });
+  await render(); await select([new File(['original'], 'resume.txt')]);
+  await act(async () => button('Compress').click());
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Remove selected files"]')!.click());
+  expect(document.querySelector('[role=alertdialog]')?.textContent).toContain('1 uploaded item');
+  expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
+  await act(async () => confirmButton('Cancel').click());
+  expect(host.querySelector('.source-row')?.textContent).toContain('resume.txt');
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Remove selected files"]')!.click());
+  const confirm = confirmButton('Remove selected');
+  await act(async () => { confirm.click(); confirm.click(); });
+  expect(fetchMock.mock.calls.filter(([url, init]) => url.endsWith('/uploads/partial-upload') && init?.method === 'DELETE')).toHaveLength(1);
+  expect(host.querySelector('.source-row')).toBeNull();
+});
+
+it('does not show a fabricated completion date for a retried job with a null finish time', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string) => url.includes('/jobs?') ? { ok: true, json: async () => ({ total: 1, jobs: [{ id: 'retry-date', name: 'retry.txt', state: 'queued', operation: 'compress', target: 'zip', inputSize: 5, outputSize: null, created: 100, finished: null, fileExpires: 200, fileCount: 1, format: 'file', downloadAvailable: false }] }) } : initial(url));
+  await render('history');
+  const finished = [...host.querySelectorAll('dt')].find(term => term.textContent === 'Finished')!;
+  expect(finished.nextElementSibling?.textContent).toBe('—');
+});
+
+it('keeps a hidden processor output discoverable through Available downloads after history is cleared', async () => {
+  let hidden = false;
+  const record = { id: 'retained-output', name: 'retained.txt', outputName: 'retained.zip', operation: 'compress', target: 'zip', state: 'completed', inputSize: 100, outputSize: 50, created: 1, finished: 2, fileExpires: 10000, fileCount: 1, format: 'zip', downloadAvailable: true, download: '/retained-download' };
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/history') && init?.method === 'DELETE') { hidden = true; return { ok: true, json: async () => ({ deleted: true }) }; }
+    const body = url.endsWith('/capabilities') ? caps : url.endsWith('/settings') ? { fileRetention: '24h', historyRetention: '30d' } : url.endsWith('/deletion-preview') ? { historyRecords: 1, inputFiles: 1, outputFiles: 1, activeJobs: 0, historyToken: 'history-snapshot', filesToken: 'files-snapshot' } : { jobs: hidden && !url.includes('includeHiddenDownloads=1') ? [] : [{ ...record, hidden }], total: hidden && !url.includes('includeHiddenDownloads=1') ? 0 : 1 };
+    return { ok: true, json: async () => body };
+  });
+  const counts: number[] = [];
+  const count = (event: Event) => counts.push((event as CustomEvent<number>).detail);
+  window.addEventListener('hamma-job-count', count);
+  try {
+    await render('history');
+    expect(host.querySelectorAll('.processing-job')).toHaveLength(1);
+    await act(async () => button('Clear history').click());
+    await act(async () => confirmButton('Clear history').click());
+    expect(host.querySelectorAll('.processing-job')).toHaveLength(0);
+    expect(counts[counts.length - 1]).toBe(0);
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Filter by operation"]')!.click());
+    const available = [...document.querySelectorAll<HTMLElement>('[role=option]')].find(option => option.textContent === 'Available downloads')!;
+    await act(async () => available.click());
+    expect(host.querySelectorAll('.processing-job')).toHaveLength(1);
+    expect(host.querySelector('[aria-label="Download retained.zip"]')).not.toBeNull();
+  } finally { window.removeEventListener('hamma-job-count', count); }
 });

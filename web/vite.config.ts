@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src'),
+      '@': path.resolve(import.meta.dirname, './src'),
     },
   },
   build: {
@@ -15,8 +15,8 @@ export default defineConfig({
     target: 'esnext',
     rollupOptions: {
       output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom', 'zustand', 'framer-motion'],
+        manualChunks(id) {
+          if (/[\\/]node_modules[\\/](react|react-dom|zustand|framer-motion)[\\/]/.test(id)) return 'vendor';
         },
       },
     },
@@ -24,9 +24,9 @@ export default defineConfig({
   server: {
     port: 5009,
     strictPort: true,
-    host: '0.0.0.0',
+    host: '127.0.0.1',
     open: false,
-    cors: true,
+    cors: false,
     proxy: {
       '/api/process': { target: 'http://127.0.0.1:5010', changeOrigin: false },
       '/api': { target: process.env.SPK_API_TARGET || 'http://127.0.0.1:3000', changeOrigin: true },

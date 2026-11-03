@@ -35,12 +35,14 @@ import zipfile
 
 from .engine import ARCHIVES, MEDIA, BLOCK, Context, ProcessingError, archive_formats, compress, convert, detect, extract, file_digest, safe_path
 from .worker_limits import apply_worker_limits
+from .accounts import Accounts, AccountError, plan as account_plan
+from .catalog import FileCatalog
 
 LOG = logging.getLogger("hamma.processor")
 TERMINAL = ("completed", "failed", "cancelled", "interrupted")
 ACTIVE = ("queued", "processing", "verifying")
 PROCESSOR_REVISION = ":".join(hashlib.sha256(path.read_bytes()).hexdigest() for path in
-                              (Path(__file__), Path(__file__).with_name("engine.py")))
+                              sorted(Path(__file__).parent.glob("*.py"), key=lambda path: path.name))
 RETENTION = {"24h": 86400, "7d": 604800, "30d": 2592000, "never": None}
 
 
@@ -63,11 +65,28 @@ class Store:
                 db.execute("INSERT INTO records SELECT * FROM legacy_records")
                 db.execute("DROP TABLE legacy_records")
             db.execute("CREATE INDEX IF NOT EXISTS records_owner ON records(owner,kind,created DESC)")
+            db.execute("CREATE INDEX IF NOT EXISTS records_kind_created ON records(kind,created,id,owner)")
+            db.execute("CREATE INDEX IF NOT EXISTS records_visible ON records(owner,kind,coalesce(json_extract(data,'$.hidden'),0),created DESC)")
+            db.execute("CREATE INDEX IF NOT EXISTS records_state ON records(kind,json_extract(data,'$.state'),created,id,owner)")
+            db.execute("CREATE INDEX IF NOT EXISTS records_owner_state ON records(owner,kind,json_extract(data,'$.state'))")
+            db.execute("CREATE INDEX IF NOT EXISTS records_upload_bytes ON records(kind,json_extract(data,'$.size'))")
+            db.execute("CREATE INDEX IF NOT EXISTS records_output_bytes ON records(kind,json_extract(data,'$.downloadAvailable'),json_extract(data,'$.outputSize'))")
+            db.execute("CREATE INDEX IF NOT EXISTS records_expiry ON records(kind,json_extract(data,'$.expires'))")
+            db.execute("CREATE INDEX IF NOT EXISTS records_file_expiry ON records(kind,json_extract(data,'$.fileExpires'))")
+            db.execute("CREATE INDEX IF NOT EXISTS records_history_expiry ON records(kind,json_extract(data,'$.historyExpires'))")
+            db.execute("CREATE INDEX IF NOT EXISTS records_owner_download_expiry ON records(owner,kind,json_extract(data,'$.downloadAvailable'),json_extract(data,'$.fileExpires'),created DESC)")
+            db.execute("CREATE TABLE IF NOT EXISTS job_inputs (owner TEXT NOT NULL, job_id TEXT NOT NULL, upload_id TEXT NOT NULL, PRIMARY KEY(owner,job_id,upload_id))")
+            db.execute("CREATE INDEX IF NOT EXISTS job_inputs_upload ON job_inputs(owner,upload_id,job_id)")
+            db.execute("CREATE TABLE IF NOT EXISTS store_migrations (name TEXT PRIMARY KEY)")
+            if not db.execute("SELECT 1 FROM store_migrations WHERE name='job-inputs-v1'").fetchone():
+                db.execute("INSERT OR IGNORE INTO job_inputs SELECT records.owner,records.id,json_extract(member.value,'$.id') FROM records,json_each(records.data,'$.inputs') AS member WHERE records.kind='job' AND json_type(member.value,'$.id')='text'")
+                db.execute("INSERT INTO store_migrations VALUES ('job-inputs-v1')")
 
     @contextmanager
     def connect(self):
         db = sqlite3.connect(self.database, timeout=15)
         db.row_factory = sqlite3.Row
+        db.create_function("hamma_casefold", 1, lambda value: value.casefold() if isinstance(value, str) else "", deterministic=True)
         try:
             with db:
                 yield db
@@ -77,6 +96,13 @@ class Store:
     def put(self, owner, kind, record):
         with self.connect() as db:
             db.execute("INSERT OR REPLACE INTO records VALUES (?,?,?,?,?)", (record["id"], owner, kind, record["created"], json.dumps(record)))
+            if kind == "job":
+                self._sync_inputs(db, owner, record)
+
+    @staticmethod
+    def _sync_inputs(db, owner, record):
+        db.execute("DELETE FROM job_inputs WHERE owner=? AND job_id=?", (owner, record["id"]))
+        db.executemany("INSERT OR IGNORE INTO job_inputs VALUES (?,?,?)", [(owner, record["id"], item["id"]) for item in record.get("inputs", []) if isinstance(item, dict) and isinstance(item.get("id"), str)])
 
     def get(self, owner, kind, record_id):
         with self.connect() as db:
@@ -94,6 +120,8 @@ class Store:
                 return previous
             record = {**previous, **updates}
             db.execute("UPDATE records SET data=? WHERE id=? AND owner=? AND kind=?", (json.dumps(record), record_id, owner, kind))
+            if kind == "job" and "inputs" in updates:
+                self._sync_inputs(db, owner, record)
             return record
 
     def list(self, owner=None, kind="job"):
@@ -107,6 +135,133 @@ class Store:
     def delete(self, owner, record_id):
         with self.connect() as db:
             db.execute("DELETE FROM records WHERE owner=? AND id=?", (owner, record_id))
+            db.execute("DELETE FROM job_inputs WHERE owner=? AND job_id=?", (owner, record_id))
+
+    def count(self, owner=None, kind="job", states=None, visible=False):
+        where, parameters = ["kind=?"], [kind]
+        if owner is not None:
+            where.append("owner=?"); parameters.append(owner)
+        if states is not None:
+            if not states:
+                return 0
+            where.append("json_extract(data,'$.state') IN (" + ",".join("?" for _ in states) + ")")
+            parameters.extend(states)
+        if visible:
+            where.append("coalesce(json_extract(data,'$.hidden'),0)=0")
+        with self.connect() as db:
+            return db.execute("SELECT count(*) FROM records WHERE " + " AND ".join(where), parameters).fetchone()[0]
+
+    def history_page(self, owner, *, offset=0, limit=50, search="", state="", sort="newest", summary=False, include_hidden_downloads=False):
+        where, parameters = ["owner=?", "kind='job'"], [owner]
+        if include_hidden_downloads:
+            where.append("(coalesce(json_extract(data,'$.hidden'),0)=0 OR (json_extract(data,'$.downloadAvailable')=1 AND json_extract(data,'$.fileExpires')>?))")
+            parameters.append(time.time())
+        else:
+            where.append("coalesce(json_extract(data,'$.hidden'),0)=0")
+        if search:
+            where.append("instr(hamma_casefold(json_extract(data,'$.name')),?)>0")
+            parameters.append(search.casefold())
+        if state:
+            where.append("json_extract(data,'$.state')=?"); parameters.append(state)
+        ordering = {"oldest": "created ASC,id ASC", "name": "hamma_casefold(json_extract(data,'$.name')) ASC,created ASC,id ASC",
+                    "size": "json_extract(data,'$.inputSize') DESC,created DESC,id ASC"}.get(sort, "created DESC,id ASC")
+        condition = " AND ".join(where)
+        with self.connect() as db:
+            db.execute("BEGIN")
+            total = db.execute("SELECT count(*) FROM records WHERE " + condition, parameters).fetchone()[0]
+            projection = "json_remove(data,'$.inputs','$.manifest','$.outputFile','$.filesCleaned') AS data,json_array_length(data,'$.inputs') AS file_count" if summary else "data"
+            rows = db.execute("SELECT " + projection + " FROM records WHERE " + condition + " ORDER BY " + ordering + " LIMIT ? OFFSET ?",
+                              [*parameters, min(100, max(1, limit)), min(2**63 - 1, max(0, offset))]).fetchall()
+        records = [json.loads(row["data"]) for row in rows]
+        if summary:
+            for record, row in zip(records, rows):
+                record["fileCount"] = row["file_count"] or 0
+        return total, records
+
+    def trim_history(self, owner, limit=500):
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            visible = db.execute("SELECT count(*) FROM records WHERE owner=? AND kind='job' AND coalesce(json_extract(data,'$.hidden'),0)=0", (owner,)).fetchone()[0]
+            excess = max(0, visible - limit)
+            if not excess:
+                return 0
+            changed = db.execute("UPDATE records SET data=json_set(data,'$.hidden',json('true')) WHERE owner=? AND kind='job' AND id IN (SELECT id FROM records WHERE owner=? AND kind='job' AND coalesce(json_extract(data,'$.hidden'),0)=0 AND json_extract(data,'$.state') IN ('completed','failed','cancelled','interrupted') ORDER BY created,id LIMIT ?)", (owner, owner, excess)).rowcount
+        return changed
+
+    def iter_records(self, owner=None, kind="job", batch=25, states=None):
+        previous = None
+        while True:
+            where, parameters = ["kind=?"], [kind]
+            if owner is not None:
+                where.append("owner=?"); parameters.append(owner)
+            if states is not None:
+                if not states:
+                    return
+                where.append("json_extract(data,'$.state') IN (" + ",".join("?" for _ in states) + ")")
+                parameters.extend(states)
+            if previous is not None:
+                where.append("(created,id,owner)>(?,?,?)"); parameters.extend(previous)
+            with self.connect() as db:
+                rows = db.execute("SELECT owner,id,created,data FROM records WHERE " + " AND ".join(where) + " ORDER BY created,id,owner LIMIT ?", [*parameters, batch]).fetchall()
+            if not rows:
+                return
+            previous = (rows[-1]["created"], rows[-1]["id"], rows[-1]["owner"])
+            for row in rows:
+                yield row["owner"], json.loads(row["data"])
+
+    def queued(self, limit=1, excluded_owners=()):
+        where, parameters = ["kind='job'", "json_extract(data,'$.state')='queued'"], []
+        if excluded_owners:
+            where.append("owner NOT IN (" + ",".join("?" for _ in excluded_owners) + ")")
+            parameters.extend(excluded_owners)
+        with self.connect() as db:
+            rows = db.execute("SELECT owner,data FROM records WHERE " + " AND ".join(where) + " ORDER BY created,id,owner LIMIT ?", [*parameters, max(1, min(100, limit))]).fetchall()
+        return [(row[0], json.loads(row[1])) for row in rows]
+
+    def reserved_bytes(self, owner=None):
+        with self.connect() as db:
+            scope, parameters = (" AND owner=?", (owner,)) if owner is not None else ("", ())
+            uploads = db.execute("SELECT coalesce(sum(json_extract(data,'$.size')),0) FROM records WHERE kind='upload'" + scope, parameters).fetchone()[0]
+            outputs = db.execute("SELECT coalesce(sum(coalesce(json_extract(data,'$.outputSize'),0)),0) FROM records WHERE kind='job' AND json_extract(data,'$.downloadAvailable')=1" + scope, parameters).fetchone()[0]
+        return uploads + outputs
+
+    def upload_referenced(self, owner, upload_id, *, now=None, exclude_job=None):
+        where, parameters = ["i.owner=?", "i.upload_id=?", "j.kind='job'"], [owner, upload_id]
+        if now is not None:
+            where.append("(json_extract(j.data,'$.state') IN ('queued','processing','verifying','paused') OR json_extract(j.data,'$.fileExpires')>?)")
+            parameters.append(now)
+        if exclude_job is not None:
+            where.append("j.id<>?"); parameters.append(exclude_job)
+        with self.connect() as db:
+            return db.execute("SELECT 1 FROM job_inputs AS i JOIN records AS j ON j.owner=i.owner AND j.id=i.job_id WHERE " + " AND ".join(where) + " LIMIT 1", parameters).fetchone() is not None
+
+    def deletion_snapshot(self, owner):
+        history, files = hashlib.sha256(), hashlib.sha256()
+        counts = {"historyRecords": 0, "inputFiles": 0, "outputFiles": 0, "activeJobs": 0}
+        with self.connect() as db:
+            db.execute("BEGIN")
+            for row in db.execute("SELECT id,json_extract(data,'$.state') AS state,coalesce(json_extract(data,'$.hidden'),0) AS hidden,json_extract(data,'$.downloadAvailable') AS available,json_extract(data,'$.outputFile') AS output,json_extract(data,'$.fileExpires') AS expires,coalesce(json_extract(data,'$.filesCleaned'),0) AS cleaned FROM records WHERE owner=? AND kind='job' ORDER BY id", (owner,)):
+                active = row["state"] in (*ACTIVE, "paused")
+                counts["activeJobs"] += active
+                counts["outputFiles"] += bool(row["available"] and row["output"])
+                if not row["hidden"] and row["state"] in TERMINAL:
+                    counts["historyRecords"] += 1
+                    history.update((row["id"] + "\n").encode())
+                files.update(json.dumps([row["id"], active, row["available"], row["output"], row["expires"], row["cleaned"]], separators=(",", ":")).encode())
+            for row in db.execute("SELECT id,created,json_extract(data,'$.size') AS size FROM records WHERE owner=? AND kind='upload' ORDER BY id", (owner,)):
+                counts["inputFiles"] += 1
+                files.update(json.dumps([row["id"], row["created"], row["size"]], separators=(",", ":")).encode())
+        return counts, history.hexdigest(), files.hexdigest()
+
+    def expired_jobs(self, now, limit=100):
+        with self.connect() as db:
+            rows = db.execute("SELECT owner,data FROM records WHERE kind='job' AND json_extract(data,'$.state') IN ('completed','failed','cancelled','interrupted') AND ((json_extract(data,'$.fileExpires')<=? AND coalesce(json_extract(data,'$.filesCleaned'),0)=0) OR (json_extract(data,'$.historyExpires')<=? AND coalesce(json_extract(data,'$.hidden'),0)=0) OR (coalesce(json_extract(data,'$.hidden'),0)=1 AND json_extract(data,'$.fileExpires')<=?)) ORDER BY created,id,owner LIMIT ?", (now, now, now, limit)).fetchall()
+        return [(row[0], json.loads(row[1])) for row in rows]
+
+    def expired_uploads(self, now, limit=100):
+        with self.connect() as db:
+            rows = db.execute("SELECT u.owner,u.data FROM records AS u WHERE u.kind='upload' AND json_extract(u.data,'$.expires')<=? AND NOT EXISTS (SELECT 1 FROM job_inputs AS i JOIN records AS j ON j.owner=i.owner AND j.id=i.job_id AND j.kind='job' WHERE i.owner=u.owner AND i.upload_id=u.id AND (json_extract(j.data,'$.state') IN ('queued','processing','verifying','paused') OR json_extract(j.data,'$.fileExpires')>?)) ORDER BY u.created,u.id,u.owner LIMIT ?", (now, now, limit)).fetchall()
+        return [(row[0], json.loads(row[1])) for row in rows]
 
     def folder(self, owner, record_id):
         # Both components are generated identifiers, never user-supplied paths.
@@ -150,7 +305,8 @@ def run_job(root, owner, job_id, limits, isolated=False):
             item = job["inputs"][0]
             manifest = extract(Path(item["path"]), item["name"], output, ctx, job["recursive"])
         else:
-            manifest = convert(Path(job["inputs"][0]["path"]), output, job["target"], ctx)
+            manifest = convert(Path(job["inputs"][0]["path"]), output, job["target"], ctx,
+                               job.get('qualityMode', 'lossless'), job.get('metadataPolicy', 'strip'))
         ctx.check()
         store.patch(owner, "job", job_id, state="verifying")
         digest = file_digest(output, ctx)
@@ -217,6 +373,8 @@ class Service:
         self.running = {}
         self.restart_until = 0
         self.stop = threading.Event()
+        self.accounts = Accounts(self.store)
+        self.catalog = FileCatalog(self.store)
         self.secret = self.store.root / ".key"
         if not self.secret.exists():
             fd = os.open(self.secret, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -227,8 +385,12 @@ class Service:
         self.requests_per_minute = int(os.environ.get("HAMMA_REQUESTS_PER_MINUTE", "2000"))
         if not 1 <= self.requests_per_minute <= 1000000:
             raise ValueError("HAMMA_REQUESTS_PER_MINUTE must be between 1 and 1000000")
+        self.max_uploads = int(os.environ.get("HAMMA_MAX_UPLOADS", "10000"))
+        self.max_queued_jobs = int(os.environ.get("HAMMA_MAX_QUEUED_JOBS", "1000"))
+        if not 1 <= self.max_uploads <= 1000000 or not 1 <= self.max_queued_jobs <= 100000:
+            raise ValueError("Invalid global upload or queue object limit")
         # A crash must never leave an old success or a fictitious running job.
-        for owner, record in self.store.list():
+        for owner, record in self.store.iter_records(states=("processing", "verifying", "failed", "cancelled", "interrupted")):
             if record["state"] in ("processing", "verifying"):
                 self.store.patch(owner, "job", record["id"], state="interrupted", error="Processing interrupted", finished=time.time(), downloadAvailable=False)
                 self.clean_work(owner, record["id"])
@@ -243,25 +405,36 @@ class Service:
         pref = self.store.get(owner, "settings", "settings")
         return pref or {"id": "settings", "created": time.time(), "historyRetention": "30d", "fileRetention": "24h"}
 
+    def owner_plan(self, owner):
+        account = self.accounts.by_owner(owner)
+        return account_plan(account['tier'] if account else 'guest', self.limits)
+
     def reserved(self):
-        uploads = sum(u["size"] for _, u in self.store.list(kind="upload"))
-        outputs = sum(j.get("outputSize") or 0 for _, j in self.store.list() if j.get("downloadAvailable"))
-        return uploads + outputs + len(self.running) * self.limits["expanded"]
+        return self.store.reserved_bytes() + len(self.running) * self.limits["expanded"]
+
+    def deletion_preview(self, owner):
+        counts, history, files = self.store.deletion_snapshot(owner)
+        return {**counts, "historyToken": self.sign(f"delete:{owner}:history:{history}"),
+                "filesToken": self.sign(f"delete:{owner}:files:{files}")}
 
     def public(self, owner, record):
-        result = {k: v for k, v in record.items() if k not in ("inputs", "outputFile", "manifest")}
+        result = {k: v for k, v in record.items() if k not in ("inputs", "outputFile", "manifest", "filesCleaned")}
         result["downloadAvailable"] = bool(record.get("downloadAvailable") and record["fileExpires"] > time.time())
         if result["downloadAvailable"]:
             expiry = min(int(time.time()) + 3600, int(record["fileExpires"]))
             token = self.sign(f"{owner}:{record['id']}:{expiry}")
             result["download"] = f"/api/process/jobs/{record['id']}/download?expires={expiry}&token={token}"
-        result["fileCount"] = len(record["inputs"])
+        result["fileCount"] = len(record["inputs"]) if "inputs" in record else record.get("fileCount", 0)
         return result
 
     def cleanup(self):
         now = time.time()
-        with self.lock:
-            for owner, job in self.store.list():
+        jobs = self.store.expired_jobs(now)
+        for owner, candidate in jobs:
+            with self.lock:
+                job = self.store.get(owner, "job", candidate["id"])
+                if not job:
+                    continue
                 if job["state"] in ACTIVE or job["state"] == "paused":
                     continue
                 if job["id"] in self.running:
@@ -270,8 +443,8 @@ class Service:
                     directory = self.store.folder(owner, job["id"])
                     if directory.exists():
                         shutil.rmtree(directory)
-                    self.store.patch(owner, "job", job["id"], downloadAvailable=False, outputFile=None)
-                if job.get("historyExpires") and job["historyExpires"] <= now:
+                    self.store.patch(owner, "job", job["id"], downloadAvailable=False, outputFile=None, filesCleaned=True)
+                if job.get("historyExpires") is not None and job["historyExpires"] <= now:
                     # History expires independently; file cleanup remains tracked by a tombstone.
                     self.store.patch(owner, "job", job["id"], hidden=True)
                     if job["fileExpires"] <= now:
@@ -281,14 +454,15 @@ class Service:
                         self.store.delete(owner, job["id"])
                 elif job.get("hidden") and job["fileExpires"] <= now:
                     self.store.delete(owner, job["id"])
-            for owner, upload in self.store.list(kind="upload"):
-                referenced = any(upload["id"] in [i["id"] for i in j["inputs"]] and (j["state"] in ACTIVE or j["state"] == "paused" or j["fileExpires"] > now)
-                                 for _, j in self.store.list(owner))
-                if upload["expires"] <= now and not referenced:
+        uploads = self.store.expired_uploads(now)
+        for owner, upload in uploads:
+            with self.lock:
+                if not self.store.upload_referenced(owner, upload["id"], now=now):
                     directory = self.store.folder(owner, upload["id"])
                     if directory.exists():
                         shutil.rmtree(directory)
                     self.store.delete(owner, upload["id"])
+        return len(jobs) >= 100 or len(uploads) >= 100
 
     def terminate(self, job_id):
         entry = self.running.get(job_id)
@@ -327,11 +501,12 @@ class Service:
     def delete_files(self, owner, record):
         self.terminate(record["id"])
         self.running.pop(record["id"], None)
-        shutil.rmtree(self.store.folder(owner, record["id"]), ignore_errors=False)
-        self.store.patch(owner, "job", record["id"], downloadAvailable=False, fileExpires=time.time())
+        directory = self.store.folder(owner, record["id"])
+        if directory.exists():
+            shutil.rmtree(directory, ignore_errors=False)
+        self.store.patch(owner, "job", record["id"], downloadAvailable=False, outputFile=None, filesCleaned=True, fileExpires=time.time())
         for upload in record["inputs"]:
-            others = [j for _, j in self.store.list(owner) if j["id"] != record["id"] and upload["id"] in [i["id"] for i in j["inputs"]] and (j["fileExpires"] > time.time() or j["state"] in (*ACTIVE, "paused"))]
-            if not others:
+            if not self.store.upload_referenced(owner, upload["id"], now=time.time(), exclude_job=record["id"]):
                 folder = self.store.folder(owner, upload["id"])
                 if folder.exists():
                     shutil.rmtree(folder)
@@ -352,11 +527,17 @@ class Service:
                     del self.running[job_id]
             if time.monotonic() < self.restart_until:
                 return
-            for owner, job in self.store.list():
-                if len(self.running) >= 2:
+            attempts = 0
+            while len(self.running) < 2 and attempts < 16:
+                attempts += 1
+                owners = {entry[1] for entry in self.running.values()}
+                blocked = {owner for owner in owners if sum(entry[1] == owner for entry in self.running.values()) >= self.owner_plan(owner)['maxConcurrentJobs']}
+                candidates = self.store.queued(excluded_owners=owners)
+                if not candidates and owners:
+                    candidates = self.store.queued(excluded_owners=blocked)
+                if not candidates:
                     break
-                if job["state"] != "queued":
-                    continue
+                owner, job = candidates[0]
                 if self.reserved() + self.limits["expanded"] > self.limits["storage"]:
                     self.store.patch(owner, "job", job["id"], state="failed", error="Storage full", downloadAvailable=False)
                     continue
@@ -377,8 +558,7 @@ class Service:
             try:
                 self.tick()
                 if time.monotonic() - last_cleanup > 30:
-                    self.cleanup()
-                    last_cleanup = time.monotonic()
+                    last_cleanup = 0 if self.cleanup() else time.monotonic()
             except Exception:
                 LOG.exception("Scheduler error")
 
@@ -406,6 +586,41 @@ class HTTPError(Exception):
 class LocalHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = os.name != "nt"
+    tls_context = None
+    transport_secure = False
+
+    def __init__(self, *args, **kwargs):
+        self.request_slots = threading.BoundedSemaphore(64)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request, client_address):
+        # Bound slow uploads and stalled TLS handshakes before creating threads.
+        # A TLS overload cannot safely receive a plaintext HTTP error response.
+        if not self.request_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.request_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.request_slots.release()
+
+    def get_request(self):
+        connection, address = super().get_request()
+        connection.settimeout(10)
+        if self.tls_context is not None:
+            try:
+                connection = self.tls_context.wrap_socket(connection, server_side=True, do_handshake_on_connect=False)
+            except Exception:
+                connection.close()
+                raise
+        return connection, address
 
     def server_bind(self):
         # Windows SO_REUSEADDR otherwise permits two listeners on one port.
@@ -443,10 +658,16 @@ def handler(service):
             self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; worker-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
             if getattr(self, "new_cookie", None):
                 self.send_header("Set-Cookie", self.new_cookie)
+            if getattr(self, "account_cookie", None):
+                self.send_header("Set-Cookie", self.account_cookie)
 
         def identity(self):
             self.new_cookie = None
+            self.account_cookie = None
+            self.account = None
+            self.account_token = None
             peer = ipaddress.ip_address(self.client_address[0])
+            self.credentials_allowed = peer.is_loopback or getattr(self.server, 'transport_secure', False)
             if service.lan_hosts and not (peer.is_private or peer.is_loopback):
                 raise HTTPError(403, "Private network only")
             host = self.headers.get("Host", "")
@@ -466,12 +687,36 @@ def handler(service):
             cookie_name = f"hamma_session_{self.server.server_port}"
             cookie = jar.get(cookie_name)
             parts = cookie.value.split(".") if cookie else []
-            if len(parts) != 2 or not re.fullmatch(r"[a-f0-9]{64}", parts[0]) or not hmac.compare_digest(service.sign(parts[0]), parts[1]):
+            if len(parts) != 2 or not re.fullmatch(r"[a-f0-9]{64}", parts[0]) or not re.fullmatch(r"[a-f0-9]{64}", parts[1]) or not hmac.compare_digest(service.sign(parts[0]), parts[1]):
                 session = secrets.token_hex(32)
-                self.new_cookie = f"{cookie_name}={session}.{service.sign(session)}; HttpOnly; SameSite=Strict; Path=/"
+                secure = '; Secure' if getattr(self.server, 'transport_secure', False) else ''
+                self.new_cookie = f"{cookie_name}={session}.{service.sign(session)}; HttpOnly; SameSite=Strict; Path=/{secure}"
             else:
                 session = parts[0]
             self.owner = hashlib.sha256(session.encode()).hexdigest()
+            self.guest_owner = self.owner
+            account_cookie = jar.get(f'shante_account_{self.server.server_port}')
+            parts = account_cookie.value.split('.') if account_cookie else []
+            if account_cookie and not self.credentials_allowed:
+                raise HTTPError(403, 'Use HTTPS for account access on a network connection.')
+            if len(parts) == 2 and re.fullmatch(r'[a-f0-9]{64}', parts[0]) and re.fullmatch(r'[a-f0-9]{64}', parts[1]) and hmac.compare_digest(service.sign('account:' + parts[0]), parts[1]):
+                self.account = service.accounts.resolve(parts[0])
+                if self.account:
+                    self.account_token = parts[0]
+                    self.owner = self.account['owner']
+            if account_cookie and not self.account:
+                self.set_account_cookie(None)
+            self.plan = account_plan(self.account['tier'] if self.account else 'guest', service.limits)
+
+        def set_account_cookie(self, token):
+            secure = '; Secure' if getattr(self.server, 'transport_secure', False) else ''
+            value = token + '.' + service.sign('account:' + token) if token else ''
+            self.account_cookie = f'shante_account_{self.server.server_port}={value}; HttpOnly; SameSite=Strict; Path=/; Max-Age={86400 if token else 0}{secure}'
+
+        def account_view(self):
+            return {'authenticated': self.account is not None,
+                    'account': service.accounts.public(self.account) if self.account else None,
+                    'plan': self.plan, 'billingEnabled': False, 'credentialsAllowed': self.credentials_allowed}
 
         def json_body(self):
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
@@ -515,6 +760,36 @@ def handler(service):
                     # If a launcher fails to stop us, scheduling resumes automatically.
                     service.restart_until = time.monotonic() + 30
                 return self.send(200, {"ready": True, "instance": service.instance_id})
+            if path == '/api/process/account/me' and method == 'GET':
+                return self.send(200, self.account_view())
+            if path in ('/api/process/account/register', '/api/process/account/login', '/api/process/account/logout', '/api/process/account/password-change') and method == 'POST':
+                if path.endswith('/logout'):
+                    if self.account_token:
+                        service.accounts.logout(self.account_token)
+                    self.set_account_cookie(None)
+                    self.account = None; self.owner = self.guest_owner
+                    self.plan = account_plan('guest', service.limits)
+                    return self.send(200, self.account_view())
+                if not self.credentials_allowed:
+                    raise HTTPError(403, 'Use HTTPS before entering account credentials on a network connection.')
+                service.accounts.admit(self.client_address[0])
+                if int(self.headers.get('Content-Length', '0')) > 16384:
+                    raise HTTPError(413, 'Account request is too large')
+                body = self.json_body()
+                if path.endswith('/register'):
+                    if set(body) - {'username', 'password', 'displayName'}:
+                        raise HTTPError(400, 'Unsupported account options')
+                    account, token = service.accounts.register(body.get('username'), body.get('password'), body.get('displayName'))
+                elif path.endswith('/login'):
+                    account, token = service.accounts.login(body.get('username'), body.get('password'))
+                else:
+                    if not self.account:
+                        raise HTTPError(401, 'Sign in before changing your password.')
+                    account, token = service.accounts.change_password(self.account, body.get('currentPassword'), body.get('newPassword'))
+                self.account = account; self.owner = account['owner']
+                self.plan = account_plan('free', service.limits)
+                self.set_account_cookie(token)
+                return self.send(201 if path.endswith('/register') else 200, self.account_view())
             if path == "/api/process/health" and method == "GET":
                 with service.lock:
                     running = len(service.running)
@@ -523,7 +798,7 @@ def handler(service):
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
                 return self.send(200, {"archives": archive_formats(), "nativeEngine": capability(), "conversions": MEDIA if shutil.which("ffmpeg") and shutil.which("ffprobe") else [],
-                                       "limits": service.limits, "processing": "local", "version": 1})
+                                       "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
             if path == "/api/process/settings":
                 if method == "GET":
                     return self.send(200, service.defaults(self.owner))
@@ -534,9 +809,23 @@ def handler(service):
                     record = {**service.defaults(self.owner), "historyRetention": body["historyRetention"], "fileRetention": body["fileRetention"]}
                     service.store.put(self.owner, "settings", record)
                     return self.send(200, record)
+            if path == "/api/process/deletion-preview" and method == "GET":
+                with service.lock:
+                    return self.send(200, service.deletion_preview(self.owner))
+            if path == '/api/process/files' and method == 'GET':
+                query = parse_qs(url.query)
+                return self.send(200, service.catalog.page(self.owner, search=query.get('q', [''])[0],
+                    offset=max(0, int(query.get('offset', ['0'])[0])), limit=min(100, max(1, int(query.get('limit', ['50'])[0]))),
+                    duplicates=query.get('duplicates', ['0'])[0] == '1'))
             if path in ("/api/process/history", "/api/process/files") and method == "DELETE":
                 with service.lock:
-                    records = service.store.list(self.owner)
+                    token = self.headers.get("X-Hamma-Deletion-Token")
+                    if token is not None:
+                        preview = service.deletion_preview(self.owner)
+                        expected = preview["historyToken" if path.endswith("history") else "filesToken"]
+                        if not re.fullmatch(r"[a-f0-9]{64}", token) or not hmac.compare_digest(token, expected):
+                            raise HTTPError(409, "The selection changed. Review the deletion count again.")
+                    records = service.store.iter_records(self.owner)
                     for _, record in records:
                         if path.endswith("history"):
                             if record["state"] in TERMINAL:
@@ -545,11 +834,9 @@ def handler(service):
                             if record["state"] in (*ACTIVE, "paused"):
                                 (service.store.folder(self.owner, record["id"]) / "cancel").touch()
                                 service.store.patch(self.owner, "job", record["id"], state="cancelled", error="Cancelled")
-                            folder = service.store.folder(self.owner, record["id"])
-                            if folder.exists():
-                                service.delete_files(self.owner, record)
+                            service.delete_files(self.owner, record)
                     if path.endswith("files"):
-                        for _, upload in service.store.list(self.owner, "upload"):
+                        for _, upload in service.store.iter_records(self.owner, "upload"):
                             folder = service.store.folder(self.owner, upload["id"])
                             if folder.exists():
                                 shutil.rmtree(folder)
@@ -559,14 +846,17 @@ def handler(service):
                 body = self.json_body()
                 name = safe_path(body.get("name"), bool(body.get("directory")))
                 size = body.get("size")
-                if type(size) is not int or not 0 <= size <= service.limits["input"] or (body.get("directory") and size != 0):
+                if type(size) is not int or not 0 <= size <= self.plan['maxInputBytes'] or (body.get("directory") and size != 0):
                     raise HTTPError(413, "File size limit reached")
                 with service.lock:
-                    uploads = service.store.list(kind="upload")
-                    if len([u for owner, u in uploads if owner == self.owner]) >= service.limits["files"]:
+                    if service.store.count(self.owner, "upload") >= self.plan['maxUploadFiles']:
                         raise HTTPError(413, "Too many files")
+                    if service.store.count(kind="upload") >= service.max_uploads:
+                        raise HTTPError(429, "Upload capacity reached. Delete unused uploads or wait for expiry.")
                     if service.reserved() + size > service.limits["storage"]:
                         raise HTTPError(507, "Storage full")
+                    if service.store.reserved_bytes(self.owner) + size > self.plan['maxStorageBytes']:
+                        raise HTTPError(413, 'Account storage limit reached')
                     record = {"id": secrets.token_hex(16), "created": time.time(), "name": name, "size": size, "directory": bool(body.get("directory")), "expires": time.time() + 86400, "offset": 0}
                     folder = service.store.folder(self.owner, record["id"])
                     folder.mkdir(mode=0o700, parents=True)
@@ -586,7 +876,7 @@ def handler(service):
                     if method == "GET":
                         return self.send(200, {**record, "offset": source.stat().st_size})
                     if method == "DELETE":
-                        if any(upload_id in [i["id"] for i in j["inputs"]] for _, j in service.store.list(self.owner)):
+                        if service.store.upload_referenced(self.owner, upload_id):
                             raise HTTPError(409, "File in use")
                         shutil.rmtree(source.parent)
                         service.store.delete(self.owner, upload_id)
@@ -622,6 +912,13 @@ def handler(service):
                     raise HTTPError(400, "Unsupported operation")
                 if operation != "compress" and len(ids) != 1:
                     raise HTTPError(400, "One input per extraction or conversion job")
+                quality_mode = body.get('qualityMode', 'lossless')
+                metadata_policy = body.get('metadataPolicy', 'strip')
+                from .media_policy import validate_conversion_options
+                try:
+                    validate_conversion_options(target if operation == 'convert' else None, quality_mode, metadata_policy)
+                except ValueError as error:
+                    raise HTTPError(400, str(error)) from error
                 with service.lock:
                     request_id = body.get("requestId")
                     if request_id is not None and (not isinstance(request_id, str) or not re.fullmatch(r"[a-f0-9]{64}", request_id)):
@@ -629,12 +926,14 @@ def handler(service):
                     job_id = hashlib.sha256((self.owner + request_id).encode()).hexdigest()[:32] if request_id else secrets.token_hex(16)
                     existing = service.store.get(self.owner, "job", job_id)
                     if existing:
-                        if ([i["id"] for i in existing["inputs"]] != ids or existing["operation"] != operation or existing["target"] != target or existing["recursive"] != bool(body.get("recursive"))):
+                        if ([i["id"] for i in existing["inputs"]] != ids or existing["operation"] != operation or existing["target"] != target or existing["recursive"] != bool(body.get("recursive")) or
+                            existing.get('qualityMode', 'lossless') != quality_mode or existing.get('metadataPolicy', 'strip') != metadata_policy):
                             raise HTTPError(409, "Request identifier already used")
                         return self.send(200, service.public(self.owner, existing))
-                    jobs = service.store.list(self.owner)
-                    if len([j for _, j in jobs if j["state"] in (*ACTIVE, "paused")]) >= 100:
+                    if service.store.count(self.owner, states=(*ACTIVE, "paused")) >= self.plan['maxQueuedJobs']:
                         raise HTTPError(429, "Queue full")
+                    if service.store.count(kind='job', states=(*ACTIVE, 'paused')) >= service.max_queued_jobs:
+                        raise HTTPError(429, 'Processor queue full')
                     inputs, seen = [], set()
                     for upload_id in ids:
                         record = service.store.get(self.owner, "upload", upload_id)
@@ -660,21 +959,15 @@ def handler(service):
                     retention = RETENTION[settings["historyRetention"]]
                     record = {"id": job_id, "created": now, "name": inputs[0]["name"] if len(inputs) == 1 else f"{len(inputs)} files",
                               "operation": operation, "target": target, "inputs": inputs, "recursive": bool(body.get("recursive")),
+                              'qualityMode': quality_mode, 'metadataPolicy': metadata_policy,
                               "state": "queued", "inputSize": sum(i["size"] for i in inputs), "outputSize": None,
                               "format": inputs[0]["format"] if len(inputs) == 1 else "batch", "processed": 0, "entries": 0,
                               "fileExpires": now + RETENTION[settings["fileRetention"]], "historyExpires": now + retention if retention else None,
                               "downloadAvailable": False, "error": None}
                     service.store.folder(self.owner, record["id"]).mkdir(mode=0o700, parents=True)
                     service.store.put(self.owner, "job", record)
-                    visible = [j for _, j in jobs if not j.get("hidden")]
                     # Bound guest history independently of file retention.
-                    excess = max(0, len(visible) + 1 - 500)
-                    for old in reversed(visible):
-                        if not excess:
-                            break
-                        if old["state"] in TERMINAL:
-                            service.store.patch(self.owner, "job", old["id"], hidden=True)
-                            excess -= 1
+                    service.store.trim_history(self.owner, limit=self.plan['historyRecords'])
                 LOG.info("Job queued: %s %s", record["id"], operation)
                 return self.send(202, service.public(self.owner, record))
             if path == "/api/process/jobs" and method == "GET":
@@ -683,15 +976,10 @@ def handler(service):
                 limit = min(100, max(1, int(query.get("limit", [50])[0])))
                 search = query.get("q", [""])[0].casefold()
                 state = query.get("state", [""])[0]
-                jobs = [j for _, j in service.store.list(self.owner) if not j.get("hidden") and search in j["name"].casefold() and (not state or j["state"] == state)]
                 sort = query.get("sort", ["newest"])[0]
-                if sort == "oldest":
-                    jobs.sort(key=lambda j: j["created"])
-                elif sort == "name":
-                    jobs.sort(key=lambda j: (j["name"].casefold(), j["created"]))
-                elif sort == "size":
-                    jobs.sort(key=lambda j: j["inputSize"], reverse=True)
-                return self.send(200, {"total": len(jobs), "jobs": [service.public(self.owner, j) for j in jobs[offset:offset + limit]]})
+                total, jobs = service.store.history_page(self.owner, offset=offset, limit=limit, search=search, state=state, sort=sort, summary=True,
+                                                        include_hidden_downloads=query.get("includeHiddenDownloads", ["0"])[0] == "1")
+                return self.send(200, {"total": total, "jobs": [service.public(self.owner, j) for j in jobs]})
             match = re.fullmatch(r"/api/process/jobs/([a-f0-9]{32})(?:/(cancel|pause|resume|retry|files|download|manifest))?", path)
             if match:
                 job_id, action = match.groups()
@@ -740,8 +1028,10 @@ def handler(service):
                         elif action == "retry" and record["state"] in ("failed", "cancelled", "interrupted"):
                             if job_id in service.running:
                                 raise HTTPError(409, "Worker stopping")
-                            if sum(j["state"] in (*ACTIVE, "paused") for _, j in service.store.list(self.owner)) >= 100:
+                            if service.store.count(self.owner, states=(*ACTIVE, "paused")) >= self.plan['maxQueuedJobs']:
                                 raise HTTPError(429, "Queue full")
+                            if service.store.count(kind='job', states=(*ACTIVE, 'paused')) >= service.max_queued_jobs:
+                                raise HTTPError(429, 'Processor queue full')
                             if record["fileExpires"] <= time.time() or any(not (service.store.folder(self.owner, i["id"]) / "input").exists() for i in record["inputs"]):
                                 raise HTTPError(410, "Input files expired")
                             (directory / "cancel").unlink(missing_ok=True)
@@ -804,7 +1094,7 @@ def handler(service):
         def handle_request(self):
             try:
                 self.route()
-            except HTTPError as error:
+            except (HTTPError, AccountError) as error:
                 self.send(error.status, {"error": error.message}, error.retry_after)
             except (ValueError, TypeError, KeyError, ProcessingError):
                 self.send(400, {"error": "Invalid request"})
@@ -828,9 +1118,16 @@ def main():
     parser.add_argument("--port", type=int, default=5010)
     parser.add_argument("--data", default=os.environ.get("HAMMA_DATA", ".hamma-data"))
     parser.add_argument("--web", default="web/dist")
+    parser.add_argument('--tls-cert', default=None, help='Operator-supplied TLS certificate chain')
+    parser.add_argument('--tls-key', default=None, help='Operator-supplied TLS private key')
     parser.add_argument("--lan", action="store_true", help="Allow explicitly named private-network addresses")
     parser.add_argument("--allow-host", action="append", default=[], help="Private IPv4 address used by phones")
     args = parser.parse_args()
+    from .transport import configure_tls, TLSConfigurationError
+    try:
+        transport = configure_tls(args.tls_cert, args.tls_key)
+    except TLSConfigurationError as error:
+        parser.error(str(error))
     if not ipaddress.ip_address(args.host).is_loopback and not args.lan:
         parser.error("Use --lan with explicit --allow-host addresses for private-network testing")
     if args.lan and not args.allow_host:
@@ -841,10 +1138,16 @@ def main():
             parser.error("LAN hosts must be private IPv4 addresses")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     service = Service(args.data, args.web, lan_hosts=args.allow_host if args.lan else ())
-    server = LocalHTTPServer((args.host, args.port), handler(service))
+    try:
+        server = LocalHTTPServer((args.host, args.port), handler(service))
+    except BaseException:
+        service.close()
+        raise
+    server.tls_context = transport.context
+    server.transport_secure = transport.secure_cookies
     thread = threading.Thread(target=service.loop, daemon=True)
     thread.start()
-    LOG.info("HAMMA available at http://%s:%s", args.host, args.port)
+    LOG.info("HAMMA available at %s://%s:%s", 'https' if transport.secure_cookies else 'http', args.host, args.port)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

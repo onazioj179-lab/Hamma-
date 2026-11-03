@@ -4,10 +4,10 @@ import { request, type Job } from './client';
 export interface ActivityJob extends Job { localId?: string; savedToDevice?: boolean; historyHidden?: boolean }
 
 // Fetch the whole retained session so sorting and pagination include both engines.
-export async function loadJobs(signal?: AbortSignal): Promise<Job[]> {
+export async function loadJobs(signal?: AbortSignal, includeHiddenDownloads = false): Promise<Job[]> {
   const jobs: Job[] = [];
   for (let offset = 0; ; ) {
-    const result = await request<{ jobs: Job[]; total: number }>(`/jobs?offset=${offset}&limit=100`, { signal });
+    const result = await request<{ jobs: Job[]; total: number }>(`/jobs?offset=${offset}&limit=100${includeHiddenDownloads ? '&includeHiddenDownloads=1' : ''}`, { signal });
     jobs.push(...result.jobs);
     offset += result.jobs.length;
     if (!result.jobs.length || offset >= result.total) return jobs;
@@ -34,7 +34,7 @@ export function combineActivity(jobs: Job[], archives: RecentArchive[], outputs:
       downloadAvailable: !!output?.downloadUrl, fileExpires: 0, historyExpires: null,
     };
   });
-  return [...new Map([...jobs, ...local].map(job => [job.id, job])).values()];
+  return [...new Map([...jobs.filter(job => !job.hidden || includeHidden), ...local].map(job => [job.id, job])).values()];
 }
 
 export function filterActivity(jobs: ActivityJob[], query: string, state: string, sort: string): ActivityJob[] {
