@@ -5,6 +5,7 @@
 
 import { create } from 'zustand';
 import { usePreferences } from './preferences';
+import { browserStorage } from './storage';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { DEFAULT_CHUNK_SIZE } from '../engine/wasm/types';
 import type { DetailedProgress, LaneState } from '../engine/performance/types';
@@ -568,7 +569,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'spk-v43-storage',
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => browserStorage),
       partialize: (state) => ({
         theme: state.theme,
         compressionMode: state.compressionMode,
@@ -598,13 +599,13 @@ function applyTheme(theme: Theme) {
     root.classList.remove('dark');
   }
   
-  localStorage.setItem('spk-theme', theme);
+  browserStorage.setItem('spk-theme', theme);
 }
 
 // Initialize theme on load
 if (typeof window !== 'undefined') {
-  const stored = localStorage.getItem('spk-theme') as Theme | null;
-  applyTheme(stored || 'system');
+  const stored = browserStorage.getItem('spk-theme');
+  applyTheme(stored === 'light' || stored === 'dark' ? stored : 'system');
   
   // Listen for system theme changes
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {

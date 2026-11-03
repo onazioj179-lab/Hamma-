@@ -1,0 +1,21 @@
+{
+  "artifact": "SHANTE-Core-0.1.0-Windows-AMD64-e0084992.zip",
+  "sha256": "23d1f6731ce031fc418dbeb9d9d9f888392bdaaa7bf730e0d17656cca22351cc",
+  "bytes": 735228,
+  "binarySha256": "904028f14a6402550b0151cc503464f2b5ef55d2de3979f0ce80d48f5cc4bfe7",
+  "probe": {
+    "protocol": 1,
+    "engine": "shante-core",
+    "version": "0.1.0",
+    "codec": "zstd",
+    "cores": 8,
+    "codecVersion": "1.5.7",
+    "availableMemory": 5080752128,
+    "workers": 2,
+    "avx2": true,
+    "avx512": false,
+    "neon": false,
+    "gpuAcceleration": false
+  },
+  "scope": "Native CLI only; existing Python service/web UI are separate"
+}

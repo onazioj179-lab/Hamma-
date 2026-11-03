@@ -33,7 +33,8 @@ import time
 from urllib.parse import parse_qs, urlsplit, quote
 import zipfile
 
-from .engine import ARCHIVES, MEDIA, BLOCK, Context, ProcessingError, compress, convert, detect, extract, file_digest, safe_path
+from .engine import ARCHIVES, MEDIA, BLOCK, Context, ProcessingError, archive_formats, compress, convert, detect, extract, file_digest, safe_path
+from .worker_limits import apply_worker_limits
 
 LOG = logging.getLogger("hamma.processor")
 TERMINAL = ("completed", "failed", "cancelled", "interrupted")
@@ -117,10 +118,7 @@ class Store:
 def run_job(root, owner, job_id, limits, isolated=False):
     if isolated and os.name != "nt":
         os.setsid()
-        import resource
-        resource.setrlimit(resource.RLIMIT_FSIZE, (limits["expanded"] + 64 * BLOCK,) * 2)
-        resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3,) * 2)
-        resource.setrlimit(resource.RLIMIT_CPU, (limits["seconds"],) * 2)
+        apply_worker_limits(limits)
     store = Store(root)
     job = store.get(owner, "job", job_id)
     directory = store.folder(owner, job_id)
@@ -160,7 +158,10 @@ def run_job(root, owner, job_id, limits, isolated=False):
             raise ProcessingError("Output size limit reached")
         # The API exposes only names and opaque identifiers, never storage paths.
         extension = "zip" if detect(output) == "zip" else job["target"]
-        stem = Path(job["name"]).name.rsplit(".", 1)[0] or "files"
+        leaf = Path(job["name"]).name
+        # A raw Zstandard frame has no filename field. Preserve the complete
+        # source basename in its download name so restoration retains its type.
+        stem = leaf if job["operation"] == "compress" and job["target"] == "zstd" else leaf.rsplit(".", 1)[0] or "files"
         output_name = ("extracted" if job["operation"] == "extract" else stem) + "." + extension
         ctx.check()
         store.patch(owner, "job", job_id, state="completed", processed=job["inputSize"],
@@ -520,7 +521,8 @@ def handler(service):
                 return self.send(200, {"version": 1, "processing": "local", "instance": service.instance_id,
                                        "pid": os.getpid(), "revision": PROCESSOR_REVISION, "activeJobs": running})
             if path == "/api/process/capabilities" and method == "GET":
-                return self.send(200, {"archives": ARCHIVES, "conversions": MEDIA if shutil.which("ffmpeg") and shutil.which("ffprobe") else [],
+                from .native import capability
+                return self.send(200, {"archives": archive_formats(), "nativeEngine": capability(), "conversions": MEDIA if shutil.which("ffmpeg") and shutil.which("ffprobe") else [],
                                        "limits": service.limits, "processing": "local", "version": 1})
             if path == "/api/process/settings":
                 if method == "GET":
@@ -615,7 +617,7 @@ def handler(service):
                 operation, target = body.get("operation"), body.get("target")
                 if not isinstance(ids, list) or not ids or len(ids) > service.limits["files"] or not all(isinstance(i, str) for i in ids) or len(set(ids)) != len(ids):
                     raise HTTPError(400, "Invalid file selection")
-                if (operation == "compress" and target not in ARCHIVES or operation == "extract" and target != "zip" or
+                if (operation == "compress" and target not in archive_formats() or operation == "extract" and target != "zip" or
                     operation == "convert" and target not in MEDIA or operation not in ("compress", "extract", "convert")):
                     raise HTTPError(400, "Unsupported operation")
                 if operation != "compress" and len(ids) != 1:

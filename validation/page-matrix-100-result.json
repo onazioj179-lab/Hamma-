@@ -1,0 +1,1098 @@
+{
+  "scope": "98 live screen/theme/width checks plus 1000-file virtualization and atomic duplicate rejection",
+  "passed": 100,
+  "failed": 0,
+  "cases": [
+    {
+      "theme": "light",
+      "page": "Workspace",
+      "clipped": [],
+      "headings": [
+        "Files, simplified."
+      ],
+      "scrollWidth": 312,
+      "width": 320,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Files & History",
+      "clipped": [],
+      "headings": [
+        "Files & History"
+      ],
+      "scrollWidth": 312,
+      "width": 320,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Overview",
+      "clipped": [],
+      "headings": [
+        "Overview"
+      ],
+      "scrollWidth": 312,
+      "width": 320,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Settings",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 320,
+      "width": 320,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Privacy",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 312,
+      "width": 320,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Storage",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 312,
+      "width": 320,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "About",
+      "clipped": [],
+      "headings": [
+        "About HAMMA"
+      ],
+      "scrollWidth": 312,
+      "width": 320,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Workspace",
+      "clipped": [],
+      "headings": [
+        "Files, simplified."
+      ],
+      "scrollWidth": 352,
+      "width": 360,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Files & History",
+      "clipped": [],
+      "headings": [
+        "Files & History"
+      ],
+      "scrollWidth": 352,
+      "width": 360,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Overview",
+      "clipped": [],
+      "headings": [
+        "Overview"
+      ],
+      "scrollWidth": 352,
+      "width": 360,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Settings",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 360,
+      "width": 360,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Privacy",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 352,
+      "width": 360,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Storage",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 352,
+      "width": 360,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "About",
+      "clipped": [],
+      "headings": [
+        "About HAMMA"
+      ],
+      "scrollWidth": 352,
+      "width": 360,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Workspace",
+      "clipped": [],
+      "headings": [
+        "Files, simplified."
+      ],
+      "scrollWidth": 382,
+      "width": 390,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Files & History",
+      "clipped": [],
+      "headings": [
+        "Files & History"
+      ],
+      "scrollWidth": 382,
+      "width": 390,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Overview",
+      "clipped": [],
+      "headings": [
+        "Overview"
+      ],
+      "scrollWidth": 382,
+      "width": 390,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Settings",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 390,
+      "width": 390,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Privacy",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 382,
+      "width": 390,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Storage",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 382,
+      "width": 390,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "About",
+      "clipped": [],
+      "headings": [
+        "About HAMMA"
+      ],
+      "scrollWidth": 382,
+      "width": 390,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Workspace",
+      "clipped": [],
+      "headings": [
+        "Files, simplified."
+      ],
+      "scrollWidth": 642,
+      "width": 650,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Files & History",
+      "clipped": [],
+      "headings": [
+        "Files & History"
+      ],
+      "scrollWidth": 650,
+      "width": 650,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Overview",
+      "clipped": [],
+      "headings": [
+        "Overview"
+      ],
+      "scrollWidth": 642,
+      "width": 650,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Settings",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 650,
+      "width": 650,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Privacy",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 650,
+      "width": 650,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Storage",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 642,
+      "width": 650,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "About",
+      "clipped": [],
+      "headings": [
+        "About HAMMA"
+      ],
+      "scrollWidth": 642,
+      "width": 650,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Workspace",
+      "clipped": [],
+      "headings": [
+        "Files, simplified."
+      ],
+      "scrollWidth": 760,
+      "width": 768,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Files & History",
+      "clipped": [],
+      "headings": [
+        "Files & History"
+      ],
+      "scrollWidth": 768,
+      "width": 768,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Overview",
+      "clipped": [],
+      "headings": [
+        "Overview"
+      ],
+      "scrollWidth": 760,
+      "width": 768,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Settings",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 768,
+      "width": 768,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Privacy",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 768,
+      "width": 768,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Storage",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 768,
+      "width": 768,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "About",
+      "clipped": [],
+      "headings": [
+        "About HAMMA"
+      ],
+      "scrollWidth": 760,
+      "width": 768,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Workspace",
+      "clipped": [],
+      "headings": [
+        "Files, simplified."
+      ],
+      "scrollWidth": 1016,
+      "width": 1024,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Files & History",
+      "clipped": [],
+      "headings": [
+        "Files & History"
+      ],
+      "scrollWidth": 1024,
+      "width": 1024,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Overview",
+      "clipped": [],
+      "headings": [
+        "Overview"
+      ],
+      "scrollWidth": 1016,
+      "width": 1024,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Settings",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 1024,
+      "width": 1024,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Privacy",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 1024,
+      "width": 1024,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Storage",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 1024,
+      "width": 1024,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "About",
+      "clipped": [],
+      "headings": [
+        "About HAMMA"
+      ],
+      "scrollWidth": 1016,
+      "width": 1024,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Workspace",
+      "clipped": [],
+      "headings": [
+        "Files, simplified."
+      ],
+      "scrollWidth": 1432,
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Files & History",
+      "clipped": [],
+      "headings": [
+        "Files & History"
+      ],
+      "scrollWidth": 1440,
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Overview",
+      "clipped": [],
+      "headings": [
+        "Overview"
+      ],
+      "scrollWidth": 1432,
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Settings",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 1440,
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Privacy",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 1440,
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "Storage",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 1440,
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "theme": "light",
+      "page": "About",
+      "clipped": [],
+      "headings": [
+        "About HAMMA"
+      ],
+      "scrollWidth": 1432,
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Workspace",
+      "clipped": [],
+      "headings": [
+        "Files, simplified."
+      ],
+      "scrollWidth": 312,
+      "width": 320,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Files & History",
+      "clipped": [],
+      "headings": [
+        "Files & History"
+      ],
+      "scrollWidth": 312,
+      "width": 320,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Overview",
+      "clipped": [],
+      "headings": [
+        "Overview"
+      ],
+      "scrollWidth": 312,
+      "width": 320,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Settings",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 320,
+      "width": 320,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Privacy",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 312,
+      "width": 320,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Storage",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 312,
+      "width": 320,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "About",
+      "clipped": [],
+      "headings": [
+        "About HAMMA"
+      ],
+      "scrollWidth": 312,
+      "width": 320,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Workspace",
+      "clipped": [],
+      "headings": [
+        "Files, simplified."
+      ],
+      "scrollWidth": 352,
+      "width": 360,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Files & History",
+      "clipped": [],
+      "headings": [
+        "Files & History"
+      ],
+      "scrollWidth": 352,
+      "width": 360,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Overview",
+      "clipped": [],
+      "headings": [
+        "Overview"
+      ],
+      "scrollWidth": 352,
+      "width": 360,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Settings",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 360,
+      "width": 360,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Privacy",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 352,
+      "width": 360,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Storage",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 352,
+      "width": 360,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "About",
+      "clipped": [],
+      "headings": [
+        "About HAMMA"
+      ],
+      "scrollWidth": 352,
+      "width": 360,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Workspace",
+      "clipped": [],
+      "headings": [
+        "Files, simplified."
+      ],
+      "scrollWidth": 382,
+      "width": 390,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Files & History",
+      "clipped": [],
+      "headings": [
+        "Files & History"
+      ],
+      "scrollWidth": 382,
+      "width": 390,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Overview",
+      "clipped": [],
+      "headings": [
+        "Overview"
+      ],
+      "scrollWidth": 382,
+      "width": 390,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Settings",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 390,
+      "width": 390,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Privacy",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 382,
+      "width": 390,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Storage",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 382,
+      "width": 390,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "About",
+      "clipped": [],
+      "headings": [
+        "About HAMMA"
+      ],
+      "scrollWidth": 382,
+      "width": 390,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Workspace",
+      "clipped": [],
+      "headings": [
+        "Files, simplified."
+      ],
+      "scrollWidth": 642,
+      "width": 650,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Files & History",
+      "clipped": [],
+      "headings": [
+        "Files & History"
+      ],
+      "scrollWidth": 650,
+      "width": 650,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Overview",
+      "clipped": [],
+      "headings": [
+        "Overview"
+      ],
+      "scrollWidth": 642,
+      "width": 650,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Settings",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 650,
+      "width": 650,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Privacy",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 650,
+      "width": 650,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Storage",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 642,
+      "width": 650,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "About",
+      "clipped": [],
+      "headings": [
+        "About HAMMA"
+      ],
+      "scrollWidth": 642,
+      "width": 650,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Workspace",
+      "clipped": [],
+      "headings": [
+        "Files, simplified."
+      ],
+      "scrollWidth": 760,
+      "width": 768,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Files & History",
+      "clipped": [],
+      "headings": [
+        "Files & History"
+      ],
+      "scrollWidth": 768,
+      "width": 768,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Overview",
+      "clipped": [],
+      "headings": [
+        "Overview"
+      ],
+      "scrollWidth": 760,
+      "width": 768,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Settings",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 768,
+      "width": 768,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Privacy",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 768,
+      "width": 768,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Storage",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 768,
+      "width": 768,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "About",
+      "clipped": [],
+      "headings": [
+        "About HAMMA"
+      ],
+      "scrollWidth": 760,
+      "width": 768,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Workspace",
+      "clipped": [],
+      "headings": [
+        "Files, simplified."
+      ],
+      "scrollWidth": 1016,
+      "width": 1024,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Files & History",
+      "clipped": [],
+      "headings": [
+        "Files & History"
+      ],
+      "scrollWidth": 1024,
+      "width": 1024,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Overview",
+      "clipped": [],
+      "headings": [
+        "Overview"
+      ],
+      "scrollWidth": 1016,
+      "width": 1024,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Settings",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 1024,
+      "width": 1024,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Privacy",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 1024,
+      "width": 1024,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Storage",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 1024,
+      "width": 1024,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "About",
+      "clipped": [],
+      "headings": [
+        "About HAMMA"
+      ],
+      "scrollWidth": 1016,
+      "width": 1024,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Workspace",
+      "clipped": [],
+      "headings": [
+        "Files, simplified."
+      ],
+      "scrollWidth": 1432,
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Files & History",
+      "clipped": [],
+      "headings": [
+        "Files & History"
+      ],
+      "scrollWidth": 1440,
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Overview",
+      "clipped": [],
+      "headings": [
+        "Overview"
+      ],
+      "scrollWidth": 1432,
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Settings",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 1440,
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Privacy",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 1440,
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "Storage",
+      "clipped": [],
+      "headings": [
+        "Settings"
+      ],
+      "scrollWidth": 1440,
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "theme": "dark",
+      "page": "About",
+      "clipped": [],
+      "headings": [
+        "About HAMMA"
+      ],
+      "scrollWidth": 1432,
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "id": "live-1000-file-selection",
+      "rows": 14,
+      "summary": "Select all1,000 selected · 20.40 KB",
+      "passed": true
+    },
+    {
+      "id": "live-duplicate-selection",
+      "error": "Duplicate filename. Nothing was added.",
+      "rows": 14,
+      "summary": "Select all1,000 selected · 20.40 KB",
+      "passed": true
+    }
+  ]
+}

@@ -43,6 +43,18 @@ it('rejects duplicate names as a complete selection', async () => {
   expect(host.querySelector('.source-row')).toBeNull();
 });
 
+it('renders a new selection after removing a scrolled 5000-file batch', async () => {
+  await render();
+  await select(Array.from({ length: 5000 }, (_, i) => new File(['x'], `stress-${i}.txt`)));
+  const scroller = host.querySelector<HTMLDivElement>('.source-scroll')!;
+  scroller.scrollTop = 250000;
+  await act(async () => scroller.dispatchEvent(new Event('scroll', { bubbles: true })));
+  expect(host.querySelectorAll('.source-row').length).toBeLessThanOrEqual(14);
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Remove selected files"]')!.click());
+  await select([new File(['new'], 'visible-after-stress.txt')]);
+  expect(host.querySelector('.source-row')?.textContent).toContain('visible-after-stress.txt');
+});
+
 it('shows unavailable processing without fabricating progress or downloads', async () => {
   fetchMock.mockRejectedValue(new Error('Offline'));
   await render(); await select([new File(['data'], 'data.txt')]);
@@ -149,4 +161,42 @@ it('reconnects and refreshes the list after an initial job-list failure', async 
   await act(async () => button('Reconnect').click());
   expect(host.textContent).toContain('recovered.zip');
   expect(host.textContent).not.toContain('Local processor unavailable');
+});
+
+it('reports a disconnect after bulk retry without an unhandled rejection', async () => {
+  let disconnected = false;
+  fetchMock.mockImplementation(async (url: string) => {
+    if (disconnected && url.includes('/jobs?')) throw new Error('Connection lost after retry');
+    return { ok: true, json: async () => url.endsWith('/capabilities') ? caps : url.endsWith('/settings') ? { fileRetention: '24h', historyRetention: '30d' } : { jobs: [{ id: 'retry-job', name: 'retry.zip', state: 'failed', operation: 'compress', inputSize: 100, outputSize: null, created: 1, fileExpires: 2, fileCount: 1, format: 'zip', downloadAvailable: false }], total: 1 } };
+  });
+  await render();
+  await act(async () => host.querySelector<HTMLInputElement>('[aria-label="Select all visible jobs"]')!.click());
+  disconnected = true;
+  await act(async () => button('Retry').click());
+  expect(host.querySelector('[role=alert]')?.textContent).toContain('Connection lost after retry');
+  expect(host.textContent).toContain('Local processor unavailable');
+});
+
+it('bounds rendered history rows while paging and searching 500 retained jobs', async () => {
+  const jobs = Array.from({ length: 500 }, (_, index) => ({
+    id: `stress-${index}`, name: `history-stress-${index}.zip`, state: 'completed',
+    operation: 'compress', target: 'zip', inputSize: 100, outputSize: 50,
+    created: index, fileExpires: 2, fileCount: 1, format: 'zip', downloadAvailable: false,
+  }));
+  fetchMock.mockImplementation(async (url: string) => {
+    const offset = Number(new URL(url, 'http://localhost').searchParams.get('offset') || 0);
+    return { ok: true, json: async () => url.endsWith('/capabilities') ? caps : url.endsWith('/settings') ? { fileRetention: '24h', historyRetention: '30d' } : { jobs: jobs.slice(offset, offset + 100), total: jobs.length } };
+  });
+  await render('history');
+  expect(host.querySelectorAll('.processing-job')).toHaveLength(50);
+  for (let page = 0; page < 9; page++) {
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Next history page"]')!.click());
+    expect(host.querySelectorAll('.processing-job')).toHaveLength(50);
+  }
+  expect(host.querySelector<HTMLButtonElement>('[aria-label="Next history page"]')!.disabled).toBe(true);
+  const search = host.querySelector<HTMLInputElement>('[aria-label="Search processing history"]')!;
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, 'history-stress-499.zip');
+  await act(async () => search.dispatchEvent(new Event('input', { bubbles: true })));
+  expect(host.querySelectorAll('.processing-job')).toHaveLength(1);
+  expect(host.querySelector('.processing-job')?.textContent).toContain('history-stress-499.zip');
 });

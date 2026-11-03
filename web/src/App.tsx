@@ -14,6 +14,7 @@ import {
 import { useCompression } from './hooks/useCompression';
 import { useAppStore } from './store/app';
 import { usePreferences } from './store/preferences';
+import { browserStorage } from './store/storage';
 import {
   SettingsPanel,
   type SettingsSection,
@@ -61,7 +62,7 @@ export default function App() {
     return () => { clearTimeout(timer); window.removeEventListener('hamma-job-notice', notify); window.removeEventListener('hamma-job-count', count); window.removeEventListener('hamma-processor-status', connection); };
   }, []);
 
-  const [termsAccepted, setTermsAccepted] = useState(() => localStorage.getItem('hamma-terms-v1') === 'accepted');
+  const [termsAccepted, setTermsAccepted] = useState(() => browserStorage.getItem('hamma-terms-v1') === 'accepted');
   const openSettings = (next: SettingsSection) => {
     setSection(next);
     setView('settings');
@@ -214,7 +215,7 @@ export default function App() {
           tabIndex={-1}
           className="workspace-main"
         >
-          {!termsAccepted && <aside className="processor-notice first-run-note" aria-label="File privacy"><div><strong>Your file privacy</strong><p>Standard jobs run on the computer hosting HAMMA. SPK runs in this browser. Each person has a separate file history.</p><button className="text-button" onClick={() => openSettings('privacy')}>Privacy details</button></div><button className="button secondary" onClick={() => { localStorage.setItem('hamma-terms-v1', 'accepted'); setTermsAccepted(true); setPrivacyChoice('essential'); }}>Got it</button></aside>}
+          {!termsAccepted && <aside className="processor-notice first-run-note" aria-label="File privacy"><div><strong>Your file privacy</strong><p>Standard jobs run on the computer hosting HAMMA. SPK runs in this browser. Each person has a separate file history.</p><button className="text-button" onClick={() => openSettings('privacy')}>Privacy details</button></div><button className="button secondary" onClick={() => { browserStorage.setItem('hamma-terms-v1', 'accepted'); setTermsAccepted(true); setPrivacyChoice('essential'); }}>Got it</button></aside>}
           <UniversalWorkspace
             spkReady={workerReady}
             spkBusy={isProcessing}

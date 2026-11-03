@@ -1,0 +1,135 @@
+{
+  "scope": "Synthetic 4 MiB end-to-end operations including output verification; not a throughput guarantee",
+  "native": {
+    "protocol": 1,
+    "engine": "shante-core",
+    "version": "0.1.0",
+    "codec": "zstd",
+    "cores": 8,
+    "availableMemory": 4840464384,
+    "workers": 2,
+    "avx2": true,
+    "avx512": false,
+    "neon": false,
+    "gpuAcceleration": false
+  },
+  "cases": [
+    {
+      "workload": "repeated",
+      "codec": "zip",
+      "inputBytes": 4194304,
+      "outputBytes": 10355,
+      "seconds": [
+        0.2160059999441728,
+        0.13169979996746406,
+        0.1277550000231713
+      ],
+      "medianSeconds": 0.13169979996746406,
+      "verified": true
+    },
+    {
+      "workload": "repeated",
+      "codec": "gzip",
+      "inputBytes": 4194304,
+      "outputBytes": 10253,
+      "seconds": [
+        0.1438023999799043,
+        0.10543400002643466,
+        0.11764379998203367
+      ],
+      "medianSeconds": 0.11764379998203367,
+      "verified": true
+    },
+    {
+      "workload": "repeated",
+      "codec": "zstd",
+      "inputBytes": 4194304,
+      "outputBytes": 529,
+      "seconds": [
+        0.3513072999776341,
+        0.3623878000071272,
+        0.3433671000530012
+      ],
+      "medianSeconds": 0.3513072999776341,
+      "verified": true
+    },
+    {
+      "workload": "random",
+      "codec": "zip",
+      "inputBytes": 4194304,
+      "outputBytes": 4195720,
+      "seconds": [
+        0.47659109998494387,
+        0.390327500004787,
+        0.3326340999919921
+      ],
+      "medianSeconds": 0.390327500004787,
+      "verified": true
+    },
+    {
+      "workload": "random",
+      "codec": "gzip",
+      "inputBytes": 4194304,
+      "outputBytes": 4195616,
+      "seconds": [
+        0.3163186000310816,
+        0.3000373999821022,
+        0.29520220000995323
+      ],
+      "medianSeconds": 0.3000373999821022,
+      "verified": true
+    },
+    {
+      "workload": "random",
+      "codec": "zstd",
+      "inputBytes": 4194304,
+      "outputBytes": 4194413,
+      "seconds": [
+        0.3054233000148088,
+        0.28180739999515936,
+        0.29156380001222715
+      ],
+      "medianSeconds": 0.29156380001222715,
+      "verified": true
+    },
+    {
+      "workload": "mixed",
+      "codec": "zip",
+      "inputBytes": 4194304,
+      "outputBytes": 2101043,
+      "seconds": [
+        0.3318901000311598,
+        0.28576080000493675,
+        0.2673467999557033
+      ],
+      "medianSeconds": 0.28576080000493675,
+      "verified": true
+    },
+    {
+      "workload": "mixed",
+      "codec": "gzip",
+      "inputBytes": 4194304,
+      "outputBytes": 2100938,
+      "seconds": [
+        0.27856240002438426,
+        0.3191157000255771,
+        0.27314469998236746
+      ],
+      "medianSeconds": 0.27856240002438426,
+      "verified": true
+    },
+    {
+      "workload": "mixed",
+      "codec": "zstd",
+      "inputBytes": 4194304,
+      "outputBytes": 2097411,
+      "seconds": [
+        0.3302611999679357,
+        0.33028339996235445,
+        0.31814719998510554
+      ],
+      "medianSeconds": 0.3302611999679357,
+      "verified": true
+    }
+  ]
+}

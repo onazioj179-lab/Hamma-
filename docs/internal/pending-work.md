@@ -1,5 +1,14 @@
 # Pending and blocked work
 
+## SHANTE brief follow-up (2026-11-02)
+
+The new SHANTE master brief explicitly authorizes native-engine implementation.
+The C++20 Zstandard kernel and durable-worker integration are now implemented
+and locally verified. See shante-implementation.md and native/README.md for the
+executed checks, release artifact and remaining master-brief requirements.
+This authorization supersedes the older proposal-only restriction for that
+requested work; the 100 discovery entries are not automatically marked done.
+
 ## Reliability follow-up (2026-11-02)
 
 Branch `codex/remaining-reliability-fixes` addresses specific remaining gaps in IMP-036 (retry queue capacity), IMP-045 (cleanup after crashes), IMP-070 (bounded upload retries), and IMP-091/092 (worker launch failures and recovery). These items remain partially implemented: this batch does not provide resumable compression checkpoints or automatic replay of interrupted processing.

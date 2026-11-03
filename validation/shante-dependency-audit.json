@@ -1,0 +1,13 @@
+{
+  "scope": "Locked Zstandard source only; excludes OS, compiler, Python and web dependencies",
+  "checkedAtUTC": "2026-11-03T04:39:54.094436+00:00",
+  "query": {
+    "package": {
+      "ecosystem": "GIT",
+      "name": "https://github.com/facebook/zstd.git"
+    },
+    "version": "v1.5.7"
+  },
+  "vulnerabilities": [],
+  "status": "no-advisories-returned"
+}

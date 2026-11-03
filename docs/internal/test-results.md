@@ -24,3 +24,9 @@ A newly added restart regression initially failed because the drain check landed
 ## Recovery follow-up
 
 44 processor tests passed; all 12 processing-client tests passed; production TypeScript/Vite build passed. Coverage includes expired/missing inputs, queue-capacity enforcement on retries, preserving upload IDs on throttling, cancellation during backoff and existing lossless/owner-isolation checks. An initially overbroad source edit disrupted job intake; regression failures exposed it and the corrected route passed the complete suite. No tests were suppressed. No throughput improvement is claimed for retry backoff.
+
+## Defined 100-case page stress run
+
+100/100 browser page cases passed after fixing narrow-page and filter-toolbar overflow. The matrix covers seven page states, seven widths and two themes, plus a 1,000-file virtualized selection and atomic duplicate rejection. Separate generated-job stress: 100/100 ZIP/GZIP/BZIP2/XZ jobs passed with eight concurrent clients, exact-byte reconstruction, SHA-256, ranges, idempotency, resume positions, isolation and test-only cleanup. Raw results are in validation/page-stress-results.json and validation/stress-local-results.json.
+
+Regression evidence: complete web run 417 passed, 23 browser-worker tests skipped; final targeted run of storage/navigation/large-selection suites 16 passed (overlapping the full run, not additive). Final production build passed. No physical-phone or browser download-to-disk certification is implied. See page-stress-results.md for acceptance criteria and limits.

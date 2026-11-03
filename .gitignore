@@ -49,3 +49,4 @@ buildlogs/
 /mobile-web/assets/zip.js
 /validation/fixtures/
 /.hamma-data/
+/native/build*/
