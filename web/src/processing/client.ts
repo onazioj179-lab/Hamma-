@@ -1,4 +1,5 @@
 export interface Capability {
+  actionRegistry?: { mime: string[]; extensions: string[]; conversions: string[]; extract: boolean }[];
   version: number;
   archives: string[];
   conversions: string[];

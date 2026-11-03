@@ -11,7 +11,7 @@ vi.hoisted(() => { Object.defineProperty(window, 'matchMedia', { configurable: t
 let root: Root;
 let host: HTMLDivElement;
 let fetchMock: ReturnType<typeof vi.fn>;
-const caps = { archives: ['zip', 'gzip'], conversions: ['wav', 'png'], processing: 'local', version: 1, limits: { input: 1e9, expanded: 1e9, files: 5000 } };
+const caps = { actionRegistry: [{ mime: ['image/png'], extensions: ['png'], conversions: ['png'], extract: false }, { mime: ['audio/wav'], extensions: ['wav'], conversions: ['wav', 'mp3'], extract: false }, { mime: [], extensions: ['zip'], conversions: [], extract: true }], archives: ['zip', 'gzip'], conversions: ['wav', 'png'], processing: 'local', version: 1, limits: { input: 1e9, expanded: 1e9, files: 5000 } };
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   useAppStore.setState({ sessionOutputs: {}, recentArchives: [], history: [], result: null });
@@ -125,7 +125,7 @@ it('adds files without processing them until a direct action and virtualizes lar
   expect(host.querySelectorAll('.source-row').length).toBeLessThan(20);
   expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/uploads'))).toBe(false);
   expect(button('Compress').disabled).toBe(false);
-  expect(button('Extract').disabled).toBe(false);
+  expect(button('Extract')).toBeUndefined();
 });
 
 it('rejects duplicate names as a complete selection', async () => {
@@ -437,4 +437,51 @@ it('keeps a hidden processor output discoverable through Available downloads aft
     expect(host.querySelectorAll('.processing-job')).toHaveLength(1);
     expect(host.querySelector('[aria-label="Download retained.zip"]')).not.toBeNull();
   } finally { window.removeEventListener('hamma-job-count', count); }
+});
+
+
+it('continues a 300-file batch after 14 file-specific queue rejections and retains retry details', async () => {
+  await render();
+  const initial = fetchMock.getMockImplementation()!;
+  let count = 0;
+  vi.spyOn(processingClient, 'upload').mockImplementation(async source => 'upload-' + source.id);
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/jobs') && init?.method === 'POST') {
+      count++;
+      if (count <= 14) return { ok: false, status: 415, json: async () => ({ error: 'Unsupported test image' }) };
+      return { ok: true, json: async () => ({ id: String(count) }) };
+    }
+    return initial(url, init);
+  });
+  await select(Array.from({ length: 300 }, (_, i) => new File(['fixture'], `image-${i}.png`, { type: 'image/png' })));
+  expect(button('Extract')).toBeUndefined();
+  expect(host.textContent).not.toContain('WAV');
+  await act(async () => button('Convert').click());
+  expect(count).toBe(300);
+  expect(host.textContent).toContain('14 selected');
+  expect(host.textContent).toContain('14 files could not be queued');
+  expect(host.textContent).toContain('Unsupported test image');
+  await act(async () => button('Convert').click());
+  expect(count).toBe(314);
+  expect(host.querySelector('[aria-label="Selected files"]')).toBeNull();
+});
+
+
+it('pauses on queue capacity errors and retains only unsubmitted files', async () => {
+  await render();
+  const initial = fetchMock.getMockImplementation()!;
+  let count = 0;
+  vi.spyOn(processingClient, 'upload').mockImplementation(async source => 'upload-' + source.id);
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/jobs') && init?.method === 'POST') {
+      if (++count === 2) return { ok: false, status: 429, json: async () => ({ error: 'Queue limit reached' }) };
+      return { ok: true, json: async () => ({ id: String(count) }) };
+    }
+    return initial(url, init);
+  });
+  await select([0, 1, 2].map(i => new File(['fixture'], `photo-${i}.png`, { type: 'image/png' })));
+  await act(async () => button('Convert').click());
+  expect(count).toBe(2);
+  expect(host.textContent).toContain('2 selected');
+  expect(host.textContent).toContain('Queue limit reached');
 });
