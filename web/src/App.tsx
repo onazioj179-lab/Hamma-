@@ -174,7 +174,7 @@ export default function App() {
             <ShieldCheck size={17} />
             <span>
               <strong>{remoteServer ? 'Private server session' : 'Yours. On your device.'}</strong>
-              <small>Free, with no account needed.</small>
+              <small>Ready when you are.</small>
             </span>
           </div>
           <button

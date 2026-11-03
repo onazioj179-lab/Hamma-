@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { changeAccount, loadAccount, type AccountSession } from '../../processing/account';
 import './AccountPanel.css';
 
-const bytes = (value: number) => `${(value / 1024 ** 3).toLocaleString(undefined, { maximumFractionDigits: 2 })} GiB`;
 export function AccountPanel() {
   const [session, setSession] = useState<AccountSession | null>(null);
   const [mode, setMode] = useState<'login' | 'register'>('login');
@@ -36,25 +35,17 @@ export function AccountPanel() {
     running.current = true; setBusy(true);
     try {
       const next = await changeAccount(action, fields);
-      if (mounted.current) { setSession(next); setNotice(action === 'password-change' ? 'Password changed. Other sessions have been signed out.' : action === 'logout' ? 'Signed out. Your guest workspace is restored.' : 'Signed in. Your account workspace is ready.'); }
+      if (mounted.current) { setSession(next); setNotice(action === 'password-change' ? 'Password changed. Other sessions have been signed out.' : action === 'logout' ? 'Signed out.' : 'Signed in. Your workspace is ready.'); }
     } catch (reason) { if (mounted.current) { setError(reason instanceof Error ? reason.message : 'Account request failed.'); setAttempt(value => value + 1); } }
     finally { form.querySelectorAll<HTMLInputElement>('input[type=password]').forEach(input => { input.value = ''; }); running.current = false; if (mounted.current) setBusy(false); }
   }
   const disabled = busy || !session?.credentialsAllowed;
   return <section className="account-panel" aria-labelledby="account-title">
-    <header><h1 id="account-title">Account</h1><p>Use HAMMA as a guest, or create a Free account on this processor.</p></header>
+    <header><h1 id="account-title">Account</h1><p>Sign in to access your saved workspace.</p></header>
     {error && <p role="alert">{error}</p>}
     {notice && <p role="status">{notice}</p>}
     {!session ? <div><p>{error ? 'Account details could not be loaded.' : 'Loading account details…'}</p>{error && <button className="button secondary" onClick={() => { setError(''); setAttempt(value => value + 1); }}>Retry</button>}</div> : <>
-      <section className="account-card" aria-labelledby="plan-title"><h2 id="plan-title">{session.plan.tier === 'free' ? 'Free account' : 'Guest workspace'}</h2>
-        {session.account && <p><strong>{session.account.displayName}</strong> · {session.account.username}</p>}
-        <dl className="account-limits">{[
-          ['History records', session.plan.historyRecords.toLocaleString()], ['Queued jobs', session.plan.maxQueuedJobs.toLocaleString()],
-          ['Concurrent jobs', session.plan.maxConcurrentJobs.toLocaleString()], ['Retained input files', session.plan.maxUploadFiles.toLocaleString()],
-          ['Input limit', bytes(session.plan.maxInputBytes)], ['Storage limit', bytes(session.plan.maxStorageBytes)],
-        ].map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl><p>These limits are enforced by this processor. Billing is unavailable.</p>
-      </section>
-      <p>Guest and account jobs stay separate; signing in does not move guest files. Signing out restores this browser’s guest workspace. SPK files and browser history remain separate, on this browser.</p>
+      {session.account && <section className="account-card"><h2>{session.account.displayName}</h2><p>{session.account.username}</p></section>}
       {!session.credentialsAllowed && <p role="status">Use HTTPS or connect from the processor computer to sign in or change a password.</p>}
       {session.authenticated ? <>
         <form onSubmit={event => void submit(event, 'logout')}><button className="button secondary" disabled={busy}>Sign out</button></form>
@@ -65,12 +56,13 @@ export function AccountPanel() {
           <p>Use at least 12 characters. Changing your password signs out all other sessions.</p><button className="button primary" disabled={disabled}>{busy ? 'Saving…' : 'Change password'}</button>
         </form>
       </> : <section className="account-card"><div className="button-row"><button className="button secondary" aria-pressed={mode === 'login'} disabled={busy} onClick={() => { setMode('login'); setError(''); }}>Sign in</button><button className="button secondary" aria-pressed={mode === 'register'} disabled={busy} onClick={() => { setMode('register'); setError(''); }}>Create account</button></div>
-        <form key={mode} className="account-form" onSubmit={event => void submit(event, mode)}><h2>{mode === 'login' ? 'Sign in' : 'Create a Free account'}</h2>
+        <form key={mode} className="account-form" onSubmit={event => void submit(event, mode)}><h2>{mode === 'login' ? 'Sign in' : 'Create an account'}</h2>
           <label>Username<input name="username" autoComplete="username" minLength={3} maxLength={64} pattern="[A-Za-z0-9][A-Za-z0-9._\-]*" required disabled={disabled} /></label>
           {mode === 'register' && <label>Display name (optional)<input name="displayName" autoComplete="nickname" maxLength={80} disabled={disabled} /></label>}
           <label>Password<input name="password" type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} minLength={mode === 'register' ? 12 : undefined} maxLength={256} required disabled={disabled} /></label>
           {mode === 'register' && <><label>Confirm password<input name="confirm" type="password" autoComplete="new-password" minLength={12} maxLength={256} required disabled={disabled} /></label><p>Username: 3–64 letters, numbers, dots, underscores or hyphens. Password: at least 12 characters.</p></>}
-          <button className="button primary" disabled={disabled}>{busy ? 'Working…' : mode === 'login' ? 'Sign in to account' : 'Create Free account'}</button>
+          <p className="footnote">Signing in opens a separate workspace. Files already here stay here.</p>
+          <button className="button primary" disabled={disabled}>{busy ? 'Working…' : mode === 'login' ? 'Sign in to account' : 'Create account'}</button>
         </form>
       </section>}
     </>}

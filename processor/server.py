@@ -854,16 +854,16 @@ def handler(service):
                 name = safe_path(body.get("name"), bool(body.get("directory")))
                 size = body.get("size")
                 if type(size) is not int or not 0 <= size <= self.plan['maxInputBytes'] or (body.get("directory") and size != 0):
-                    raise HTTPError(413, "File size limit reached")
+                    raise HTTPError(413, "Upload size limit reached. Choose a smaller file.")
                 with service.lock:
                     if service.store.count(self.owner, "upload") >= self.plan['maxUploadFiles']:
-                        raise HTTPError(413, "Too many files")
+                        raise HTTPError(413, "Retained file limit reached. Delete unused files before adding more.")
                     if service.store.count(kind="upload") >= service.max_uploads:
                         raise HTTPError(429, "Upload capacity reached. Delete unused uploads or wait for expiry.")
                     if service.reserved() + size > service.limits["storage"]:
                         raise HTTPError(507, "Storage full")
                     if service.store.reserved_bytes(self.owner) + size > self.plan['maxStorageBytes']:
-                        raise HTTPError(413, 'Account storage limit reached')
+                        raise HTTPError(413, 'Storage limit reached. Delete unused files or wait for their expiry.')
                     record = {"id": secrets.token_hex(16), "created": time.time(), "name": name, "size": size, "directory": bool(body.get("directory")), "expires": time.time() + 86400, "offset": 0}
                     folder = service.store.folder(self.owner, record["id"])
                     folder.mkdir(mode=0o700, parents=True)
@@ -938,7 +938,7 @@ def handler(service):
                             raise HTTPError(409, "Request identifier already used")
                         return self.send(200, service.public(self.owner, existing))
                     if service.store.count(self.owner, states=(*ACTIVE, "paused")) >= self.plan['maxQueuedJobs']:
-                        raise HTTPError(429, "Queue full")
+                        raise HTTPError(429, "Queue limit reached. Wait for jobs to finish or cancel queued jobs." + (" Sign in for a larger queue." if not self.account else ""))
                     if service.store.count(kind='job', states=(*ACTIVE, 'paused')) >= service.max_queued_jobs:
                         raise HTTPError(429, 'Processor queue full')
                     inputs, seen = [], set()
@@ -1036,7 +1036,7 @@ def handler(service):
                             if job_id in service.running:
                                 raise HTTPError(409, "Worker stopping")
                             if service.store.count(self.owner, states=(*ACTIVE, "paused")) >= self.plan['maxQueuedJobs']:
-                                raise HTTPError(429, "Queue full")
+                                raise HTTPError(429, "Queue limit reached. Wait for jobs to finish or cancel queued jobs." + (" Sign in for a larger queue." if not self.account else ""))
                             if service.store.count(kind='job', states=(*ACTIVE, 'paused')) >= service.max_queued_jobs:
                                 raise HTTPError(429, 'Processor queue full')
                             if record["fileExpires"] <= time.time() or any(not (service.store.folder(self.owner, i["id"]) / "input").exists() for i in record["inputs"]):

@@ -20,10 +20,12 @@ const button = (label: string) => Array.from(host.querySelectorAll('button')).fi
 const fill = (name: string, value: string) => { host.querySelector<HTMLInputElement>(`input[name="${name}"]`)!.value = value; };
 const submit = async () => { await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))); };
 
-it('uses server plan limits and disables credentials on insecure remote transport', async () => {
+it('keeps quotas out of the page and disables credentials on insecure remote transport', async () => {
   fetchMock.mockResolvedValue({ ok: true, json: async () => ({ ...guest, credentialsAllowed: false, plan: { ...guest.plan, historyRecords: 321 } }) });
   await render();
-  expect(host.textContent).toContain('321');
+  expect(host.textContent).not.toContain('321');
+  expect(host.textContent).not.toContain('Guest workspace');
+  expect(host.textContent).not.toContain('Billing');
   expect(host.textContent).toContain('Use HTTPS');
   expect(host.querySelector<HTMLInputElement>('input[name=password]')!.disabled).toBe(true);
   expect(button('Sign in to account').disabled).toBe(true);
@@ -39,8 +41,8 @@ it('registers without persisting credentials and clears passwords after success'
   expect(url).toBe('/api/process/account/register');
   expect(JSON.parse(init.body)).toEqual({ username: 'alice', password: 'long-password-123' });
   expect(init.credentials).toBe('same-origin');
-  expect(host.textContent).toContain('Free account');
-  expect(host.textContent).toContain('1,000');
+  expect(host.textContent).toContain('Alice');
+  expect(host.textContent).not.toContain('1,000');
   expect(storage).not.toHaveBeenCalled();
   expect(Array.from(host.querySelectorAll<HTMLInputElement>('input[type=password]')).every(input => input.value === '')).toBe(true);
 });
@@ -61,7 +63,7 @@ it('changes password and signs out through real account endpoints', async () => 
   expect(host.textContent).toContain('Other sessions have been signed out');
   fetchMock.mockResolvedValue({ ok: true, json: async () => guest }); await submit();
   expect(fetchMock.mock.calls[2][0]).toBe('/api/process/account/logout');
-  expect(host.textContent).toContain('Guest workspace');
+  expect(host.textContent).toContain('Signed out.');
 });
 
 it('honors foreground ownership guards before sending credentials', async () => {
