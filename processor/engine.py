@@ -24,6 +24,11 @@ ARCHIVES = ("zip", "tar", "tar.gz", "tar.bz2", "tar.xz", "gzip", "bzip2", "xz")
 MEDIA = ("wav", "flac", "mp3", "aac", "m4a", "ogg", "mp4", "mkv", "webm", "png", "webp", "jpg")
 
 
+def archive_formats():
+    from .native import capability
+    return ARCHIVES + (("zstd",) if capability() else ())
+
+
 class ProcessingError(Exception):
     pass
 
@@ -239,7 +244,22 @@ def file_digest(path: Path, context: Context):
 def compress(inputs: list[dict], output: Path, target: str, ctx: Context):
     manifest = []
     names = [(item, ctx.register(item["name"], item.get("directory", False))) for item in inputs]
-    if target == "zip":
+    if target == "zstd":
+        from .native import run
+        if len(inputs) != 1 or inputs[0].get("directory"):
+            raise ProcessingError("Choose one file for this format")
+        source = Path(inputs[0]["path"])
+        original = file_digest(source, ctx)
+        # The kernel decodes and byte-compares against the original through the
+        # same open handle before publishing. Recheck its source SHA-256 here;
+        # materializing a second full-size decoded file would exceed the job's
+        # temporary-storage reservation for large compressible inputs.
+        run("compress", source, output, ctx)
+        ctx.report(state="verifying")
+        if file_digest(source, ctx) != original:
+            raise ProcessingError("Input changed during verification")
+        manifest.append({"name": names[0][1], **original})
+    elif target == "zip":
         with BoundedWriter(output, ctx) as bounded, zipfile.ZipFile(bounded, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as archive:
             for item, name in names:
                 ctx.check()
@@ -338,7 +358,7 @@ def extract(source: Path, original_name: str, output: Path, ctx: Context, recurs
                 manifest.append({"name": normalized, **record})
                 ctx.report(entries=ctx.count, expanded=ctx.expanded)
                 nested = detect(staging)
-                if recursive and nested in ("zip", "tar", "gzip", "bzip2", "xz"):
+                if recursive and nested in ("zip", "tar", "gzip", "bzip2", "xz", "zstd"):
                     work.append((staging, normalized + ".contents/", entry_name, depth + 1))
                 else:
                     staging.unlink()
@@ -390,10 +410,29 @@ def extract(source: Path, original_name: str, output: Path, ctx: Context, recurs
                         ctx.copy(src, dest, progress=False)
                     manifest.append({"name": normalized, **record})
                     ctx.report(entries=ctx.count, expanded=ctx.expanded)
-                    if recursive and detect(staging) in ("zip", "tar", "gzip", "bzip2", "xz"):
+                    if recursive and detect(staging) in ("zip", "tar", "gzip", "bzip2", "xz", "zstd"):
                         work.append((staging, normalized + ".contents/", leaf, depth + 1))
                     else:
                         staging.unlink()
+            elif kind == "zstd":
+                from .native import run
+                leaf = re.sub(r"\.(zst|zstd)$", "", Path(name).name, flags=re.I)
+                if leaf == Path(name).name:
+                    leaf += ".out"
+                staging = temp / ("native-" + str(depth) + "-" + str(len(manifest)))
+                maximum = min(ctx.limits["expanded"] - ctx.expanded, max(1, path.stat().st_size) * ctx.limits["ratio"])
+                run("decompress", path, staging, ctx, output_limit=maximum, progress=False)
+                record = file_digest(staging, ctx)
+                ctx.expanded += record["size"]
+                normalized = ctx.register(prefix + leaf)
+                with staging.open("rb") as src, result.open(normalized, "w", force_zip64=True) as dest:
+                    ctx.copy(src, dest, progress=False)
+                manifest.append({"name": normalized, **record})
+                ctx.report(entries=ctx.count, expanded=ctx.expanded)
+                if recursive and detect(staging) in ("zip", "tar", "gzip", "bzip2", "xz", "zstd"):
+                    work.append((staging, normalized + ".contents/", leaf, depth + 1))
+                else:
+                    staging.unlink()
             else:
                 raise ProcessingError("Unsupported archive")
             if path.parent == temp:
