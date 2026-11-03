@@ -30,3 +30,13 @@ it('loads all retained pages instead of silently dropping jobs after the first 1
   expect(await loadJobs()).toHaveLength(125);
   expect(fetch).toHaveBeenCalledTimes(2);
 });
+
+it('keeps hidden processor outputs out of history while retaining download discovery', async () => {
+  const hidden = { ...job('hidden', 1), hidden: true, downloadAvailable: true, download: '/signed-download' };
+  expect(combineActivity([hidden], [])).toHaveLength(0);
+  expect(combineActivity([hidden], [], {}, true)).toHaveLength(1);
+  const fetch = vi.fn(async () => ({ ok: true, json: async () => ({ jobs: [hidden], total: 1 }) }));
+  vi.stubGlobal('fetch', fetch);
+  expect(await loadJobs(undefined, true)).toHaveLength(1);
+  expect(fetch.mock.calls[0][0]).toContain('includeHiddenDownloads=1');
+});

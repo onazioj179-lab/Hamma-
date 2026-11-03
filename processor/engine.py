@@ -21,7 +21,7 @@ import zipfile
 
 BLOCK = 1024 * 1024
 ARCHIVES = ("zip", "tar", "tar.gz", "tar.bz2", "tar.xz", "gzip", "bzip2", "xz")
-MEDIA = ("wav", "flac", "mp3", "aac", "m4a", "ogg", "mp4", "mkv", "webm", "png", "webp", "jpg")
+MEDIA = ("wav", "flac", "mp3", "aac", "m4a", "ogg", "opus", "mp4", "mkv", "webm", "png", "webp", "jpg")
 
 
 def archive_formats():
@@ -459,14 +459,49 @@ def probe(path: Path, count_frames=False):
     args = [shutil.which("ffprobe") or "ffprobe", "-v", "error", "-max_alloc", str(64 * BLOCK), "-protocol_whitelist", "file,pipe", "-format_whitelist", INPUT_FORMATS]
     if count_frames:
         args += ["-count_frames"]
-    args += ["-show_entries", "stream=index,codec_type,codec_name,sample_fmt,sample_rate,channels,bits_per_sample,bits_per_raw_sample,duration,nb_frames,nb_read_frames:format=format_name,duration", "-of", "json", str(path)]
+    args += ["-show_entries", "stream=index,codec_type,codec_name,sample_fmt,sample_rate,channels,bits_per_sample,bits_per_raw_sample,pix_fmt,width,height,duration,nb_frames,nb_read_frames:stream_tags:format=format_name,duration:format_tags", "-of", "json", str(path)]
     proc = subprocess.run(args, capture_output=True, timeout=30)
     if proc.returncode or len(proc.stdout) > BLOCK:
         raise ProcessingError("Unsupported media")
     return json.loads(proc.stdout)
 
 
-def convert(source: Path, output: Path, target: str, ctx: Context):
+def decoded_digest(path: Path, ctx: Context, *, stream, encoding, container):
+    """Hash canonical decoded pixels/PCM with fixed buffers and an expansion cap."""
+    args = [shutil.which("ffmpeg"), "-nostdin", "-v", "error", "-xerror", "-max_alloc", str(64 * BLOCK),
+            "-protocol_whitelist", "file,pipe", "-format_whitelist", INPUT_FORMATS, "-threads", "2", "-i", str(path),
+            "-threads", "2", "-map", stream]
+    if container == 'rawvideo':
+        args += ['-frames:v', '1', '-pix_fmt', encoding]
+    else:
+        args += ['-c:a', encoding]
+    args += ['-f', container, 'pipe:1']
+    process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    digest, size = hashlib.sha256(), 0
+    try:
+        while chunk := process.stdout.read(BLOCK):
+            ctx.check()
+            size += len(chunk)
+            if size > ctx.limits['expanded']:
+                raise ProcessingError('Decoded media verification limit reached')
+            digest.update(chunk)
+        if process.wait() or not size:
+            raise ProcessingError('Decoded media verification failed')
+        return size, digest.hexdigest()
+    finally:
+        if process.poll() is None:
+            process.kill(); process.wait()
+        process.stdout.close()
+
+
+def convert(source: Path, output: Path, target: str, ctx: Context, quality_mode='lossless', metadata_policy='strip'):
+    from .media_policy import validate_conversion_options
+    if target not in MEDIA:
+        raise ProcessingError('Unsupported conversion format')
+    try:
+        validate_conversion_options(target, quality_mode, metadata_policy)
+    except ValueError as error:
+        raise ProcessingError(str(error)) from error
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         raise ProcessingError("Media engine unavailable")
     info = probe(source)
@@ -480,7 +515,13 @@ def convert(source: Path, output: Path, target: str, ctx: Context):
         frames = [s for s in probe(source, count_frames=True)["streams"] if s["codec_type"] == "video"]
         if len(frames) != 1 or frames[0].get("nb_read_frames") != "1":
             raise ProcessingError("Choose a still image")
-    tracks = audio if target in ("wav", "flac", "mp3", "aac", "m4a", "ogg") else [None]
+        pixel_format = frames[0].get('pix_fmt', '')
+        high_precision = bool(re.search(r'(?:9|10|12|14|16|32|48|64)(?:le|be)?$', pixel_format))
+        if target == 'webp' and quality_mode == 'lossless' and high_precision:
+            raise ProcessingError('WebP cannot preserve this image precision. Choose PNG or explicitly allow lossy conversion.')
+        if target == 'jpg' and (pixel_format.startswith(('rgba', 'bgra', 'argb', 'abgr', 'yuva', 'gbrap', 'ya')) or pixel_format == 'pal8'):
+            raise ProcessingError('JPEG cannot preserve transparency. Choose PNG or WebP.')
+    tracks = audio if target in ("wav", "flac", "mp3", "aac", "m4a", "ogg", "opus") else [None]
     if not tracks:
         raise ProcessingError("No audio track")
     for index, track in enumerate(tracks):
@@ -488,19 +529,39 @@ def convert(source: Path, output: Path, target: str, ctx: Context):
         if remaining <= 0:
             raise ProcessingError("Conversion output limit reached")
         destination = output if len(tracks) == 1 else ctx.root / f"audio-{index + 1}.{target}"
-        args = [shutil.which("ffmpeg"), "-nostdin", "-v", "error", "-y", "-max_alloc", str(64 * BLOCK),
-                "-protocol_whitelist", "file,pipe", "-format_whitelist", INPUT_FORMATS, "-threads", "2", "-i", str(source), "-threads", "2", "-map_metadata", "-1"]
+        args = [shutil.which("ffmpeg"), "-nostdin", "-v", "error", "-xerror", "-y", "-max_alloc", str(64 * BLOCK),
+                "-protocol_whitelist", "file,pipe", "-format_whitelist", INPUT_FORMATS, "-threads", "2", "-i", str(source), "-threads", "2"]
+        if metadata_policy == 'preserve':
+            args += ['-map_metadata', '0', '-map_chapters', '0']
+        else:
+            args += ['-map_metadata', '-1', '-map_metadata:s', '-1', '-map_chapters', '-1']
         if track:
             args += ["-map", f"0:{track['index']}", "-vn"]
             bits = int(track.get("bits_per_raw_sample") or track.get("bits_per_sample") or 0)
             sample = track.get("sample_fmt", "")
-            pcm = "pcm_f64le" if sample.startswith("dbl") else "pcm_f32le" if sample.startswith("flt") else "pcm_s32le" if bits > 24 else "pcm_s24le" if bits > 16 else "pcm_s16le"
-            codecs = {"wav": pcm, "flac": "flac", "mp3": "libmp3lame", "aac": "aac", "m4a": "aac", "ogg": "libvorbis"}
+            if target == 'flac' and quality_mode == 'lossless' and (sample.startswith(('flt', 'dbl')) or bits > 24):
+                raise ProcessingError('FLAC cannot preserve this source precision. Choose WAV or explicitly allow lossy conversion.')
+            pcm = "pcm_f64le" if sample.startswith("dbl") else "pcm_f32le" if sample.startswith("flt") else "pcm_s64le" if bits > 32 else "pcm_s32le" if bits > 24 else "pcm_s24le" if bits > 16 else "pcm_s16le"
+            codecs = {"wav": pcm, "flac": "flac", "mp3": "libmp3lame", "aac": "aac", "m4a": "aac", "ogg": "libvorbis", "opus": "libopus"}
             args += ["-c:a", codecs[target]]
+            if target == 'mp3':
+                args += ['-q:a', '2']
+            elif target in ('aac', 'm4a'):
+                args += ['-b:a', '192k']
+            elif target == 'ogg':
+                args += ['-q:a', '5']
+            elif target == 'opus':
+                args += ['-b:a', '128k', '-ar', '48000']
             if target == "wav":
                 args += ["-rf64", "auto"]
         elif image:
             args += ["-map", "0:v:0", "-frames:v", "1"]
+            if target == 'webp':
+                args += ['-c:v', 'libwebp', '-lossless', '1' if quality_mode == 'lossless' else '0', '-quality', '80']
+                if quality_mode == 'lossless':
+                    args += ['-pix_fmt', 'bgra']
+            elif target == 'jpg':
+                args += ['-q:v', '2']
         else:
             args += ["-map", "0:v?", "-map", "0:a?", "-map", "0:s?", "-c", "copy"]
         args += ["-fs", str(remaining), "-progress", "pipe:1", str(destination)]
@@ -537,6 +598,26 @@ def convert(source: Path, output: Path, target: str, ctx: Context):
             converted = next((s for s in verified["streams"] if s["codec_type"] == "audio"), {})
             if any(str(converted.get(k)) != str(track.get(k)) for k in ("sample_rate", "channels")):
                 raise ProcessingError("Audio verification failed")
+            if quality_mode == 'lossless':
+                encoding, container = ('pcm_f64le', 'f64le') if track.get('sample_fmt', '').startswith(('flt', 'dbl')) else ('pcm_s64le', 's64le') if bits > 32 else ('pcm_s32le', 's32le')
+                if decoded_digest(source, ctx, stream=f"0:{track['index']}", encoding=encoding, container=container) != decoded_digest(destination, ctx, stream='0:a:0', encoding=encoding, container=container):
+                    raise ProcessingError('Lossless audio checksum verification failed')
+        if image:
+            original_image = frames[0]
+            converted_image = next((s for s in verified['streams'] if s['codec_type'] == 'video'), {})
+            if any(converted_image.get(key) != original_image.get(key) for key in ('width', 'height')):
+                raise ProcessingError('Image dimensions changed during conversion')
+            if quality_mode == 'lossless':
+                # Compare at the source precision. FFmpeg's 8→16-bit expansion
+                # can differ across packed pixel layouts without any 8-bit loss.
+                encoding = 'rgba64le' if high_precision else 'rgba'
+                if decoded_digest(source, ctx, stream='0:v:0', encoding=encoding, container='rawvideo') != decoded_digest(destination, ctx, stream='0:v:0', encoding=encoding, container='rawvideo'):
+                    raise ProcessingError('Lossless image checksum verification failed')
+        if not track and not image:
+            before_streams = [(s['codec_type'], s.get('codec_name')) for s in info['streams'] if s['codec_type'] in ('video', 'audio', 'subtitle')]
+            after_streams = [(s['codec_type'], s.get('codec_name')) for s in verified['streams'] if s['codec_type'] in ('video', 'audio', 'subtitle')]
+            if sorted(before_streams, key=lambda row: (row[0], row[1] or '')) != sorted(after_streams, key=lambda row: (row[0], row[1] or '')):
+                raise ProcessingError('Container conversion did not preserve all streams')
         outputs.append({"name": destination.name, **file_digest(destination, ctx)})
     if len(tracks) > 1:
         inputs = [{"name": row["name"], "path": str(ctx.root / row["name"])} for row in outputs]

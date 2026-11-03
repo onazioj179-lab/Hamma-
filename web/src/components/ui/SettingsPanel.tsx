@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ArrowUpRight, Check, Monitor, Moon, Sun } from 'lucide-react';
 import { useAppStore, type Theme } from '../../store/app';
 import { clearApplicationCache, usePreferences } from '../../store/preferences';
+import { ConfirmAction, type ConfirmationRequest } from './ConfirmAction';
 
 export type SettingsSection = 'general' | 'privacy' | 'storage' | 'about';
 interface Props {
@@ -17,9 +18,10 @@ export function SettingsPanel({ section, onSectionChange, busy, onHistory }: Pro
     autoDownload,
     setAutoDownload,
     recentArchives,
-    clearRecentArchives,
+    history,
+    removeRecentArchive,
     sessionOutputs,
-    clearSessionOutputs,
+    deleteSessionOutput,
   } = useAppStore();
   const {
     setPrivacyChoice,
@@ -29,6 +31,31 @@ export function SettingsPanel({ section, onSectionChange, busy, onHistory }: Pro
   const outputCount = Object.values(sessionOutputs).filter(output => output.downloadUrl).length;
   const [message, setMessage] = useState('');
   const [clearing, setClearing] = useState(false);
+  const [confirmation, setConfirmation] = useState<ConfirmationRequest | null>(null);
+  const confirmHistory = () => {
+    const current = useAppStore.getState();
+    const ids = [...new Set([...current.recentArchives.map(entry => entry.id), ...Object.entries(current.sessionOutputs).filter(([, output]) => !output.hidden).map(([id]) => id)])];
+    const legacy = (Array.isArray(current.history) ? current.history : []).map(entry => entry.id);
+    setConfirmation({
+      title: `Clear ${(ids.length + legacy.length).toLocaleString()} browser activity ${ids.length + legacy.length === 1 ? 'record' : 'records'}?`,
+      description: 'Stored downloads, processor history and copies on your device stay. Clearing these browser records cannot be undone.',
+      confirmLabel: 'Clear history',
+      onConfirm: () => {
+        ids.forEach(id => removeRecentArchive(id));
+        legacy.forEach(id => useAppStore.getState().removeHistoryEntry(id));
+        setMessage('Browser history cleared. Stored downloads and downloaded files were kept.');
+      },
+    });
+  };
+  const confirmFiles = () => {
+    const ids = Object.entries(useAppStore.getState().sessionOutputs).filter(([, output]) => output.downloadUrl).map(([id]) => id);
+    setConfirmation({
+      title: `Delete ${ids.length.toLocaleString()} temporary browser ${ids.length === 1 ? 'download' : 'downloads'}?`,
+      description: 'These files will no longer be available from this browser session. History, processor files and downloaded copies on your device stay. This deletion cannot be undone.',
+      confirmLabel: 'Delete browser files',
+      onConfirm: () => { ids.forEach(id => deleteSessionOutput(id)); setMessage('Temporary browser files deleted. History and downloaded copies were kept.'); },
+    });
+  };
   const clearCache = async () => {
     setClearing(true);
     setMessage('');
@@ -175,20 +202,15 @@ export function SettingsPanel({ section, onSectionChange, busy, onHistory }: Pro
               title="SPK operation history"
               description={`${recentArchives.length} of 20 records stored. Records contain metadata only. Clearing history keeps temporary output files available through the Available downloads filter.`}
               label="Clear history"
-              disabled={!recentArchives.length}
-              onClick={() => {
-                clearRecentArchives();
-                setMessage(
-                  'History cleared. Downloaded files were not changed.',
-                );
-              }}
+              disabled={busy || (!recentArchives.length && !history.length && !Object.values(sessionOutputs).some(output => !output.hidden))}
+              onClick={confirmHistory}
             />
             <SettingAction
               title="Temporary SPK downloads"
               description={`${outputCount} output files available in this session. Delete them to release browser memory; downloaded copies stay on your device.`}
               label="Delete browser files"
               disabled={busy || !outputCount}
-              onClick={() => { clearSessionOutputs(); setMessage('Temporary browser files deleted. History and downloaded copies were kept.'); }}
+              onClick={confirmFiles}
             />
             {onHistory && <SettingAction title="Processor files & retention" description="Manage standard job downloads, history, and expiry in the shared file history." label="Manage files" disabled={false} onClick={onHistory} />}
             <SettingAction
@@ -251,6 +273,7 @@ export function SettingsPanel({ section, onSectionChange, busy, onHistory }: Pro
           {message}
         </p>
       )}
+      {confirmation && <ConfirmAction {...confirmation} onCancel={() => setConfirmation(null)} />}
     </div>
   );
 }

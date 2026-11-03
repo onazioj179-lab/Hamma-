@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "HAMMA: free local file compression and SPK archive restoration, with an optional Rust API.",
   "private": true,
+  "engines": { "node": ">=22.12.0" },
   "workspaces": [
     "web"
   ],
@@ -24,7 +25,7 @@
     "test:core": "cd core && cargo test",
     "test:wasm": "cd wasm && cargo test",
     "lint": "npm run lint --workspace=web",
-    "clean": "rimraf dist web/dist target wasm/pkg web/src/wasm/generated"
+    "clean": "node scripts/clean.mjs"
   },
   "keywords": [
     "compression",
@@ -35,10 +36,5 @@
   ],
   "author": "Onazi Treasure Oj",
   "license": "MIT",
-  "devDependencies": {
-    "rimraf": "^5.0.5"
-  },
-  "dependencies": {
-    "immer": "^11.0.1"
-  }
+  "devDependencies": {}
 }
