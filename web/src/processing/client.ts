@@ -103,7 +103,14 @@ export async function upload(source: Source, signal: AbortSignal, update: (offse
       failures = 0;
       update(offset);
     } catch (error) {
-      if (signal.aborted || ++failures >= 3) throw error;
+      // Retrying throttling or permanent errors only increases pressure on the host.
+      if (signal.aborted || error instanceof ProcessorError && ![408, 409, 500, 502, 503, 504].includes(error.status) || ++failures >= 3) throw error;
+      await new Promise<void>((resolve, reject) => {
+        const cancel = () => { clearTimeout(timer); reject(signal.reason || new DOMException('Aborted', 'AbortError')); };
+        const timer = setTimeout(() => { signal.removeEventListener('abort', cancel); resolve(); }, 200 * 2 ** (failures - 1));
+        if (signal.aborted) cancel();
+        else signal.addEventListener('abort', cancel, { once: true });
+      });
       offset = validOffset((await request<{ offset: number }>('/uploads/' + id, { signal })).offset);
       update(offset);
     }

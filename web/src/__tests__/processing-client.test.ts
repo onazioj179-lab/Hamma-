@@ -96,3 +96,29 @@ it('preserves cancellation during response parsing', async () => {
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => { controller.abort(); throw new DOMException('Aborted', 'AbortError'); } })));
   await expect(request('/jobs', { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
 });
+
+it('does not retry throttled upload chunks or discard their resume ID', async () => {
+  const source: Source = { id: 'one', upload: 'kept', name: 'input', file: new File(['abc'], 'input'), size: 3, directory: false };
+  const fetch = vi.fn().mockResolvedValueOnce(response({ offset: 0 }))
+    .mockResolvedValueOnce({ ok: false, status: 429, headers: { get: () => '20' }, json: async () => ({ error: 'Too many requests' }) });
+  vi.stubGlobal('fetch', fetch);
+  await expect(upload(source, new AbortController().signal, () => {})).rejects.toMatchObject({ status: 429 });
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(source.upload).toBe('kept');
+});
+it('cancels retry backoff before issuing another upload request', async () => {
+  vi.useFakeTimers();
+  try {
+    const source: Source = { id: 'one', upload: 'kept', name: 'input', file: new File(['abc'], 'input'), size: 3, directory: false };
+    const fetch = vi.fn().mockResolvedValueOnce(response({ offset: 0 })).mockRejectedValueOnce(new Error('Connection lost'));
+    vi.stubGlobal('fetch', fetch);
+    const controller = new AbortController();
+    const pending = upload(source, controller.signal, () => {});
+    const failed = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort();
+    await failed;
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { vi.useRealTimers(); }
+});
