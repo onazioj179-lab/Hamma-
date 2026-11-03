@@ -464,7 +464,12 @@ def handler(service):
             length = int(self.headers.get("Content-Length", "0"))
             if not 0 < length <= 2 * BLOCK:
                 raise HTTPError(413, "Request too large")
-            return json.loads(self.rfile.read(length))
+            def reject_constant(value):
+                raise ValueError("Non-finite JSON number")
+            value = json.loads(self.rfile.read(length), parse_constant=reject_constant)
+            if not isinstance(value, dict):
+                raise HTTPError(400, "Expected a JSON object")
+            return value
 
         def route(self):
             self.connection.settimeout(30)

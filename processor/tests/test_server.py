@@ -42,6 +42,16 @@ class ServerTests(unittest.TestCase):
             result = response.read()
             return result if raw else json.loads(result)
 
+    def test_json_endpoints_reject_non_object_payloads(self):
+        for path, method in [("/uploads", "POST"), ("/jobs", "POST"), ("/settings", "PUT")]:
+            for payload in [b"null", b"[]", b"1", b'"text"', b'{"size": NaN}', b'{"size": Infinity}']:
+                with self.subTest(path=path, payload=payload):
+                    with self.assertRaises(HTTPError) as caught:
+                        self.call(path, payload, method, {"Content-Type": "application/json"}, raw=True)
+                    self.assertEqual(caught.exception.code, 400)
+                    self.assertIn("error", json.loads(caught.exception.read()))
+        self.assertIn("id", self.upload())
+
     def upload(self, data=b"test data", name="nested/世界.txt", split=False):
         record = self.call("/uploads", {"name": name, "size": len(data)}, "POST")
         if split:
