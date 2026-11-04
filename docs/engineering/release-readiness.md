@@ -57,3 +57,17 @@ after removing a redundant full count on index reopen. The final real-payload
 repeat verified 10,000 checksums and measured a 3,577,722-byte traced allocation
 peak. Timing increased; release performance targets are not accepted by this
 single-machine benchmark. Source review branch remains scoped to this increment.
+
+## Cross-platform CI evidence - 2026-11-04
+
+Status: VERIFIED for the checked source revision and CI workloads. GitHub run
+41811212150 passed native builds/contracts and processor integration on Windows
+2022, macOS and Ubuntu, plus the native address/undefined-behavior sanitizer job,
+provider-auth tests with local signing fixtures, and dependency checks.
+Run: https://github.com/onazioj179-lab/Hamma-/actions/runs/41811212150
+Metadata: validation/indexed-jobs-ci.json.
+
+This supersedes the earlier statement that sanitizer execution was unavailable
+for this increment. It does not verify physical mobile devices, GPU acceleration,
+a long-running fuzz campaign, public-host security or distributed workloads.
+The CI run precedes this documentation-only evidence update.
