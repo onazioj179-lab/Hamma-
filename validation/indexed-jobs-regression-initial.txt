@@ -1,0 +1,184 @@
+test_durable_hashed_credentials_sessions_and_password_revocation (test_accounts.AccountAuthorityTests.test_durable_hashed_credentials_sessions_and_password_revocation) ... ok
+test_validation_hash_work_bound_and_attempt_limit (test_accounts.AccountAuthorityTests.test_validation_hash_work_bound_and_attempt_limit) ... ok
+test_account_switch_does_not_merge_guest_files_and_catalog_is_owner_scoped (test_accounts.AccountHTTPTests.test_account_switch_does_not_merge_guest_files_and_catalog_is_owner_scoped) ... ok
+test_guest_and_free_queue_limits_are_enforced_before_job_creation (test_accounts.AccountHTTPTests.test_guest_and_free_queue_limits_are_enforced_before_job_creation) ... ok
+test_password_endpoint_rotates_cookie_and_revokes_other_client (test_accounts.AccountHTTPTests.test_password_endpoint_rotates_cookie_and_revokes_other_client) ... ok
+test_plain_network_credentials_are_rejected_even_with_forwarded_tls_headers (test_accounts.AccountHTTPTests.test_plain_network_credentials_are_rejected_even_with_forwarded_tls_headers) ... ok
+test_plan_history_retention_and_scheduler_concurrency_are_enforced (test_accounts.AccountHTTPTests.test_plan_history_retention_and_scheduler_concurrency_are_enforced) ... FAIL
+test_secure_transport_cookie_flags_and_invalid_paid_option (test_accounts.AccountHTTPTests.test_secure_transport_cookie_flags_and_invalid_paid_option) ... ok
+test_heic_and_animated_avif_do_not_receive_video_actions (test_capabilities.RegistryTests.test_heic_and_animated_avif_do_not_receive_video_actions) ... ok
+test_images_never_receive_audio_targets (test_capabilities.RegistryTests.test_images_never_receive_audio_targets) ... ok
+test_missing_engines_hide_media_and_native_extraction (test_capabilities.RegistryTests.test_missing_engines_hide_media_and_native_extraction) ... ok
+test_signature_inspection_is_bounded_and_ignores_names (test_capabilities.RegistryTests.test_signature_inspection_is_bounded_and_ignores_names) ... ok
+test_duplicate_digest_also_requires_matching_size (test_catalog.CatalogTests.test_duplicate_digest_also_requires_matching_size) ... ok
+test_owner_isolation_pagination_unicode_and_known_duplicates (test_catalog.CatalogTests.test_owner_isolation_pagination_unicode_and_known_duplicates) ... ok
+test_guest_catalog_is_owner_scoped_and_never_exposes_disk_paths (test_catalog_http.CatalogHTTPTests.test_guest_catalog_is_owner_scoped_and_never_exposes_disk_paths) ... ok
+test_absent_malformed_and_outside_membership_are_optional (test_cgroup_memory.ContainerMemoryTests.test_absent_malformed_and_outside_membership_are_optional) ... ok
+test_parent_limit_applies_when_leaf_is_unlimited (test_cgroup_memory.ContainerMemoryTests.test_parent_limit_applies_when_leaf_is_unlimited) ... ok
+test_v1_memory_controller_and_pressure (test_cgroup_memory.ContainerMemoryTests.test_v1_memory_controller_and_pressure) ... ok
+test_cancel_stops_streaming (test_engine.EngineTests.test_cancel_stops_streaming) ... ok
+test_compressed_stream_budget_and_corruption (test_engine.EngineTests.test_compressed_stream_budget_and_corruption) ... ok
+test_corrupt_zip_crc_fails_instead_of_returning_success (test_engine.EngineTests.test_corrupt_zip_crc_fails_instead_of_returning_success) ... ok
+test_cumulative_size_count_and_recursion_budgets (test_engine.EngineTests.test_cumulative_size_count_and_recursion_budgets) ... ok
+test_magic_detection_ignores_extension (test_engine.EngineTests.test_magic_detection_ignores_extension) ... ok
+test_recursive_archives_keep_originals_and_verify_nested_contents (test_engine.EngineTests.test_recursive_archives_keep_originals_and_verify_nested_contents) ... ok
+test_single_stream_roundtrips_and_rejects_multiple_inputs (test_engine.EngineTests.test_single_stream_roundtrips_and_rejects_multiple_inputs) ... ok
+test_standard_compression_roundtrips_with_unicode_and_empty_directories (test_engine.EngineTests.test_standard_compression_roundtrips_with_unicode_and_empty_directories) ... ok
+test_tar_extended_header_allocation_is_bounded (test_engine.EngineTests.test_tar_extended_header_allocation_is_bounded) ... ok
+test_tar_links_and_devices_rejected (test_engine.EngineTests.test_tar_links_and_devices_rejected) ... ok
+test_unsafe_names_are_rejected (test_engine.EngineTests.test_unsafe_names_are_rejected) ... ok
+test_zip_directory_allocation_and_output_writes_are_bounded (test_engine.EngineTests.test_zip_directory_allocation_and_output_writes_are_bounded) ... ok
+test_zip_traversal_links_case_collisions_and_parent_conflicts (test_engine.EngineTests.test_zip_traversal_links_case_collisions_and_parent_conflicts) ... ok
+test_all_video_audio_tracks_are_extracted (test_engine.MediaTests.test_all_video_audio_tracks_are_extracted) ... ok
+test_animated_images_are_rejected_without_dropping_frames (test_engine.MediaTests.test_animated_images_are_rejected_without_dropping_frames) ... ok
+test_real_wav_and_flac_conversion_preserves_pcm (test_engine.MediaTests.test_real_wav_and_flac_conversion_preserves_pcm) ... ok
+test_still_image_conversion_and_missing_audio_error (test_engine.MediaTests.test_still_image_conversion_and_missing_audio_error) ... ok
+test_categories_and_retry_eligibility (test_errors.FailureDescriptions.test_categories_and_retry_eligibility) ... ok
+test_unknown_exception_does_not_expose_details (test_errors.FailureDescriptions.test_unknown_exception_does_not_expose_details) ... ok
+test_unimplemented_providers_never_offer_a_redirect (test_identity_providers.ProviderAvailabilityTests.test_unimplemented_providers_never_offer_a_redirect) ... ok
+test_explicit_policy_can_exceed_default_counts_without_capacity_claim (test_indexed_jobs.ConfiguredLimitsTests.test_explicit_policy_can_exceed_default_counts_without_capacity_claim) ... ok
+test_all_tar_formats_verify_real_bytes_unicode_and_empty_directories (test_indexed_jobs.IndexedArchiveTests.test_all_tar_formats_verify_real_bytes_unicode_and_empty_directories) ... ok
+test_changed_file_and_output_limits_never_publish_partial_archive (test_indexed_jobs.IndexedArchiveTests.test_changed_file_and_output_limits_never_publish_partial_archive) ... ok
+test_disk_manifest_batch_boundaries_cancellation_and_no_overwrite (test_indexed_jobs.IndexedArchiveTests.test_disk_manifest_batch_boundaries_cancellation_and_no_overwrite) ... ok
+test_duplicate_casefold_and_parent_conflicts_use_disk_registry (test_indexed_jobs.IndexedArchiveTests.test_duplicate_casefold_and_parent_conflicts_use_disk_registry) ... ok
+test_verification_detects_corrupted_payload_before_publication (test_indexed_jobs.IndexedArchiveTests.test_verification_detects_corrupted_payload_before_publication) ... ok
+test_index_checkpoint_survives_restart_retry_and_storage_checks (test_indexed_jobs.IndexedJobRoutes.test_index_checkpoint_survives_restart_retry_and_storage_checks) ... ok
+test_job_integrates_history_manifest_downloads_and_owner_isolation (test_indexed_jobs.IndexedJobRoutes.test_job_integrates_history_manifest_downloads_and_owner_isolation) ... ok
+test_storage_accounting_and_failure_preserve_originals (test_indexed_jobs.IndexedJobRoutes.test_storage_accounting_and_failure_preserve_originals) ... Job failed: 96dc4ece9dca97633ce51c2986aa770c (conversion_failure)
+ok
+test_command_runs_a_real_scheduled_worker_and_can_reopen_completed_job (test_indexed_jobs.LocalJobCommandTests.test_command_runs_a_real_scheduled_worker_and_can_reopen_completed_job) ... ok
+test_actual_process_exit_after_commit_replays_without_duplicates (test_indexing.DurableDiscoveryTests.test_actual_process_exit_after_commit_replays_without_duplicates) ... ok
+test_directory_failure_is_durable_and_not_silently_omitted (test_indexing.DurableDiscoveryTests.test_directory_failure_is_durable_and_not_silently_omitted) ... ok
+test_interruption_reopen_stable_ids_and_streamed_manifest (test_indexing.DurableDiscoveryTests.test_interruption_reopen_stable_ids_and_streamed_manifest) ... ok
+test_large_offsets_and_keyset_pages (test_indexing.DurableDiscoveryTests.test_large_offsets_and_keyset_pages) ... ok
+test_links_are_not_followed_and_wrong_root_is_rejected (test_indexing.DurableDiscoveryTests.test_links_are_not_followed_and_wrong_root_is_rejected) ... skipped 'Symlink creation unavailable on this account'
+test_quota_failure_rolls_back_batch_and_can_resume_with_larger_quota (test_indexing.DurableDiscoveryTests.test_quota_failure_rolls_back_batch_and_can_resume_with_larger_quota) ... ok
+test_rejects_database_in_source_tree (test_indexing.DurableDiscoveryTests.test_rejects_database_in_source_tree) ... ok
+test_lossy_encoders_require_explicit_permission (test_media_policy.ConversionPolicyTests.test_lossy_encoders_require_explicit_permission) ... ok
+test_audio_metadata_policy_is_explicit_and_opus_is_real (test_media_policy.MediaQualityTests.test_audio_metadata_policy_is_explicit_and_opus_is_real) ... ok
+test_avif_still_image_decodes_and_preserves_pixels_in_png (test_media_policy.MediaQualityTests.test_avif_still_image_decodes_and_preserves_pixels_in_png) ... ok
+test_decoded_verification_has_an_expansion_limit (test_media_policy.MediaQualityTests.test_decoded_verification_has_an_expansion_limit) ... ok
+test_float_audio_is_not_silently_quantized_to_flac (test_media_policy.MediaQualityTests.test_float_audio_is_not_silently_quantized_to_flac) ... ok
+test_jpeg_rejects_implicit_loss_and_transparency (test_media_policy.MediaQualityTests.test_jpeg_rejects_implicit_loss_and_transparency) ... ok
+test_single_frame_video_is_not_accepted_as_a_still_image (test_media_policy.MediaQualityTests.test_single_frame_video_is_not_accepted_as_a_still_image) ... ok
+test_webp_lossless_preserves_pixels_and_png_dimensions (test_media_policy.MediaQualityTests.test_webp_lossless_preserves_pixels_and_png_dimensions) ... ok
+test_compress_and_extract_through_existing_engine_with_sha256 (test_native.NativeIntegration.test_compress_and_extract_through_existing_engine_with_sha256) ... ok
+test_missing_binary_preserves_existing_formats_and_reports_unavailability (test_native.NativeIntegration.test_missing_binary_preserves_existing_formats_and_reports_unavailability) ... ok
+test_native_expansion_budget_and_cancellation (test_native.NativeIntegration.test_native_expansion_budget_and_cancellation) ... ok
+test_nested_zstandard_keeps_original_and_restores_contents (test_native.NativeIntegration.test_nested_zstandard_keeps_original_and_restores_contents) ... ok
+test_normal_origin_csrf_host_and_browser_binding_guards_are_unchanged (test_oauth.OAuthHTTPTests.test_normal_origin_csrf_host_and_browser_binding_guards_are_unchanged) ... skipped 'Install processor/requirements-oauth.txt to test real TLS provider routes'
+test_real_https_completion_sets_session_cookie_and_preserves_guest_identity (test_oauth.OAuthHTTPTests.test_real_https_completion_sets_session_cookie_and_preserves_guest_identity) ... skipped 'Install processor/requirements-oauth.txt to test real TLS provider routes'
+test_apple_code_exchange_uses_signed_client_secret_and_checks_nonce (test_oauth.OAuthTests.test_apple_code_exchange_uses_signed_client_secret_and_checks_nonce) ... skipped 'Install processor/requirements-oauth.txt to test provider cryptography'
+test_bad_signature_algorithm_missing_claim_and_oversized_token (test_oauth.OAuthTests.test_bad_signature_algorithm_missing_claim_and_oversized_token) ... skipped 'Install processor/requirements-oauth.txt to test provider cryptography'
+test_google_identity_is_verified_and_replay_is_rejected (test_oauth.OAuthTests.test_google_identity_is_verified_and_replay_is_rejected) ... skipped 'Install processor/requirements-oauth.txt to test provider cryptography'
+test_invalid_tokens_are_rejected_before_session_creation (test_oauth.OAuthTests.test_invalid_tokens_are_rejected_before_session_creation) ... skipped 'Install processor/requirements-oauth.txt to test provider cryptography'
+test_provider_outage_and_denial_do_not_create_accounts (test_oauth.OAuthTests.test_provider_outage_and_denial_do_not_create_accounts) ... skipped 'Install processor/requirements-oauth.txt to test provider cryptography'
+test_state_is_browser_bound_hashed_expiring_and_one_use (test_oauth.OAuthTests.test_state_is_browser_bound_hashed_expiring_and_one_use) ... skipped 'Install processor/requirements-oauth.txt to test provider cryptography'
+test_unconfigured_missing_dependency_and_insecure_origins_fail_closed (test_oauth.OAuthTests.test_unconfigured_missing_dependency_and_insecure_origins_fail_closed) ... skipped 'Install processor/requirements-oauth.txt to test provider cryptography'
+test_cancel_and_failed_retry_leave_other_project_output_intact (test_projects.ProjectRoutes.test_cancel_and_failed_retry_leave_other_project_output_intact) ... Job failed: 731f1f10e01ae6aa8d971c7fbb84873e (unsupported_format)
+ok
+test_fair_dispatch_rotates_projects_without_loading_manifests (test_projects.ProjectRoutes.test_fair_dispatch_rotates_projects_without_loading_manifests) ... ok
+test_header_inspection_does_not_create_uploads_or_jobs (test_projects.ProjectRoutes.test_header_inspection_does_not_create_uploads_or_jobs) ... ok
+test_memory_pressure_defers_admission_and_disk_exhaustion_is_reported (test_projects.ProjectRoutes.test_memory_pressure_defers_admission_and_disk_exhaustion_is_reported) ... ok
+test_projects_have_independent_verified_outputs_and_idempotency (test_projects.ProjectRoutes.test_projects_have_independent_verified_outputs_and_idempotency) ... ok
+test_large_offsets_preserve_integer_precision (test_ranges.RangeTests.test_large_offsets_preserve_integer_precision) ... ok
+test_malformed_and_unsatisfiable_ranges (test_ranges.RangeTests.test_malformed_and_unsatisfiable_ranges) ... ok
+test_normal_and_suffix_ranges (test_ranges.RangeTests.test_normal_and_suffix_ranges) ... ok
+test_memory_pressure_and_recovery (test_resources.ResourceAdmissionTests.test_memory_pressure_and_recovery) ... ok
+test_platform_probe_is_optional_positive_measurement (test_resources.ResourceAdmissionTests.test_platform_probe_is_optional_positive_measurement) ... ok
+test_unknown_memory_cpu_limit_and_hard_bound (test_resources.ResourceAdmissionTests.test_unknown_memory_cpu_limit_and_hard_bound) ... ok
+test_actual_background_worker_process_completes_and_releases_slot (test_server.ServerTests.test_actual_background_worker_process_completes_and_releases_slot) ... FAIL
+test_automatic_history_expiry_keeps_unexpired_files_accessible (test_server.ServerTests.test_automatic_history_expiry_keeps_unexpired_files_accessible) ... ok
+test_bulk_deletion_includes_hidden_records_and_orphan_uploads (test_server.ServerTests.test_bulk_deletion_includes_hidden_records_and_orphan_uploads) ... ok
+test_cancel_commits_before_delayed_worker_initial_progress (test_server.ServerTests.test_cancel_commits_before_delayed_worker_initial_progress) ... ok
+test_cancel_pause_resume_retry_states_and_failed_outputs (test_server.ServerTests.test_cancel_pause_resume_retry_states_and_failed_outputs) ... Job failed: da8ecf4c89ed1e3f6c42ff5629538ebd (unsupported_format)
+ok
+test_conversion_quality_is_enforced_before_queueing_and_bound_to_request_identity (test_server.ServerTests.test_conversion_quality_is_enforced_before_queueing_and_bound_to_request_identity) ... ok
+test_csrf_dns_rebinding_and_upload_size_guards (test_server.ServerTests.test_csrf_dns_rebinding_and_upload_size_guards) ... ok
+test_expired_or_missing_uploads_report_gone_before_cleanup (test_server.ServerTests.test_expired_or_missing_uploads_report_gone_before_cleanup) ... ok
+test_explicit_lan_host_keeps_origin_and_host_protection (test_server.ServerTests.test_explicit_lan_host_keeps_origin_and_host_protection) ... ok
+test_four_simultaneous_sessions_complete_with_isolated_verified_downloads (test_server.ServerTests.test_four_simultaneous_sessions_complete_with_isolated_verified_downloads) ... ok
+test_health_identifies_live_instance_without_file_metadata (test_server.ServerTests.test_health_identifies_live_instance_without_file_metadata) ... ok
+test_history_and_files_have_separate_deletion_and_expiration (test_server.ServerTests.test_history_and_files_have_separate_deletion_and_expiration) ... ok
+test_idempotent_queue_requests_do_not_duplicate_work (test_server.ServerTests.test_idempotent_queue_requests_do_not_duplicate_work) ... ok
+test_job_creation_rejects_missing_and_incomplete_uploads (test_server.ServerTests.test_job_creation_rejects_missing_and_incomplete_uploads) ... ok
+test_json_endpoints_reject_non_object_payloads (test_server.ServerTests.test_json_endpoints_reject_non_object_payloads) ... ok
+test_json_routes_reject_non_object_bodies (test_server.ServerTests.test_json_routes_reject_non_object_bodies) ... ok
+test_late_worker_updates_preserve_terminal_state_and_explicit_retry_works (test_server.ServerTests.test_late_worker_updates_preserve_terminal_state_and_explicit_retry_works) ... ok
+test_native_zstandard_jobs_use_existing_queue_downloads_and_extraction (test_server.ServerTests.test_native_zstandard_jobs_use_existing_queue_downloads_and_extraction) ... ok
+test_offset_conflict_and_finalized_inputs_are_immutable (test_server.ServerTests.test_offset_conflict_and_finalized_inputs_are_immutable) ... ok
+test_rate_limit_returns_retry_after_and_discards_expired_windows (test_server.ServerTests.test_rate_limit_returns_retry_after_and_discards_expired_windows) ... ok
+test_restart_cleans_incomplete_outputs_and_preserves_completed_and_queued_jobs (test_server.ServerTests.test_restart_cleans_incomplete_outputs_and_preserves_completed_and_queued_jobs) ... ok
+test_restart_preparation_is_instance_bound_and_keeps_queued_jobs_intact (test_server.ServerTests.test_restart_preparation_is_instance_bound_and_keeps_queued_jobs_intact) ... ok
+test_resumable_chunks_real_job_hash_download_and_ranges (test_server.ServerTests.test_resumable_chunks_real_job_hash_download_and_ranges) ... ok
+test_retention_settings_are_independent_between_sessions (test_server.ServerTests.test_retention_settings_are_independent_between_sessions) ... ok
+test_retry_cannot_bypass_queue_capacity (test_server.ServerTests.test_retry_cannot_bypass_queue_capacity) ... ok
+test_running_worker_cancellation_stays_final (test_server.ServerTests.test_running_worker_cancellation_stays_final) ... ok
+test_search_pagination_retention_and_restart_recovery (test_server.ServerTests.test_search_pagination_retention_and_restart_recovery) ... ok
+test_second_scheduler_cannot_share_the_same_data_directory (test_server.ServerTests.test_second_scheduler_cannot_share_the_same_data_directory) ... ok
+test_second_server_cannot_share_the_same_listener (test_server.ServerTests.test_second_server_cannot_share_the_same_listener) ... ok
+test_user_isolation_for_jobs_uploads_and_signed_downloads (test_server.ServerTests.test_user_isolation_for_jobs_uploads_and_signed_downloads) ... ok
+test_worker_start_failure_does_not_strand_jobs_or_stop_queue (test_server.ServerTests.test_worker_start_failure_does_not_strand_jobs_or_stop_queue) ... FAIL
+test_changed_file_selection_rejects_before_any_mutation_and_valid_token_cancels_jobs (test_store_queries.DeletionPreviewRoutes.test_changed_file_selection_rejects_before_any_mutation_and_valid_token_cancels_jobs) ... ok
+test_global_zero_byte_upload_and_queue_caps_cannot_be_bypassed_with_fresh_sessions (test_store_queries.DeletionPreviewRoutes.test_global_zero_byte_upload_and_queue_caps_cannot_be_bypassed_with_fresh_sessions) ... ok
+test_preview_counts_target_owner_and_history_is_distinct_from_file_deletion (test_store_queries.DeletionPreviewRoutes.test_preview_counts_target_owner_and_history_is_distinct_from_file_deletion) ... ok
+test_batched_expiry_makes_progress_without_rescanning_cleaned_history (test_store_queries.StoreQueries.test_batched_expiry_makes_progress_without_rescanning_cleaned_history) ... ok
+test_count_resources_and_queue_admission_are_filtered_and_bounded (test_store_queries.StoreQueries.test_count_resources_and_queue_admission_are_filtered_and_bounded) ... ok
+test_existing_metadata_migrates_references_without_losing_records (test_store_queries.StoreQueries.test_existing_metadata_migrates_references_without_losing_records) ... ok
+test_hidden_downloads_are_opt_in_owner_scoped_and_expire_independently (test_store_queries.StoreQueries.test_hidden_downloads_are_opt_in_owner_scoped_and_expire_independently) ... ok
+test_history_cap_hides_oldest_terminal_records_without_deleting_files_or_active_jobs (test_store_queries.StoreQueries.test_history_cap_hides_oldest_terminal_records_without_deleting_files_or_active_jobs) ... ok
+test_history_summaries_keep_counts_without_loading_private_manifests (test_store_queries.StoreQueries.test_history_summaries_keep_counts_without_loading_private_manifests) ... ok
+test_pages_match_unicode_casefold_filter_and_order_without_owner_leaks (test_store_queries.StoreQueries.test_pages_match_unicode_casefold_filter_and_order_without_owner_leaks) ... ok
+test_record_iteration_does_not_repeat_rows_during_updates (test_store_queries.StoreQueries.test_record_iteration_does_not_repeat_rows_during_updates) ... ok
+test_reference_index_is_owner_scoped_and_tracks_replacement_patch_and_delete (test_store_queries.StoreQueries.test_reference_index_is_owner_scoped_and_tracks_replacement_patch_and_delete) ... ok
+test_https_serves_only_with_explicit_client_trust (test_transport.HTTPSIntegrationTests.test_https_serves_only_with_explicit_client_trust) ... ok
+test_mismatched_private_key_is_rejected (test_transport.HTTPSIntegrationTests.test_mismatched_private_key_is_rejected) ... ok
+test_request_capacity_rejects_overload_and_recovers_after_completion (test_transport.HTTPSIntegrationTests.test_request_capacity_rejects_overload_and_recovers_after_completion) ... ok
+test_stalled_raw_client_does_not_block_legitimate_tls_request (test_transport.HTTPSIntegrationTests.test_stalled_raw_client_does_not_block_legitimate_tls_request) ... ok
+test_no_tls_is_explicit_local_transport (test_transport.TransportTests.test_no_tls_is_explicit_local_transport) ... ok
+test_partial_empty_and_invalid_configuration_fails_closed (test_transport.TransportTests.test_partial_empty_and_invalid_configuration_fails_closed) ... ok
+test_inherited_limits_are_never_raised (test_worker_limits.WorkerLimitTests.test_inherited_limits_are_never_raised) ... ok
+test_linux_keeps_address_space_cpu_and_file_caps (test_worker_limits.WorkerLimitTests.test_linux_keeps_address_space_cpu_and_file_caps) ... ok
+test_macos_retains_supported_caps_without_invalid_address_space_request (test_worker_limits.WorkerLimitTests.test_macos_retains_supported_caps_without_invalid_address_space_request) ... ok
+
+======================================================================
+FAIL: test_plan_history_retention_and_scheduler_concurrency_are_enforced (test_accounts.AccountHTTPTests.test_plan_history_retention_and_scheduler_concurrency_are_enforced)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\onazi\Documents\PALARITY\hamma-universal-workspace\.worktrees\shante-indexed-jobs\processor\tests\test_accounts.py", line 196, in test_plan_history_retention_and_scheduler_concurrency_are_enforced
+    self.assertEqual(sum(item[1] == owner for item in self.service.running.values()), concurrency)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0 != 1
+
+======================================================================
+FAIL: test_actual_background_worker_process_completes_and_releases_slot (test_server.ServerTests.test_actual_background_worker_process_completes_and_releases_slot)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\onazi\Documents\PALARITY\hamma-universal-workspace\.worktrees\shante-indexed-jobs\processor\tests\test_server.py", line 340, in test_actual_background_worker_process_completes_and_releases_slot
+    self.assertEqual(current["state"], "completed", current)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'queued' != 'completed'
+- queued
++ completed
+ : {'id': '979086fd5db7def3c589246515cb4f68', 'projectId': 'default', 'created': 1793785035.576428, 'name': 'nested/\u4e16\u754c.txt', 'operation': 'compress', 'target': 'zip', 'recursive': False, 'qualityMode': 'lossless', 'metadataPolicy': 'strip', 'state': 'queued', 'inputSize': 9, 'outputSize': None, 'format': 'file', 'processed': 0, 'entries': 0, 'fileExpires': 1793871435.576428, 'historyExpires': 1796377035.576428, 'downloadAvailable': False, 'error': None, 'fileCount': 1}
+
+======================================================================
+FAIL: test_worker_start_failure_does_not_strand_jobs_or_stop_queue (test_server.ServerTests.test_worker_start_failure_does_not_strand_jobs_or_stop_queue)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\onazi\Documents\PALARITY\hamma-universal-workspace\.worktrees\shante-indexed-jobs\processor\tests\test_server.py", line 269, in test_worker_start_failure_does_not_strand_jobs_or_stop_queue
+    with self.assertLogs("hamma.processor", level="ERROR"), patch("processor.server.multiprocessing.get_context") as spawn:
+         ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.13_3.13.3824.0_x64__qbz5n2kfra8p0\Lib\unittest\_log.py", line 84, in __exit__
+    self._raiseFailure(
+    ~~~~~~~~~~~~~~~~~~^
+        "no logs of level {} or higher triggered on {}"
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        .format(logging.getLevelName(self.level), self.logger.name))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: no logs of level ERROR or higher triggered on hamma.processor
+
+----------------------------------------------------------------------
+Ran 139 tests in 246.505s
+
+FAILED (failures=3, skipped=10)

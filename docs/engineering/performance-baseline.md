@@ -40,3 +40,29 @@ JSON reports in validation/index-*.json are authoritative for each run.
 Tracemalloc excludes SQLite/native allocations and OS caches. Real discovery
 fixtures are 29 bytes each; timings exclude fixture creation and cleanup.
 These results do not establish conversion throughput or large-payload capacity.
+
+
+## Real indexed TAR payload run - 2026-11-04
+
+Status: PARTIAL. The initial real run processed 10,000 deterministic random
+4096-byte files (40,960,000 payload bytes) through discovery, TAR.GZ creation,
+per-member verification and whole-output SHA-256. An independent pass checked
+every extracted payload. It took 426.898 seconds and peaked at 78,627,687 traced
+Python bytes. Output was 41,219,100 bytes; random payloads did not shrink.
+
+The run exposed repeated Windows ctypes type construction retaining per-file
+state. Bindings are now reused. Before and after JSON reports are retained under
+validation/indexed-tar-10000*.json. Compare their actual fields; do not extrapolate
+to another machine, file distribution or payload size. Tracing excludes SQLite
+and codec native allocations, RSS and OS caches. Both runs use the same payload
+generator; fixture creation and independent post-verification are outside timing.
+
+| Same real 10,000-file payload workload | Seconds | Peak traced Python bytes |
+| --- | ---: | ---: |
+| Before binding reuse | 426.898 | 78,627,687 |
+| After binding reuse | 485.971 | 3,577,722 |
+
+Measured traced allocation peak fell by 95.45%. Runtime increased in these runs; no speed
+improvement is claimed. Host load was not controlled. Both independently verified
+all 10,000 payload checksums. The index/WAL accounting settled at
+2,445,312 bytes after writer closure in the latter run.

@@ -1,0 +1,18 @@
+test_explicit_policy_can_exceed_default_counts_without_capacity_claim (test_indexed_jobs.ConfiguredLimitsTests.test_explicit_policy_can_exceed_default_counts_without_capacity_claim) ... ok
+test_all_tar_formats_verify_real_bytes_unicode_and_empty_directories (test_indexed_jobs.IndexedArchiveTests.test_all_tar_formats_verify_real_bytes_unicode_and_empty_directories) ... ok
+test_changed_file_and_output_limits_never_publish_partial_archive (test_indexed_jobs.IndexedArchiveTests.test_changed_file_and_output_limits_never_publish_partial_archive) ... ok
+test_disk_manifest_batch_boundaries_cancellation_and_no_overwrite (test_indexed_jobs.IndexedArchiveTests.test_disk_manifest_batch_boundaries_cancellation_and_no_overwrite) ... ok
+test_duplicate_casefold_and_parent_conflicts_use_disk_registry (test_indexed_jobs.IndexedArchiveTests.test_duplicate_casefold_and_parent_conflicts_use_disk_registry) ... ok
+test_repeated_safe_opens_have_bounded_python_memory_and_release_handles (test_indexed_jobs.IndexedArchiveTests.test_repeated_safe_opens_have_bounded_python_memory_and_release_handles) ... ok
+test_unicode_normalization_does_not_change_the_source_path (test_indexed_jobs.IndexedArchiveTests.test_unicode_normalization_does_not_change_the_source_path) ... ok
+test_verification_detects_corrupted_payload_before_publication (test_indexed_jobs.IndexedArchiveTests.test_verification_detects_corrupted_payload_before_publication) ... ok
+test_index_checkpoint_survives_restart_retry_and_storage_checks (test_indexed_jobs.IndexedJobRoutes.test_index_checkpoint_survives_restart_retry_and_storage_checks) ... ok
+test_job_integrates_history_manifest_downloads_and_owner_isolation (test_indexed_jobs.IndexedJobRoutes.test_job_integrates_history_manifest_downloads_and_owner_isolation) ... ok
+test_storage_accounting_and_failure_preserve_originals (test_indexed_jobs.IndexedJobRoutes.test_storage_accounting_and_failure_preserve_originals) ... Job failed: 97011cb76085f3dcd0cfb9c929308613 (insufficient_storage)
+ok
+test_command_runs_a_real_scheduled_worker_and_can_reopen_completed_job (test_indexed_jobs.LocalJobCommandTests.test_command_runs_a_real_scheduled_worker_and_can_reopen_completed_job) ... ok
+
+----------------------------------------------------------------------
+Ran 12 tests in 22.311s
+
+OK

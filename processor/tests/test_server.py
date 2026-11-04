@@ -266,7 +266,7 @@ class ServerTests(unittest.TestCase):
 
     def test_worker_start_failure_does_not_strand_jobs_or_stop_queue(self):
         jobs = [self.job(), self.job()]
-        with self.assertLogs("hamma.processor", level="ERROR"), patch("processor.server.multiprocessing.get_context") as spawn:
+        with self.assertLogs("hamma.processor", level="ERROR"), patch("processor.server.multiprocessing.get_context") as spawn, patch('processor.server.worker_capacity', return_value=1):
             spawn.return_value.Process.return_value.start.side_effect = OSError("private host detail")
             self.service.tick()
         self.assertEqual(spawn.call_count, 2)
@@ -330,7 +330,12 @@ class ServerTests(unittest.TestCase):
 
     def test_actual_background_worker_process_completes_and_releases_slot(self):
         job = self.job()
-        self.service.tick()
+        with patch('processor.server.available_memory', return_value=0):
+            self.service.tick()
+        self.assertEqual(self.call('/jobs/' + job['id'])['state'], 'queued')
+        # This test exercises a real child process, independently of host pressure.
+        with patch('processor.server.worker_capacity', return_value=1):
+            self.service.tick()
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             current = self.call("/jobs/" + job["id"])

@@ -26,3 +26,21 @@ Passing one test group does not complete a full directive category.
 | GPU compute/fallback matrix | NOT STARTED | Native probe reports GPU acceleration false |
 | Preview/vault/routes/presets/folder-diff/SDK/sharing | NOT STARTED | See unfinished-work.md; do not advertise as shipped |
 | Deployment | BLOCKED | Release acceptance gaps and production infrastructure configuration remain |
+
+
+## Indexed processing follow-up - 2026-11-04
+
+Status: PARTIAL. The prior index-to-job gap is now implemented for operator-
+authorized TAR-family jobs: bounded discovery and archive manifests, scheduler
+integration, indexed manifest pages, storage accounting and checkpoint retention.
+See local-indexed-jobs.md for exact scope and validation. Browser source arrays,
+ZIP metadata, distributed execution and remaining release requirements are still
+open. This update supersedes earlier statements that no processing path consumes
+the index; it does not mark the complete platform verified.
+
+| Follow-up scope | Status | Evidence |
+| --- | --- | --- |
+| Indexed TAR-family jobs in normal scheduler | VERIFIED | Targeted format, integrity, isolation, restart and command tests; 10,000-file TAR.GZ payload benchmark |
+| Repeated safe-open memory/handle regression | VERIFIED | Repeated open/close test; traced payload peak reduced from 78.6 MB to 3.58 MB |
+| General throughput improvement | PARTIAL | Runtime increased in measured repeat; no speedup claim |
+| Browser source/index integration and bounded ZIP | NOT STARTED | Operator path is implemented; browser arrays and ZIP metadata remain |

@@ -1,0 +1,16 @@
+{
+  "scope": "real local directory discovery, TAR.GZ processing and internal verification; deterministic random file payloads",
+  "platform": "Windows-11-10.0.26300-SP0",
+  "python": "3.13.14",
+  "files": 10000,
+  "entriesIncludingDirectories": 10010,
+  "bytesPerFile": 4096,
+  "inputBytes": 40960000,
+  "outputBytes": 41219100,
+  "indexBytesCharged": 3595656,
+  "secondsDiscoveryProcessingVerification": 426.8976032999926,
+  "peakPythonAllocatedBytes": 78627687,
+  "independentPayloadChecksumsVerified": true,
+  "outputSHA256": "fb2e69cf8e2e442636b5d63a04bc2b52ff584e78dc166f15b7d9591590adf01f",
+  "notes": "Fixture generation, independent post-run verification and cleanup excluded from timed interval. Python allocations exclude SQLite/native memory and OS cache. Worker called in-process for tracing; scheduled subprocess covered separately."
+}
