@@ -37,8 +37,8 @@ from .engine import ARCHIVES, MEDIA, BLOCK, Context, ProcessingError, archive_fo
 from .worker_limits import apply_worker_limits
 from .accounts import Accounts, AccountError, plan as account_plan
 from .catalog import FileCatalog
-from .capabilities import action_registry
-from .identity_providers import public_providers
+from .capabilities import action_registry, inspect_headers, single_file_archives
+from .oauth import OAuth
 
 LOG = logging.getLogger("hamma.processor")
 TERMINAL = ("completed", "failed", "cancelled", "interrupted")
@@ -216,13 +216,16 @@ class Store:
             for row in rows:
                 yield row["owner"], json.loads(row["data"])
 
-    def queued(self, limit=1, excluded_owners=()):
+    def queued(self, limit=1, excluded_owners=(), fair=False):
         where, parameters = ["kind='job'", "json_extract(data,'$.state')='queued'"], []
         if excluded_owners:
             where.append("owner NOT IN (" + ",".join("?" for _ in excluded_owners) + ")")
             parameters.extend(excluded_owners)
         with self.connect() as db:
-            rows = db.execute("SELECT owner,data FROM records WHERE " + " AND ".join(where) + " ORDER BY created,id,owner LIMIT ?", [*parameters, max(1, min(100, limit))]).fetchall()
+            ordering = "created,id,owner"
+            if fair:
+                ordering = "coalesce((SELECT max(json_extract(previous.data,'$.scheduled')) FROM records AS previous WHERE previous.owner=records.owner AND previous.kind='job' AND coalesce(json_extract(previous.data,'$.projectId'),'default')=coalesce(json_extract(records.data,'$.projectId'),'default')),0),created,id,owner"
+            rows = db.execute("SELECT owner,data FROM records WHERE " + " AND ".join(where) + " ORDER BY " + ordering + " LIMIT ?", [*parameters, max(1, min(100, limit))]).fetchall()
         return [(row[0], json.loads(row[1])) for row in rows]
 
     def reserved_bytes(self, owner=None):
@@ -384,6 +387,7 @@ class Service:
         self.restart_until = 0
         self.stop = threading.Event()
         self.accounts = Accounts(self.store)
+        self.oauth = OAuth(self.store)
         self.catalog = FileCatalog(self.store)
         self.secret = self.store.root / ".key"
         if not self.secret.exists():
@@ -438,6 +442,7 @@ class Service:
         return result
 
     def cleanup(self):
+        self.oauth.cleanup()
         now = time.time()
         jobs = self.store.expired_jobs(now)
         for owner, candidate in jobs:
@@ -542,16 +547,16 @@ class Service:
                 attempts += 1
                 owners = {entry[1] for entry in self.running.values()}
                 blocked = {owner for owner in owners if sum(entry[1] == owner for entry in self.running.values()) >= self.owner_plan(owner)['maxConcurrentJobs']}
-                candidates = self.store.queued(excluded_owners=owners)
+                candidates = self.store.queued(excluded_owners=owners, fair=True)
                 if not candidates and owners:
-                    candidates = self.store.queued(excluded_owners=blocked)
+                    candidates = self.store.queued(excluded_owners=blocked, fair=True)
                 if not candidates:
                     break
                 owner, job = candidates[0]
                 if self.reserved() + self.limits["expanded"] > self.limits["storage"]:
                     self.store.patch(owner, "job", job["id"], state="failed", error="Storage full", downloadAvailable=False)
                     continue
-                self.store.patch(owner, "job", job["id"], state="processing")
+                self.store.patch(owner, "job", job["id"], state="processing", scheduled=time.time())
                 try:
                     process = multiprocessing.get_context("spawn").Process(target=run_job, args=(str(self.store.root), owner, job["id"], self.limits, True))
                     process.start()
@@ -665,15 +670,19 @@ def handler(service):
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Cross-Origin-Resource-Policy", "same-origin")
-            self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; worker-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+            self.send_header('Content-Security-Policy', service.oauth.content_security_policy(self.headers.get('Host', ''), getattr(self.server, 'transport_secure', False)))
+            self.send_header('Cross-Origin-Opener-Policy', 'same-origin-allow-popups')
             if getattr(self, "new_cookie", None):
                 self.send_header("Set-Cookie", self.new_cookie)
             if getattr(self, "account_cookie", None):
                 self.send_header("Set-Cookie", self.account_cookie)
+            if getattr(self, 'oauth_cookie', None):
+                self.send_header('Set-Cookie', self.oauth_cookie)
 
         def identity(self):
             self.new_cookie = None
             self.account_cookie = None
+            self.oauth_cookie = None
             self.account = None
             self.account_token = None
             peer = ipaddress.ip_address(self.client_address[0])
@@ -682,7 +691,7 @@ def handler(service):
                 raise HTTPError(403, "Private network only")
             host = self.headers.get("Host", "")
             parsed = urlsplit("http://" + host)
-            if parsed.hostname not in ("localhost", "127.0.0.1", "::1", *service.lan_hosts):
+            if parsed.hostname not in ("localhost", "127.0.0.1", "::1", *service.lan_hosts, *(tuple([service.oauth.hostname]) if getattr(self.server, "transport_secure", False) and service.oauth.hostname else ())):
                 raise HTTPError(403, "Invalid host")
             origin = self.headers.get("Origin")
             if origin and origin not in ("http://" + host, "https://" + host):
@@ -727,7 +736,7 @@ def handler(service):
             return {'authenticated': self.account is not None,
                     'account': service.accounts.public(self.account) if self.account else None,
                     'plan': self.plan, 'billingEnabled': False, 'credentialsAllowed': self.credentials_allowed,
-                    'providers': public_providers()}
+                    'providers': service.oauth.public(self.headers.get('Host', ''), getattr(self.server, 'transport_secure', False))}
 
         def json_body(self):
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
@@ -773,6 +782,41 @@ def handler(service):
                 return self.send(200, {"ready": True, "instance": service.instance_id})
             if path == '/api/process/account/me' and method == 'GET':
                 return self.send(200, self.account_view())
+            provider_route = re.fullmatch(r'/api/process/account/oauth/(google|apple)/(start|complete)', path)
+            if provider_route and method == 'POST':
+                provider, action = provider_route.groups()
+                if self.headers.get('Origin') not in (None, service.oauth.base):
+                    raise HTTPError(403, 'Invalid sign-in origin')
+                if not service.oauth.same_host(self.headers.get('Host', ''), getattr(self.server, 'transport_secure', False)):
+                    raise HTTPError(403, 'Provider sign-in requires its configured HTTPS address.')
+                if self.account:
+                    raise HTTPError(409, 'Sign out before choosing another sign-in method.')
+                service.accounts.admit(self.client_address[0])
+                if int(self.headers.get('Content-Length', '0')) > 32768:
+                    raise HTTPError(413, 'Account request is too large')
+                body = self.json_body()
+                cookie_name = f'__Host-shante_oauth_{self.server.server_port}_{provider}'
+                if action == 'start':
+                    if body != {}:
+                        raise HTTPError(400, 'Invalid sign-in request')
+                    settings, browser = service.oauth.start(provider)
+                    self.oauth_cookie = f'{cookie_name}={browser}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=600'
+                    return self.send(200, settings)
+                if set(body) - {'state', 'credential', 'code', 'error'}:
+                    raise HTTPError(400, 'Invalid sign-in response')
+                jar = cookies.SimpleCookie()
+                try:
+                    jar.load(self.headers.get('Cookie', ''))
+                except cookies.CookieError:
+                    pass
+                browser = jar.get(cookie_name)
+                issuer, subject, name = service.oauth.complete(provider, body, browser.value if browser else '')
+                self.oauth_cookie = f'{cookie_name}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0'
+                account, token = service.accounts.login_provider(issuer, subject, name)
+                self.account = account; self.owner = account['owner']
+                self.plan = account_plan('free', service.limits)
+                self.set_account_cookie(token)
+                return self.send(200, self.account_view())
             if path in ('/api/process/account/register', '/api/process/account/login', '/api/process/account/logout', '/api/process/account/password-change') and method == 'POST':
                 if path.endswith('/logout'):
                     if self.account_token:
@@ -806,9 +850,14 @@ def handler(service):
                     running = len(service.running)
                 return self.send(200, {"version": 1, "processing": "local", "instance": service.instance_id,
                                        "pid": os.getpid(), "revision": PROCESSOR_REVISION, "activeJobs": running})
+            if path == "/api/process/inspect" and method == "POST":
+                try:
+                    return self.send(200, {"entries": inspect_headers(self.json_body().get('entries'))})
+                except ValueError as error:
+                    raise HTTPError(400, str(error)) from error
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
-                return self.send(200, {"archives": archive_formats(), "nativeEngine": capability(), "actionRegistry": action_registry(), "conversions": MEDIA if shutil.which("ffmpeg") and shutil.which("ffprobe") else [],
+                return self.send(200, {"archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "actionRegistry": action_registry(), "conversions": MEDIA if shutil.which("ffmpeg") and shutil.which("ffprobe") else [],
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
             if path == "/api/process/settings":
                 if method == "GET":
@@ -923,6 +972,9 @@ def handler(service):
                     raise HTTPError(400, "Unsupported operation")
                 if operation != "compress" and len(ids) != 1:
                     raise HTTPError(400, "One input per extraction or conversion job")
+                project_id = body.get('projectId', 'default')
+                if not isinstance(project_id, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', project_id):
+                    raise HTTPError(400, 'Invalid project identifier')
                 quality_mode = body.get('qualityMode', 'lossless')
                 metadata_policy = body.get('metadataPolicy', 'strip')
                 from .media_policy import validate_conversion_options
@@ -938,7 +990,7 @@ def handler(service):
                     existing = service.store.get(self.owner, "job", job_id)
                     if existing:
                         if ([i["id"] for i in existing["inputs"]] != ids or existing["operation"] != operation or existing["target"] != target or existing["recursive"] != bool(body.get("recursive")) or
-                            existing.get('qualityMode', 'lossless') != quality_mode or existing.get('metadataPolicy', 'strip') != metadata_policy):
+                            existing.get('projectId', 'default') != project_id or existing.get('qualityMode', 'lossless') != quality_mode or existing.get('metadataPolicy', 'strip') != metadata_policy):
                             raise HTTPError(409, "Request identifier already used")
                         return self.send(200, service.public(self.owner, existing))
                     if service.store.count(self.owner, states=(*ACTIVE, "paused")) >= self.plan['maxQueuedJobs']:
@@ -968,7 +1020,7 @@ def handler(service):
                     now = time.time()
                     settings = service.defaults(self.owner)
                     retention = RETENTION[settings["historyRetention"]]
-                    record = {"id": job_id, "created": now, "name": inputs[0]["name"] if len(inputs) == 1 else f"{len(inputs)} files",
+                    record = {"id": job_id, "projectId": project_id, "created": now, "name": inputs[0]["name"] if len(inputs) == 1 else f"{len(inputs)} files",
                               "operation": operation, "target": target, "inputs": inputs, "recursive": bool(body.get("recursive")),
                               'qualityMode': quality_mode, 'metadataPolicy': metadata_policy,
                               "state": "queued", "inputSize": sum(i["size"] for i in inputs), "outputSize": None,

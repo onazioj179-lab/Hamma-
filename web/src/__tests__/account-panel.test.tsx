@@ -105,3 +105,13 @@ it('toggles password visibility and clears a visible password after failed sign-
   expect(host.querySelector<HTMLInputElement>('[name=password]')!.value).toBe('');
   expect(host.querySelector('[role=alert]')?.textContent).toContain('Incorrect');
 });
+
+
+it('does not offer local password changes for provider-only accounts', async () => {
+  fetchMock.mockResolvedValue({ ok: true, json: async () => ({ ...member, account: { ...member.account, passwordEnabled: false } }) });
+  await render();
+  expect(host.textContent).toContain('Connected provider account');
+  expect(host.textContent).not.toContain('Change password');
+  expect(host.querySelector('input[type=password]')).toBeNull();
+  expect(button('Sign out').disabled).toBe(false);
+});

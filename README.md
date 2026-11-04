@@ -6,6 +6,8 @@ A free local workspace to compress, extract, convert, and download files.
 Created by **Onazi Treasure OJ**. The current local UI retains its HAMMA name;
 SHANTE CORE is the integrated native engine. This is not a launched subscription service.
 
+Optional Google/Apple sign-in setup and verification limits: [account providers](docs/account-providers.md).
+
 Build and verification instructions: [SHANTE CORE](native/README.md).
 
 ## Start HAMMA with one click on Windows

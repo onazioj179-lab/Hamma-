@@ -1,4 +1,5 @@
-import { resolveActions } from '../../processing/actions';
+import { inspectSources } from '../../processing/inspection';
+import { resolveActions, resolveArchiveTargets } from '../../processing/actions';
 import { useAppStore } from '../../store/app';
 import { combineActivity, filterActivity, loadJobs, type ActivityJob } from '../../processing/activity';
 import { SelectField } from '../ui/SelectField';
@@ -25,6 +26,9 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
 
   const [capability, setCapability] = useState<Capability | null>(null);
   const [offline, setOffline] = useState(false);
+  const [projectId, setProjectId] = useState('default');
+  const [projectIds, setProjectIds] = useState(['default']);
+  const drafts = useRef(new Map<string, { sources: Source[]; selected: Set<string>; target: string; conversion: string; qualityMode: 'lossless' | 'lossy'; metadataPolicy: 'strip' | 'preserve'; recursive: boolean; errors: Record<string, string> }>());
   const [sources, setSources] = useState<Source[]>([]);
   const [selected, setSelected] = useState(new Set<string>());
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -86,6 +90,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
         for (const job of finished) window.dispatchEvent(new CustomEvent('hamma-job-notice', { detail: { message: `${job.outputName || job.name}: ${job.state === 'completed' ? 'Ready to download' : 'Could not finish. Open history to retry.'}` } }));
         knownStates.current = new Map(records.map(job => [job.id, job.state]));
         setLoadingJobs(false); setOffline(false); setJobs(records);
+        setProjectIds(previous => [...new Set([...previous, ...records.map(job => job.projectId || 'default')])]);
         window.dispatchEvent(new CustomEvent('hamma-job-count', { detail: records.filter(job => !job.hidden).length }));
         window.dispatchEvent(new CustomEvent('hamma-jobs-updated', { detail: records }));
         window.dispatchEvent(new CustomEvent('hamma-processor-status', { detail: 'ready' }));
@@ -130,6 +135,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     };
     const changed = () => {
       setSources(previous => previous.map(source => ({ ...source, upload: undefined, uploaded: undefined })));
+      for (const draft of drafts.current.values()) draft.sources = draft.sources.map(source => ({ ...source, upload: undefined, uploaded: undefined }));
       void connect();
     };
     window.addEventListener('hamma-owner-changing', guard);
@@ -197,9 +203,37 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       if (mounted.current) { setBusy(false); setReadingFolder(false); }
     }
   };
+  useEffect(() => {
+    if (!capability?.inspection) return;
+    const pending = sources.filter(source => source.file && !source.inspection).slice(0, 32);
+    if (!pending.length) return;
+    const controller = new AbortController();
+    void inspectSources(pending, controller.signal).then(results => {
+      if (!controller.signal.aborted) setSources(previous => previous.map(source => results.has(source.id) ? { ...source, inspection: results.get(source.id) } : source));
+    }).catch(caught => {
+      if (controller.signal.aborted) return;
+      const message = caught instanceof Error ? caught.message : 'File inspection failed';
+      const ids = new Set(pending.map(source => source.id));
+      setSources(previous => previous.map(source => ids.has(source.id) ? { ...source, inspection: { format: 'unavailable', conversions: [], extract: false, error: message } } : source));
+      setError(message);
+    });
+    return () => controller.abort();
+  }, [sources, capability]);
+  const switchProject = (id: string) => {
+    if (busy || spkBusy || mutation.current || submitting.current || folderController.current || id === projectId) return;
+    drafts.current.set(projectId, { sources, selected, target, conversion, qualityMode, metadataPolicy, recursive, errors: sourceErrors });
+    const draft = drafts.current.get(id);
+    setSources(draft?.sources || []); setSelected(draft?.selected || new Set());
+    setTarget(draft?.target || 'zip'); setConversion(draft?.conversion || 'wav');
+    setQualityMode(draft?.qualityMode || 'lossless'); setMetadataPolicy(draft?.metadataPolicy || 'strip');
+    setRecursive(draft?.recursive || false); setSourceErrors(draft?.errors || {});
+    setProjectId(id); setPage(0); setScroll(0); setError(''); setJobSelected(new Set());
+  };
   const chosen = sources.filter(source => selected.has(source.id));
+  const archiveTargets = resolveArchiveTargets(chosen, capability);
+  const archiveTarget = target === 'spk' || archiveTargets.includes(target) ? target : archiveTargets[0] || 'zip';
   const actions = resolveActions(chosen, capability);
-  const canExtract = chosen.length > 0 && chosen.every(source => /\.spk$/i.test(source.name) ? !!spkReady : resolveActions([source], capability).extract);
+  const canExtract = chosen.length > 0 && chosen.every(source => /\.spk$/i.test(source.name) ? !!spkReady && projectId === 'default' : resolveActions([source], capability).extract);
   const conversionTarget = actions.conversions.includes(conversion) ? conversion : actions.conversions[0];
   const submit = async (operation: 'compress' | 'extract' | 'convert') => {
     if (accountChanging()) return;
@@ -250,7 +284,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
           inputs.push({ source, id });
           if (operation !== 'compress') {
             const conversionOptions = operation === 'convert' ? { qualityMode, metadataPolicy } : {};
-            await jsonRequest('/jobs', { uploads: [id], operation, target: operation === 'extract' ? 'zip' : conversionTarget, recursive, ...conversionOptions, requestId: await requestId([generation, source.id, operation, conversionTarget, recursive, conversionOptions]) }, 'POST', { signal: controller.signal });
+            await jsonRequest('/jobs', { ...(projectId === 'default' ? {} : { projectId }), uploads: [id], operation, target: operation === 'extract' ? 'zip' : conversionTarget, recursive, ...conversionOptions, requestId: await requestId([generation, projectId, source.id, operation, conversionTarget, recursive, conversionOptions]) }, 'POST', { signal: controller.signal });
             submitted.add(source.id);
             setSourceErrors(previous => { const next = { ...previous }; delete next[source.id]; return next; });
           }
@@ -265,7 +299,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       }
       if (Object.keys(failures).length) setError(`${Object.keys(failures).length} files could not be queued. Select an action to retry; details appear beside each file.`);
       if (operation === 'compress') {
-        await jsonRequest('/jobs', { uploads: inputs.map(i => i.id), operation, target, requestId: await requestId([generation, inputs.map(i => i.source.id), operation, target]) }, 'POST', { signal: controller.signal });
+        await jsonRequest('/jobs', { ...(projectId === 'default' ? {} : { projectId }), uploads: inputs.map(i => i.id), operation, target: archiveTarget, requestId: await requestId([generation, projectId, inputs.map(i => i.source.id), operation, archiveTarget]) }, 'POST', { signal: controller.signal });
         inputs.forEach(i => submitted.add(i.source.id));
       }
     } catch (caught) {
@@ -290,13 +324,14 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     setError('');
     try {
       const chosenJobs = captured || combined.filter(j => jobSelected.has(j.id));
-      const results = await Promise.allSettled(chosenJobs.map(async job => {
+      const results: PromiseSettledResult<void>[] = [];
+      for (let offset = 0; offset < chosenJobs.length; offset += 4) results.push(...await Promise.allSettled(chosenJobs.slice(offset, offset + 4).map(async job => {
         if (job.localId) {
           if (operation === '' && method === 'DELETE') removeLocalHistory(job.localId);
           else if (operation === 'files' && method === 'DELETE') deleteOutput(job.localId);
           else throw new Error('This action requires a processor job.');
         } else await action(job, operation, method);
-      }));
+      })));
       const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
       if (failed.length) setError(`${failed.length} action(s) failed: ${failed[0].reason instanceof Error ? failed[0].reason.message : 'The action could not finish.'}`);
       setJobSelected(new Set()); if (!offline) await refresh(true);
@@ -403,7 +438,8 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const rowStart = Math.min(Math.max(0, sources.length - 14), Math.max(0, Math.floor(scroll / 64) - 3));
   const rendered = sources.slice(rowStart, rowStart + 14);
   const downloadsOnly = screen === 'files' || operationFilter === 'downloads';
-  const combined = combineActivity(jobs, archives, outputs, downloadsOnly);
+  const allActivity = combineActivity(jobs, archives, outputs, downloadsOnly);
+  const combined = screen === 'workspace' ? allActivity.filter(job => (job.projectId || 'default') === projectId) : allActivity;
   let latestLocal = spkResult?.historyId ? combined.find(job => job.localId === spkResult.historyId) : undefined;
   if (!latestLocal && spkResult?.downloadUrl && !(spkResult.historyId && outputs[spkResult.historyId])) {
     latestLocal = { id: 'spk:current', localId: 'current', name: spkResult.outputName,
@@ -440,26 +476,30 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     {preparingDeletion && <p role="status" className="footnote">Checking stored items…</p>}
     {error && <div className="processor-notice" role="alert"><span>{error}</span><button className="icon-button" aria-label="Dismiss error" onClick={() => setError('')}><X size={16} /></button></div>}
     {screen === 'workspace' && <>
+      <div className="project-toolbar"><label>Project<SelectField aria-label="Current project" value={projectId} disabled={busy || !!spkBusy || acting || readingFolder} onChange={switchProject}>{projectIds.map((id, index) => <option key={id} value={id}>{id === 'default' ? 'Project 1' : 'Project ' + (index + 1)}</option>)}</SelectField></label><button className="button secondary" disabled={busy || !!spkBusy || acting || readingFolder || projectIds.length >= 20} onClick={() => { const id = randomId(); setProjectIds(previous => [...previous, id]); switchProject(id); }}>New project</button></div>
       <div className={`surface universal-drop ${dragging ? 'drag-active' : ''}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); if (busy || spkBusy) return; void droppedSources(event.dataTransfer, capability?.limits.files).then(add).catch(caught => setError(caught.message)); }}>
         <div className="universal-drop-icon"><FileArchive size={30} strokeWidth={1.2} /></div><h2>Add your files</h2><p>Drop files or folders</p>
-        <div className="button-row"><button className="button primary" disabled={busy || spkBusy} onClick={() => input.current?.click()}><Plus size={16} /> Add Files</button><button className="button secondary" disabled={busy || spkBusy} onClick={() => void chooseFolder()}><FolderPlus size={16} /> Add Folder</button></div>
+        <details className="universal-picker"><summary className="button primary">+ Add Files or Folders</summary><div className="button-row"><button className="button secondary" disabled={busy || spkBusy} onClick={() => input.current?.click()}><Plus size={16} /> Add Files</button><button className="button secondary" disabled={busy || spkBusy} onClick={() => void chooseFolder()}><FolderPlus size={16} /> Add Folder</button></div></details>
         <input type="file" multiple className="file-picker-input" tabIndex={-1} ref={input} aria-label="Add files to queue" onChange={event => { const files = Array.from(event.target.files || []); choose(files); if (files.length) setFolderHelp(false); event.target.value = ''; }} />
         <input type="file" multiple className="file-picker-input" tabIndex={-1} ref={folder} {...{ webkitdirectory: '' }} aria-label="Add folder to queue" onChange={event => { const files = Array.from(event.target.files || []); if (files.length) { choose(files); setFolderHelp(!files.some(file => file.webkitRelativePath)); } else setError('No files were selected from this folder. Select its files instead.'); event.target.value = ''; }} />
       </div>
       {folderHelp && !readingFolder && <div className="processor-notice folder-selection-help" role="status"><span>Can’t select the folder? Select the files inside it instead, or add a ZIP.</span><button className="button secondary" disabled={busy || spkBusy} onClick={() => input.current?.click()}>Select files instead</button><button className="icon-button" aria-label="Dismiss folder help" onClick={() => setFolderHelp(false)}><X size={16} /></button></div>}
       {readingFolder && <div className="upload-status" role="status"><Loader2 size={16} className="animate-spin" /><span>Reading folder…</span><button className="button secondary" onClick={() => folderController.current?.abort()}>Cancel</button></div>}
       {sources.length > 0 && <section className="surface source-panel" aria-label="Selected files">
-        <div className="source-toolbar"><label className="selection-label"><input type="checkbox" checked={selected.size === sources.length} onChange={() => setSelected(selected.size === sources.length ? new Set() : new Set(sources.map(s => s.id)))} />Select all</label><span>{selected.size.toLocaleString()} selected · {formatFileSize(chosen.reduce((sum, source) => sum + source.size, 0))}</span><button className="icon-button" disabled={busy || spkBusy || !selected.size} aria-label="Remove selected files" onClick={removeSelectedSources}><Trash2 size={16} /></button></div>
-        <div className="source-scroll" onScroll={event => setScroll(event.currentTarget.scrollTop)}><div style={{ height: sources.length * 64, position: 'relative' }}>{rendered.map((source, index) => <div className="source-row" key={source.id} style={{ top: (rowStart + index) * 64 }}><input type="checkbox" aria-label={`Select ${source.name}`} checked={selected.has(source.id)} onChange={() => toggleSource(source.id)} /><File size={19} strokeWidth={1.5} /><div><strong title={source.name}>{source.name}</strong><span>{source.directory ? 'Empty folder' : formatFileSize(source.size)}</span></div>{sourceErrors[source.id] ? <button className="file-state source-error" title={sourceErrors[source.id]} onClick={() => setError(source.name + ': ' + sourceErrors[source.id])}>{sourceErrors[source.id]}</button> : <span className="file-state">Waiting</span>}</div>)}</div></div>
+        <div className="source-toolbar">{sources.some(source => source.inspection?.error) && <button className="button secondary" disabled={busy || !!spkBusy} onClick={() => setSources(previous => previous.map(source => source.inspection?.error ? { ...source, inspection: undefined } : source))}>Retry detection</button>}<label className="selection-label"><input type="checkbox" checked={selected.size === sources.length} onChange={() => setSelected(selected.size === sources.length ? new Set() : new Set(sources.map(s => s.id)))} />Select all</label><span>{selected.size.toLocaleString()} selected · {formatFileSize(chosen.reduce((sum, source) => sum + source.size, 0))}</span><button className="icon-button" disabled={busy || spkBusy || !selected.size} aria-label="Remove selected files" onClick={removeSelectedSources}><Trash2 size={16} /></button></div>
+        <div className="source-scroll" onScroll={event => setScroll(event.currentTarget.scrollTop)}><div style={{ height: sources.length * 64, position: 'relative' }}>{rendered.map((source, index) => <div className="source-row" key={source.id} style={{ top: (rowStart + index) * 64 }}><input type="checkbox" aria-label={`Select ${source.name}`} checked={selected.has(source.id)} onChange={() => toggleSource(source.id)} /><File size={19} strokeWidth={1.5} /><div><strong title={source.name}>{source.name}</strong><span>{source.directory ? 'Empty folder' : formatFileSize(source.size) + (capability?.inspection ? '  -  ' + (source.inspection?.error || source.inspection?.format || 'Detecting - ') : '')}</span></div>{sourceErrors[source.id] ? <button className="file-state source-error" title={sourceErrors[source.id]} onClick={() => setError(source.name + ': ' + sourceErrors[source.id])}>{sourceErrors[source.id]}</button> : <span className="file-state">Waiting</span>}</div>)}</div></div>
+        {new Set(chosen.map(source => source.inspection?.format).filter(Boolean)).size > 1 && <details className="processing-options"><summary>Actions by file type</summary><div className="button-row">{[...new Set(chosen.map(source => source.inspection?.format).filter((format): format is string => !!format))].map(format => <button className="button secondary" key={format} disabled={busy || !!spkBusy} onClick={() => setSelected(new Set(chosen.filter(source => source.inspection?.format === format).map(source => source.id)))}>Select {format.toUpperCase()} ({chosen.filter(source => source.inspection?.format === format).length})</button>)}</div></details>}
         <div className="processing-actions"><button className="button primary" disabled={busy || spkBusy || !selected.size || (target === 'spk' ? !spkReady || chosen.some(source => source.directory) : !capability || offline)} onClick={() => void submit('compress')}><FileArchive size={16} /> Compress</button>{canExtract && <button className="button secondary" disabled={busy || spkBusy || !selected.size || chosen.some(s => s.directory) || (chosen.every(source => /\.spk$/i.test(source.name)) ? !spkReady : !capability || offline)} onClick={() => void submit('extract')}><ArrowDownToLine size={16} /> Extract</button>}{actions.conversions.length > 0 && <><button className="button secondary" disabled={busy || spkBusy || !selected.size || !capability?.conversions.length || offline || chosen.some(s => s.directory)} onClick={() => void submit('convert')}><ArrowRightLeft size={16} /> Convert</button><label className="conversion-select">To<SelectField disabled={busy || spkBusy} aria-label="Conversion format" value={conversionTarget} onChange={value => setConversion(value)}>{actions.conversions.map(format => <option key={format}>{format}</option>)}</SelectField></label><label className="conversion-select">Quality<SelectField disabled={busy || spkBusy} aria-label="Conversion quality" value={qualityMode} onChange={value => setQualityMode(value as "lossless" | "lossy")}><option value="lossless">Lossless</option><option value="lossy">Allow quality loss</option></SelectField></label></>}</div>
       </section>}
+      {capability?.inspection && sources.length > 0 && <p className="footnote">File detection sends only the first 512 bytes of each file to your processor. Full files are uploaded when you choose an action.</p>}
       {capability && !capability.conversions.length && <p className="footnote">Media conversion is unavailable until FFmpeg and FFprobe are installed on the computer running HAMMA.</p>}
       {uploadStatus && <div className="upload-status" role="status"><Loader2 size={16} className="animate-spin" /><span>{uploadStatus.name}<small>{formatFileSize(uploadStatus.offset)} / {formatFileSize(uploadStatus.size)}</small></span><progress aria-label="Upload progress" value={uploadStatus.offset} max={Math.max(1, uploadStatus.size)} /><button className="icon-button" aria-label="Pause upload" onClick={() => abort.current?.abort()}><Pause size={16} /></button></div>}
-      <details className="processing-options"><summary>Options</summary><div className="options-grid"><label>Archive<SelectField disabled={busy || spkBusy} value={target} onChange={value => setTarget(value)} aria-label="Archive format">{[...(capability?.archives || ['zip']), ...(onSpkSelect ? ['spk'] : [])].map(format => <option key={format}>{format}</option>)}</SelectField></label><label>Conversion metadata<SelectField disabled={busy || spkBusy} aria-label="Conversion metadata" value={metadataPolicy} onChange={value => setMetadataPolicy(value as "strip" | "preserve")}><option value="strip">Remove metadata</option><option value="preserve">Preserve supported tags</option></SelectField></label><label className="selection-label"><input type="checkbox" disabled={busy || spkBusy} checked={recursive} onChange={event => setRecursive(event.target.checked)} /> Open nested archives</label></div><p>Nested originals are kept alongside their contents. MP4, MKV, and WebM preserve streams when compatible. Lossy conversion requires Allow quality loss. Metadata is removed by default; preservation depends on the output format.</p></details>
+      <details className="processing-options"><summary>Options</summary><div className="options-grid"><label>Archive<SelectField disabled={busy || spkBusy} value={archiveTarget} onChange={value => setTarget(value)} aria-label="Archive format">{[...archiveTargets, ...(onSpkSelect && projectId === 'default' ? ['spk'] : [])].map(format => <option key={format}>{format}</option>)}</SelectField></label><label>Conversion metadata<SelectField disabled={busy || spkBusy} aria-label="Conversion metadata" value={metadataPolicy} onChange={value => setMetadataPolicy(value as "strip" | "preserve")}><option value="strip">Remove metadata</option><option value="preserve">Preserve supported tags</option></SelectField></label><label className="selection-label"><input type="checkbox" disabled={busy || spkBusy} checked={recursive} onChange={event => setRecursive(event.target.checked)} /> Open nested archives</label></div><p>Nested originals are kept alongside their contents. MP4, MKV, and WebM preserve streams when compatible. Lossy conversion requires Allow quality loss. Metadata is removed by default; preservation depends on the output format.</p></details>
     </>}
     {screen === 'workspace' && spkStatus}
     <section className="processing-history" aria-label="Processing jobs">
       <div className="section-line"><h2>{screen === 'workspace' ? 'Processing queue' : screen === 'files' ? 'Available files' : 'All operations'}</h2><div className="button-row">{screen === 'workspace' && <button className="text-button" onClick={onHistory}><History size={14} /> History</button>}<button className="text-button" onClick={() => void exportHistory()} disabled={!combined.length}><Download size={14} /> Export</button></div></div>
+      {screen === 'workspace' && combined.length > 0 && <div className="project-summary" role="status"><span>{combined.filter(job => job.state === 'completed').length} completed  -  {combined.filter(job => ['failed', 'interrupted'].includes(job.state)).length} failed  -  {combined.filter(activeJob).length} remaining jobs</span><div className="button-row"><button className="button secondary" disabled={acting || !combined.some(job => job.state === 'queued')} onClick={() => void bulk('pause', 'POST', combined.filter(job => job.state === 'queued')).catch(caught => setError(caught.message))}>Pause waiting</button><button className="button secondary" disabled={acting || !combined.some(job => job.state === 'paused')} onClick={() => void bulk('resume', 'POST', combined.filter(job => job.state === 'paused')).catch(caught => setError(caught.message))}>Resume waiting</button><button className="button secondary" disabled={acting || !combined.some(activeJob)} onClick={() => void bulk('cancel', 'POST', combined.filter(activeJob)).catch(caught => setError(caught.message))}>Cancel project jobs</button><button className="button secondary" disabled={acting || !combined.some(job => ['failed', 'interrupted'].includes(job.state))} onClick={() => void bulk('retry', 'POST', combined.filter(job => ['failed', 'interrupted'].includes(job.state))).catch(caught => setError(caught.message))}>Retry failed</button><button className="button secondary" disabled={!combined.some(job => job.downloadAvailable)} onClick={() => combined.filter(job => job.downloadAvailable).forEach(download)}>Download completed</button></div><small>Progress counts verified jobs. File selections stay in this tab; queued jobs survive a server restart.</small></div>}
       <div className="history-tools universal-search"><label className="search-field"><Search size={16} /><input aria-label="Search processing history" placeholder="Search files" value={query} onChange={event => { setQuery(event.target.value); setPage(0); setJobSelected(new Set()); }} /></label><SelectField aria-label="Filter processing history" value={filter} onChange={value => { setFilter(value); setPage(0); setJobSelected(new Set()); }}><option value="">All statuses</option>{['queued', 'processing', 'verifying', 'completed', 'failed', 'cancelled', 'interrupted', 'paused'].map(state => <option value={state} key={state}>{label(state)}</option>)}</SelectField><SelectField aria-label="Filter by operation" value={operationFilter} onChange={value => { setOperationFilter(value); setPage(0); setJobSelected(new Set()); }}><option value="">All operations</option><option value="compress">Compression</option><option value="extract">Extraction</option><option value="convert">Conversion</option><option value="downloads">Available downloads</option></SelectField><SelectField aria-label="Sort processing history" value={sort} onChange={value => { setSort(value); setPage(0); setJobSelected(new Set()); }}><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="name">Name</option><option value="size">Largest first</option></SelectField></div>
       {visibleJobs.length > 0 && <div className="job-bulk"><label className="selection-label"><input aria-label="Select all visible jobs" type="checkbox" checked={visibleJobs.every(j => jobSelected.has(j.id))} onChange={event => setJobSelected(event.target.checked ? new Set(visibleJobs.map(j => j.id)) : new Set())} />Select all</label><span>{visibleJobs.filter(j => j.state === 'completed').length} completed · {visibleJobs.filter(j => ['failed', 'interrupted'].includes(j.state)).length} failed · {visibleJobs.filter(activeJob).length} remaining on this page</span></div>}
       {jobSelected.size > 0 && <div className="processing-actions bulk-actions"><button className="button secondary" disabled={!selectedJobs.some(j => j.downloadAvailable)} onClick={() => selectedJobs.filter(j => j.downloadAvailable).forEach(download)}><Download size={14} /> Download</button><button className="button secondary" disabled={!selectedJobs.every(j => j.state === 'queued')} onClick={() => void bulk('pause').catch(e => setError(e.message))}><Pause size={14} /> Pause queue</button><button className="button secondary" disabled={!selectedJobs.every(j => j.state === 'paused')} onClick={() => void bulk('resume').catch(e => setError(e.message))}><Play size={14} /> Resume</button><button className="button secondary" disabled={!selectedJobs.every(activeJob)} onClick={() => void bulk('cancel').catch(e => setError(e.message))}><X size={14} /> Cancel</button><button className="button secondary" disabled={!selectedJobs.every(j => ['failed', 'interrupted', 'cancelled'].includes(j.state))} onClick={() => void bulk('retry').catch(e => setError(e.message))}><RefreshCw size={14} /> Retry</button><button className="button secondary" disabled={busy || spkBusy || acting || preparingDeletion || !selectedJobs.every(terminal)} onClick={() => confirmBulk('')}><Trash2 size={14} /> Delete history</button><button className="button secondary" disabled={busy || spkBusy || acting || preparingDeletion || !selectedJobs.length || !selectedJobs.every(job => terminal(job) && (!job.localId || job.downloadAvailable))} onClick={() => confirmBulk('files')}><Trash2 size={14} /> Delete files</button></div>}
