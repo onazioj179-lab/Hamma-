@@ -1,4 +1,6 @@
 import { inspectSources } from '../../processing/inspection';
+import { allocateSourcePaths } from '../../processing/selection';
+import { ErrorCenter } from './ErrorCenter';
 import { resolveActions, resolveArchiveTargets } from '../../processing/actions';
 import { useAppStore } from '../../store/app';
 import { combineActivity, filterActivity, loadJobs, type ActivityJob } from '../../processing/activity';
@@ -165,14 +167,10 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const add = (incoming: Source[]) => {
     if (!incoming.length) return;
     if (sources.length + incoming.length > (capability?.limits.files || 5000)) { setError('File limit reached (' + (capability?.limits.files || 5000).toLocaleString() + '). Remove some files and try again.'); return; }
-    const paths = new Set(sources.map(s => s.name.normalize('NFC').replace(/\\/g, '/').toLowerCase()));
     for (const source of incoming) {
-      const name = source.name.normalize('NFC').replace(/\\/g, '/').toLowerCase();
-      if (paths.has(name)) { setError('Duplicate filename. Nothing was added.'); return; }
       if (capability && source.size > capability.limits.input) { setError(source.name + ' exceeds the ' + formatFileSize(capability.limits.input) + ' upload limit. Choose a smaller file.'); return; }
-      paths.add(name);
     }
-    setError(''); setSources(previous => [...previous, ...incoming]);
+    setError(''); setSources(previous => [...previous, ...allocateSourcePaths(previous, incoming)]);
     setSelected(previous => new Set([...previous, ...incoming.map(s => s.id)]));
   };
   const choose = (files: File[]) => add(files.map(file => ({ id: randomId(), file, name: file.webkitRelativePath || file.name, size: file.size, directory: false })));
@@ -498,6 +496,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     </>}
     {screen === 'workspace' && spkStatus}
     <section className="processing-history" aria-label="Processing jobs">
+      <ErrorCenter jobs={combined} busy={acting} retry={records => void bulk('retry', 'POST', records).catch(caught => setError(caught.message))} />
       <div className="section-line"><h2>{screen === 'workspace' ? 'Processing queue' : screen === 'files' ? 'Available files' : 'All operations'}</h2><div className="button-row">{screen === 'workspace' && <button className="text-button" onClick={onHistory}><History size={14} /> History</button>}<button className="text-button" onClick={() => void exportHistory()} disabled={!combined.length}><Download size={14} /> Export</button></div></div>
       {screen === 'workspace' && combined.length > 0 && <div className="project-summary" role="status"><span>{combined.filter(job => job.state === 'completed').length} completed  -  {combined.filter(job => ['failed', 'interrupted'].includes(job.state)).length} failed  -  {combined.filter(activeJob).length} remaining jobs</span><div className="button-row"><button className="button secondary" disabled={acting || !combined.some(job => job.state === 'queued')} onClick={() => void bulk('pause', 'POST', combined.filter(job => job.state === 'queued')).catch(caught => setError(caught.message))}>Pause waiting</button><button className="button secondary" disabled={acting || !combined.some(job => job.state === 'paused')} onClick={() => void bulk('resume', 'POST', combined.filter(job => job.state === 'paused')).catch(caught => setError(caught.message))}>Resume waiting</button><button className="button secondary" disabled={acting || !combined.some(activeJob)} onClick={() => void bulk('cancel', 'POST', combined.filter(activeJob)).catch(caught => setError(caught.message))}>Cancel project jobs</button><button className="button secondary" disabled={acting || !combined.some(job => ['failed', 'interrupted'].includes(job.state))} onClick={() => void bulk('retry', 'POST', combined.filter(job => ['failed', 'interrupted'].includes(job.state))).catch(caught => setError(caught.message))}>Retry failed</button><button className="button secondary" disabled={!combined.some(job => job.downloadAvailable)} onClick={() => combined.filter(job => job.downloadAvailable).forEach(download)}>Download completed</button></div><small>Progress counts verified jobs. File selections stay in this tab; queued jobs survive a server restart.</small></div>}
       <div className="history-tools universal-search"><label className="search-field"><Search size={16} /><input aria-label="Search processing history" placeholder="Search files" value={query} onChange={event => { setQuery(event.target.value); setPage(0); setJobSelected(new Set()); }} /></label><SelectField aria-label="Filter processing history" value={filter} onChange={value => { setFilter(value); setPage(0); setJobSelected(new Set()); }}><option value="">All statuses</option>{['queued', 'processing', 'verifying', 'completed', 'failed', 'cancelled', 'interrupted', 'paused'].map(state => <option value={state} key={state}>{label(state)}</option>)}</SelectField><SelectField aria-label="Filter by operation" value={operationFilter} onChange={value => { setOperationFilter(value); setPage(0); setJobSelected(new Set()); }}><option value="">All operations</option><option value="compress">Compression</option><option value="extract">Extraction</option><option value="convert">Conversion</option><option value="downloads">Available downloads</option></SelectField><SelectField aria-label="Sort processing history" value={sort} onChange={value => { setSort(value); setPage(0); setJobSelected(new Set()); }}><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="name">Name</option><option value="size">Largest first</option></SelectField></div>

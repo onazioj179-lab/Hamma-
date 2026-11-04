@@ -35,6 +35,8 @@ import zipfile
 
 from .engine import ARCHIVES, MEDIA, BLOCK, Context, ProcessingError, archive_formats, compress, convert, detect, extract, file_digest, safe_path
 from .worker_limits import apply_worker_limits
+from .resources import available_memory, worker_capacity
+from .errors import describe_failure
 from .accounts import Accounts, AccountError, plan as account_plan
 from .catalog import FileCatalog
 from .capabilities import action_registry, inspect_headers, single_file_archives
@@ -176,7 +178,7 @@ class Store:
         with self.connect() as db:
             db.execute("BEGIN")
             total = db.execute("SELECT count(*) FROM records WHERE " + condition, parameters).fetchone()[0]
-            projection = "json_remove(data,'$.inputs','$.manifest','$.outputFile','$.filesCleaned') AS data,json_array_length(data,'$.inputs') AS file_count" if summary else "data"
+            projection = "json_remove(data,'$.inputs','$.manifest','$.outputFile','$.filesCleaned','$.errorInfo.fileIds') AS data,json_array_length(data,'$.inputs') AS file_count" if summary else "data"
             rows = db.execute("SELECT " + projection + " FROM records WHERE " + condition + " ORDER BY " + ordering + " LIMIT ? OFFSET ?",
                               [*parameters, min(100, max(1, limit)), min(2**63 - 1, max(0, offset))]).fetchall()
         records = [json.loads(row["data"]) for row in rows]
@@ -339,16 +341,13 @@ def run_job(root, owner, job_id, limits, isolated=False):
                     outputFile=output.name, outputName=output_name, finished=time.time(),
                     duration=time.time() - started, downloadAvailable=True)
     except Exception as error:
-        LOG.exception("Job failed: %s", job_id)
-        message = str(error) if isinstance(error, ProcessingError) else "Processing failed"
-        if isinstance(error, (zipfile.BadZipFile, tarfile.TarError, gzip.BadGzipFile, lzma.LZMAError, EOFError)):
-            message = "Corrupted archive"
-        elif isinstance(error, OSError) and error.errno == errno.ENOSPC:
-            message = "Storage full"
-        elif isinstance(error, PermissionError):
-            message = "Missing permissions"
+        message, category, retry = describe_failure(error)
+        LOG.warning("Job failed: %s (%s)", job_id, category)
         state = "cancelled" if (directory / "cancel").exists() else "failed"
-        store.patch(owner, "job", job_id, expected_states=ACTIVE, state=state, error=message, finished=time.time(), duration=time.time() - started, downloadAvailable=False)
+        latest = store.get(owner, 'job', job_id) or job
+        failure = {'category': category, 'retryEligible': retry, 'stage': latest['state'],
+                   'jobId': job_id, 'fileIds': [item['id'] for item in job['inputs']]}
+        store.patch(owner, "job", job_id, expected_states=ACTIVE, state=state, error=message, errorInfo=failure, finished=time.time(), duration=time.time() - started, downloadAvailable=False)
         output.unlink(missing_ok=True)
     finally:
         shutil.rmtree(directory / "expanded", ignore_errors=True)
@@ -543,7 +542,8 @@ class Service:
             if time.monotonic() < self.restart_until:
                 return
             attempts = 0
-            while len(self.running) < 2 and attempts < 16:
+            capacity = worker_capacity(available_memory())
+            while len(self.running) < capacity and attempts < 16:
                 attempts += 1
                 owners = {entry[1] for entry in self.running.values()}
                 blocked = {owner for owner in owners if sum(entry[1] == owner for entry in self.running.values()) >= self.owner_plan(owner)['maxConcurrentJobs']}
@@ -553,8 +553,11 @@ class Service:
                 if not candidates:
                     break
                 owner, job = candidates[0]
-                if self.reserved() + self.limits["expanded"] > self.limits["storage"]:
-                    self.store.patch(owner, "job", job["id"], state="failed", error="Storage full", downloadAvailable=False)
+                disk_required = self.limits['expanded'] * (len(self.running) + 1) + 64 * 1024**2
+                if self.reserved() + self.limits["expanded"] > self.limits["storage"] or shutil.disk_usage(self.store.root).free < disk_required:
+                    self.store.patch(owner, "job", job["id"], state="failed", error="Storage full", finished=time.time(),
+                                     errorInfo={'category': 'insufficient_storage', 'retryEligible': True, 'stage': 'queued',
+                                                'jobId': job['id'], 'fileIds': [item['id'] for item in job['inputs']]}, downloadAvailable=False)
                     continue
                 self.store.patch(owner, "job", job["id"], state="processing", scheduled=time.time())
                 try:
@@ -1098,7 +1101,7 @@ def handler(service):
                             if record["fileExpires"] <= time.time() or any(not (service.store.folder(self.owner, i["id"]) / "input").exists() for i in record["inputs"]):
                                 raise HTTPError(410, "Input files expired")
                             (directory / "cancel").unlink(missing_ok=True)
-                            service.store.patch(self.owner, "job", job_id, state="queued", error=None, processed=0, entries=0, expanded=0, mediaSeconds=0, duration=None, started=None, finished=None, hidden=False)
+                            service.store.patch(self.owner, "job", job_id, state="queued", error=None, errorInfo=None, retryCount=record.get('retryCount', 0) + 1, processed=0, entries=0, expanded=0, mediaSeconds=0, duration=None, started=None, finished=None, hidden=False)
                         else:
                             raise HTTPError(409, "Action unavailable for this job")
                     return self.send(200, service.public(self.owner, service.store.get(self.owner, "job", job_id)))

@@ -11,6 +11,8 @@ export interface Capability {
   plan?: { historyRecords: number };
 }
 export interface Job {
+  errorInfo?: { category: string; retryEligible: boolean; stage: string; jobId: string; fileIds?: string[] } | null;
+  retryCount?: number;
   projectId?: string; id: string; name: string; operation: 'compress' | 'extract' | 'convert'; target: string;
   state: string; inputSize: number; outputSize: number | null; processed: number;
   created: number; finished?: number | null; duration?: number; error?: string; entries: number; hidden?: boolean;
