@@ -6,6 +6,41 @@ import sys
 MIB = 1024 ** 2
 
 
+def cgroup_available(root=Path('/sys/fs/cgroup'), membership=Path('/proc/self/cgroup')):
+    """Remaining v1/v2 memory on standard Linux cgroup mounts, if readable.
+
+    Check mounted root and each visible ancestor of our membership. A parent
+    limit applies even when the leaf says ``max``. This is an admission hint;
+    the kernel remains responsible for enforcing the container's memory limit.
+    """
+    candidates = {(root, 'memory.max', 'memory.current'),
+                  (root / 'memory', 'memory.limit_in_bytes', 'memory.usage_in_bytes')}
+    try:
+        for line in membership.read_text().splitlines():
+            _, controllers, relative = line.split(':', 2)
+            if controllers and 'memory' not in controllers.split(','):
+                continue
+            parts = Path(relative.lstrip('/')).parts
+            if '..' in parts:
+                continue
+            base = root / 'memory' if controllers else root
+            names = ('memory.limit_in_bytes', 'memory.usage_in_bytes') if controllers else ('memory.max', 'memory.current')
+            for depth in range(len(parts) + 1):
+                candidates.add((base.joinpath(*parts[:depth]), *names))
+    except (OSError, ValueError):
+        pass
+    remaining = []
+    for directory, limit_name, usage_name in candidates:
+        try:
+            limit = int((directory / limit_name).read_text().strip())
+            usage = int((directory / usage_name).read_text().strip())
+            if 0 <= limit < 2**60 and usage >= 0:
+                remaining.append(max(0, limit - usage))
+        except (OSError, ValueError):
+            pass
+    return min(remaining) if remaining else None
+
+
 def available_memory():
     try:
         if sys.platform == 'win32':
@@ -23,7 +58,9 @@ def available_memory():
         elif sys.platform.startswith('linux'):
             for line in Path('/proc/meminfo').read_text().splitlines():
                 if line.startswith('MemAvailable:'):
-                    return int(line.split()[1]) * 1024
+                    host = int(line.split()[1]) * 1024
+                    container = cgroup_available()
+                    return min(host, container) if container is not None else host
     except (OSError, ValueError, AttributeError):
         pass
     return None
