@@ -24,5 +24,14 @@
 - Final project summary projection check: 5 project tests passed; detailed input
   IDs remain durable but are omitted from lightweight history summaries.
 
-Final typecheck and real 300-codec-job validation remain pending until actual
-completion. No physical mobile test has run.
+- Final TypeScript typecheck: passed.
+- Real 300-image desktop codec validation: 286 verified outputs, 14 deliberately
+  invalid inputs failed, no additional failures. Assertions checked that only the
+  first 14 invalid fixtures failed and every later fixture completed.
+  JPEG/PNG/WebP/GIF/AVIF fixtures, Unicode filenames and repeated basenames in
+  separate directories; sequential engine execution without browser/network.
+  Duration: 389.017 seconds. Peak traced Python allocations: 2,342,923 bytes;
+  excludes FFmpeg RSS. Report: validation/shante-image-batch.json.
+
+No physical mobile test has run. This verifies desktop codec isolation, not the
+reported iPhone failure, mobile memory, upload resilience or concurrency at scale.

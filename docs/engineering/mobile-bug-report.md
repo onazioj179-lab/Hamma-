@@ -22,3 +22,8 @@ behavior are NOT VERIFIED on physical devices.
 
 Existing 300-submission/14-rejection test exercises mocked HTTP queue isolation;
 it does not validate real image decoding, mobile memory or the reported incident.
+
+The separate real desktop codec run completed 286 valid fixtures and rejected
+exactly 14 deliberately invalid fixtures out of 300, in 389.017 seconds. This
+confirms independent sequential codec outcomes across JPEG/PNG/WebP/GIF/AVIF;
+it does not reproduce the original incident or certify phone behavior.

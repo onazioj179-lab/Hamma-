@@ -19,3 +19,8 @@ Hardware characterization and startup/upload/UI/database metrics remain pending.
 Selection allocation has a per-path next-copy counter to avoid rescanning all
 previous suffixes for thousands of identical names. The 10,000-item test measures
 correct allocation only, not real processing capacity.
+
+Real mixed-image desktop run: 300 sequential codec attempts, 286 verified outputs
+and 14 deliberate invalid-input failures in 389.017 seconds. Peak traced Python
+allocations: 2,342,923 bytes, excluding FFmpeg RSS. This includes fixture generation
+and repeated decoder/verification processes, with no before/after comparison.
