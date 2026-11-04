@@ -1,5 +1,6 @@
 export interface Inspection { format: string; conversions: string[]; extract: boolean; error?: string }
 export interface Capability {
+  projectRecovery?: boolean;
   inspection?: boolean;
   singleFileArchives?: string[];
   actionRegistry?: { mime: string[]; extensions: string[]; conversions: string[]; extract: boolean }[];
@@ -11,6 +12,8 @@ export interface Capability {
   plan?: { historyRecords: number };
 }
 export interface Job {
+  errorInfo?: { category: string; retryEligible: boolean; stage: string; jobId: string; fileIds?: string[] } | null;
+  retryCount?: number;
   projectId?: string; id: string; name: string; operation: 'compress' | 'extract' | 'convert'; target: string;
   state: string; inputSize: number; outputSize: number | null; processed: number;
   created: number; finished?: number | null; duration?: number; error?: string; entries: number; hidden?: boolean;
@@ -77,6 +80,7 @@ export async function requestId(parts: unknown[]): Promise<string> {
 export async function upload(source: Source, signal: AbortSignal, update: (offset: number) => void): Promise<string> {
   signal.throwIfAborted();
   const create = async () => {
+    if (!source.directory && !source.file && source.size > 0) throw new Error('This recovered upload is unavailable. Select the original file again.');
     const record = await jsonRequest<{ id: string }>('/uploads', { name: source.name, size: source.size, directory: source.directory }, 'POST', { signal });
     source.upload = record.id;
   };
@@ -98,6 +102,7 @@ export async function upload(source: Source, signal: AbortSignal, update: (offse
   let failures = 0;
   while (offset < source.size) {
     signal.throwIfAborted();
+    if (!source.file) throw new Error('This recovered upload is incomplete. Select the original file again.');
     try {
       const next = Math.min(source.size, offset + 4 * 1024 * 1024);
       const result = await request<{ offset: number }>('/uploads/' + id, {

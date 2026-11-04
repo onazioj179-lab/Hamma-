@@ -1,0 +1,144 @@
+"""Owner-scoped settings and references to completely uploaded recovery inputs.
+
+Inputs retain their upload expiry. This store neither copies file contents nor
+extends retention, and it never treats a partial upload as recoverable.
+"""
+import json
+import re
+import time
+
+from .capabilities import inspect_headers
+from .engine import Context, detect, file_digest
+
+
+class ProjectError(Exception):
+    retry_after = None
+
+    def __init__(self, status, message):
+        self.status, self.message = status, message
+
+
+DEFAULT_SETTINGS = {'target': 'zip', 'conversion': 'wav', 'qualityMode': 'lossless',
+                    'metadataPolicy': 'strip', 'recursive': False}
+
+
+class Projects:
+    def __init__(self, store, limits):
+        self.store, self.limits = store, limits
+        with store.connect() as db:
+            db.execute('CREATE TABLE IF NOT EXISTS project_inputs (owner TEXT NOT NULL, project_id TEXT NOT NULL, source_id TEXT NOT NULL, upload_id TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY(owner,project_id,source_id))')
+            db.execute('CREATE INDEX IF NOT EXISTS project_inputs_upload ON project_inputs(owner,upload_id)')
+
+    @staticmethod
+    def identifier(value):
+        if not isinstance(value, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', value):
+            raise ProjectError(400, 'Invalid project identifier')
+        return value
+
+    def save(self, owner, project_id, body):
+        self.identifier(project_id)
+        settings = body.get('settings', DEFAULT_SETTINGS)
+        if not isinstance(settings, dict) or set(settings) != set(DEFAULT_SETTINGS):
+            raise ProjectError(400, 'Invalid project settings')
+        if (any(not isinstance(settings[key], str) or not re.fullmatch(r'[a-z0-9.]{1,16}', settings[key]) for key in ('target', 'conversion')) or
+                settings['qualityMode'] not in ('lossless', 'lossy') or settings['metadataPolicy'] not in ('strip', 'preserve') or type(settings['recursive']) is not bool):
+            raise ProjectError(400, 'Invalid project settings')
+        expected = body.get('revision', 0)
+        if type(expected) is not int or expected < 0:
+            raise ProjectError(400, 'Invalid project revision')
+        with self.store.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute("SELECT data FROM records WHERE owner=? AND kind='project' AND id=?", (owner, project_id)).fetchone()
+            previous = json.loads(row[0]) if row else None
+            if expected != (previous['revision'] if previous else 0):
+                raise ProjectError(409, 'Project changed in another tab. Reconnect before saving.')
+            if not previous and db.execute("SELECT count(*) FROM records WHERE owner=? AND kind='project'", (owner,)).fetchone()[0] >= 20:
+                raise ProjectError(413, 'Project limit reached')
+            if not previous and db.execute("SELECT count(*) FROM records WHERE kind='project'").fetchone()[0] >= 10000:
+                raise ProjectError(429, 'Processor project capacity reached')
+            now = time.time()
+            record = {'id': project_id, 'created': previous['created'] if previous else now,
+                      'updated': now, 'revision': expected + 1, 'settings': settings}
+            db.execute('INSERT OR REPLACE INTO records VALUES (?,?,?,?,?)', (project_id, owner, 'project', record['created'], json.dumps(record)))
+        return record
+
+    def list(self, owner):
+        with self.store.connect() as db:
+            rows = db.execute("SELECT data FROM records WHERE owner=? AND kind='project' ORDER BY created,id LIMIT 20", (owner,)).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
+    def get(self, owner, project_id):
+        record = self.store.get(owner, 'project', self.identifier(project_id))
+        if not record:
+            raise ProjectError(404, 'Project unavailable')
+        return record
+
+    def checkpoint(self, owner, project_id, source_id, upload_id):
+        self.get(owner, project_id)
+        if not isinstance(source_id, str) or not re.fullmatch(r'[a-f0-9]{32}', source_id) or not isinstance(upload_id, str) or not re.fullmatch(r'[a-f0-9]{32}', upload_id):
+            raise ProjectError(400, 'Invalid recovery input')
+        upload = self.store.get(owner, 'upload', upload_id)
+        path = self.store.folder(owner, upload_id) / 'input'
+        if not upload or upload['expires'] <= time.time() or not path.is_file():
+            raise ProjectError(410, 'Upload expired or unavailable')
+        if path.stat().st_size != upload['size']:
+            raise ProjectError(409, 'Finish uploading before saving a recovery input')
+        if not upload.get('sha256'):
+            upload.update(file_digest(path, Context(path.parent, self.limits)), format=detect(path))
+            self.store.put(owner, 'upload', upload)
+        with self.store.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            existing = db.execute('SELECT upload_id FROM project_inputs WHERE owner=? AND project_id=? AND source_id=?', (owner, project_id, source_id)).fetchone()
+            count = db.execute('SELECT count(*) FROM project_inputs WHERE owner=? AND project_id=?', (owner, project_id)).fetchone()[0]
+            if not existing and count >= self.limits['files']:
+                raise ProjectError(413, 'Project file limit reached')
+            if existing and existing[0] != upload_id:
+                raise ProjectError(409, 'Recovery input identifier already used')
+            alias = db.execute('SELECT source_id FROM project_inputs WHERE owner=? AND project_id=? AND upload_id=?', (owner, project_id, upload_id)).fetchone()
+            if alias and alias[0] != source_id:
+                raise ProjectError(409, 'This upload is already saved in the project')
+            db.execute('INSERT OR IGNORE INTO project_inputs VALUES (?,?,?,?,?)', (owner, project_id, source_id, upload_id, time.time()))
+
+    def inputs(self, owner, project_id, after='', limit=100):
+        self.get(owner, project_id)
+        if not isinstance(after, str) or after and not re.fullmatch(r'[a-f0-9]{32}', after):
+            raise ProjectError(400, 'Invalid recovery cursor')
+        limit = min(100, max(1, limit))
+        with self.store.connect() as db:
+            total = db.execute('SELECT count(*) FROM project_inputs WHERE owner=? AND project_id=?', (owner, project_id)).fetchone()[0]
+            rows = db.execute("SELECT p.source_id,u.data FROM project_inputs p LEFT JOIN records u ON u.owner=p.owner AND u.kind='upload' AND u.id=p.upload_id WHERE p.owner=? AND p.project_id=? AND p.source_id>? ORDER BY p.source_id LIMIT ?", (owner, project_id, after, limit)).fetchall()
+        sources, headers, unavailable = [], [], 0
+        for row in rows:
+            upload = json.loads(row[1]) if row[1] else None
+            if not upload or upload['expires'] <= time.time():
+                unavailable += 1
+                continue
+            path = self.store.folder(owner, upload['id']) / 'input'
+            if not path.is_file() or path.stat().st_size != upload['size']:
+                unavailable += 1
+                continue
+            with path.open('rb') as stream:
+                headers.append({'head': stream.read(512).hex()})
+            sources.append({'id': row[0], 'name': upload['name'], 'size': upload['size'], 'directory': upload['directory'],
+                            'upload': upload['id'], 'uploaded': upload['size'], 'expires': upload['expires']})
+        inspections = []
+        for start in range(0, len(headers), 32):
+            inspections.extend(inspect_headers(headers[start:start + 32]))
+        for source, inspection in zip(sources, inspections):
+            source['inspection'] = inspection
+        return {'sources': sources, 'total': total, 'scanned': len(rows), 'unavailable': unavailable,
+                'nextCursor': rows[-1][0] if len(rows) == limit else None}
+
+    def forget_uploads(self, owner, project_id, uploads):
+        with self.store.connect() as db:
+            db.executemany('DELETE FROM project_inputs WHERE owner=? AND project_id=? AND upload_id=?',
+                           [(owner, project_id, upload) for upload in uploads])
+
+    def forget_source(self, owner, project_id, source_id):
+        self.get(owner, project_id)
+        with self.store.connect() as db:
+            db.execute('DELETE FROM project_inputs WHERE owner=? AND project_id=? AND source_id=?', (owner, project_id, source_id))
+
+    def cleanup(self):
+        with self.store.connect() as db:
+            db.execute("DELETE FROM project_inputs WHERE NOT EXISTS (SELECT 1 FROM records u WHERE u.owner=project_inputs.owner AND u.kind='upload' AND u.id=project_inputs.upload_id AND json_extract(u.data,'$.expires')>?)", (time.time(),))

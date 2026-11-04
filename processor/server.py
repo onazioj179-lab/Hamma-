@@ -35,6 +35,9 @@ import zipfile
 
 from .engine import ARCHIVES, MEDIA, BLOCK, Context, ProcessingError, archive_formats, compress, convert, detect, extract, file_digest, safe_path
 from .worker_limits import apply_worker_limits
+from .resources import available_memory, worker_capacity
+from .errors import describe_failure
+from .projects import Projects, ProjectError
 from .accounts import Accounts, AccountError, plan as account_plan
 from .catalog import FileCatalog
 from .capabilities import action_registry, inspect_headers, single_file_archives
@@ -176,7 +179,7 @@ class Store:
         with self.connect() as db:
             db.execute("BEGIN")
             total = db.execute("SELECT count(*) FROM records WHERE " + condition, parameters).fetchone()[0]
-            projection = "json_remove(data,'$.inputs','$.manifest','$.outputFile','$.filesCleaned') AS data,json_array_length(data,'$.inputs') AS file_count" if summary else "data"
+            projection = "json_remove(data,'$.inputs','$.manifest','$.outputFile','$.filesCleaned','$.errorInfo.fileIds') AS data,json_array_length(data,'$.inputs') AS file_count" if summary else "data"
             rows = db.execute("SELECT " + projection + " FROM records WHERE " + condition + " ORDER BY " + ordering + " LIMIT ? OFFSET ?",
                               [*parameters, min(100, max(1, limit)), min(2**63 - 1, max(0, offset))]).fetchall()
         records = [json.loads(row["data"]) for row in rows]
@@ -339,16 +342,13 @@ def run_job(root, owner, job_id, limits, isolated=False):
                     outputFile=output.name, outputName=output_name, finished=time.time(),
                     duration=time.time() - started, downloadAvailable=True)
     except Exception as error:
-        LOG.exception("Job failed: %s", job_id)
-        message = str(error) if isinstance(error, ProcessingError) else "Processing failed"
-        if isinstance(error, (zipfile.BadZipFile, tarfile.TarError, gzip.BadGzipFile, lzma.LZMAError, EOFError)):
-            message = "Corrupted archive"
-        elif isinstance(error, OSError) and error.errno == errno.ENOSPC:
-            message = "Storage full"
-        elif isinstance(error, PermissionError):
-            message = "Missing permissions"
+        message, category, retry = describe_failure(error)
+        LOG.warning("Job failed: %s (%s)", job_id, category)
         state = "cancelled" if (directory / "cancel").exists() else "failed"
-        store.patch(owner, "job", job_id, expected_states=ACTIVE, state=state, error=message, finished=time.time(), duration=time.time() - started, downloadAvailable=False)
+        latest = store.get(owner, 'job', job_id) or job
+        failure = {'category': category, 'retryEligible': retry, 'stage': latest['state'],
+                   'jobId': job_id, 'fileIds': [item['id'] for item in job['inputs']]}
+        store.patch(owner, "job", job_id, expected_states=ACTIVE, state=state, error=message, errorInfo=failure, finished=time.time(), duration=time.time() - started, downloadAvailable=False)
         output.unlink(missing_ok=True)
     finally:
         shutil.rmtree(directory / "expanded", ignore_errors=True)
@@ -383,6 +383,7 @@ class Service:
         self.limits = limits or {"input": 8 * 1024**3, "expanded": 2 * 1024**3, "files": 5000,
                                  "ratio": 1000, "depth": 8, "seconds": 1800, "storage": 20 * 1024**3}
         self.lock = threading.RLock()
+        self.projects = Projects(self.store, self.limits)
         self.running = {}
         self.restart_until = 0
         self.stop = threading.Event()
@@ -443,6 +444,7 @@ class Service:
 
     def cleanup(self):
         self.oauth.cleanup()
+        self.projects.cleanup()
         now = time.time()
         jobs = self.store.expired_jobs(now)
         for owner, candidate in jobs:
@@ -543,7 +545,8 @@ class Service:
             if time.monotonic() < self.restart_until:
                 return
             attempts = 0
-            while len(self.running) < 2 and attempts < 16:
+            capacity = worker_capacity(available_memory())
+            while len(self.running) < capacity and attempts < 16:
                 attempts += 1
                 owners = {entry[1] for entry in self.running.values()}
                 blocked = {owner for owner in owners if sum(entry[1] == owner for entry in self.running.values()) >= self.owner_plan(owner)['maxConcurrentJobs']}
@@ -553,8 +556,11 @@ class Service:
                 if not candidates:
                     break
                 owner, job = candidates[0]
-                if self.reserved() + self.limits["expanded"] > self.limits["storage"]:
-                    self.store.patch(owner, "job", job["id"], state="failed", error="Storage full", downloadAvailable=False)
+                disk_required = self.limits['expanded'] * (len(self.running) + 1) + 64 * 1024**2
+                if self.reserved() + self.limits["expanded"] > self.limits["storage"] or shutil.disk_usage(self.store.root).free < disk_required:
+                    self.store.patch(owner, "job", job["id"], state="failed", error="Storage full", finished=time.time(),
+                                     errorInfo={'category': 'insufficient_storage', 'retryEligible': True, 'stage': 'queued',
+                                                'jobId': job['id'], 'fileIds': [item['id'] for item in job['inputs']]}, downloadAvailable=False)
                     continue
                 self.store.patch(owner, "job", job["id"], state="processing", scheduled=time.time())
                 try:
@@ -857,7 +863,7 @@ def handler(service):
                     raise HTTPError(400, str(error)) from error
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
-                return self.send(200, {"archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "actionRegistry": action_registry(), "conversions": MEDIA if shutil.which("ffmpeg") and shutil.which("ffprobe") else [],
+                return self.send(200, {"projectRecovery": True, "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "actionRegistry": action_registry(), "conversions": MEDIA if shutil.which("ffmpeg") and shutil.which("ffprobe") else [],
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
             if path == "/api/process/settings":
                 if method == "GET":
@@ -902,6 +908,26 @@ def handler(service):
                                 shutil.rmtree(folder)
                             service.store.delete(self.owner, upload["id"])
                 return self.send(200, {"deleted": True})
+            if path == '/api/process/projects' and method == 'GET':
+                return self.send(200, {'projects': service.projects.list(self.owner)})
+            project_route = re.fullmatch(r'/api/process/projects/([a-zA-Z0-9_-]{1,64})(?:/(inputs)(?:/([a-f0-9]{32}))?)?', path)
+            if project_route:
+                project_id, input_route, source_id = project_route.groups()
+                is_inputs = input_route is not None
+                with service.lock:
+                    if not is_inputs and method == 'GET':
+                        return self.send(200, service.projects.get(self.owner, project_id))
+                    if not is_inputs and method == 'PUT':
+                        return self.send(200, service.projects.save(self.owner, project_id, self.json_body()))
+                    if is_inputs and not source_id and method == 'GET':
+                        query = parse_qs(url.query)
+                        return self.send(200, service.projects.inputs(self.owner, project_id, query.get('after', [''])[0], int(query.get('limit', [100])[0])))
+                    if is_inputs and source_id and method == 'PUT':
+                        service.projects.checkpoint(self.owner, project_id, source_id, self.json_body().get('upload'))
+                        return self.send(200, {'saved': True})
+                    if is_inputs and source_id and method == 'DELETE':
+                        service.projects.forget_source(self.owner, project_id, source_id)
+                        return self.send(200, {'removed': True})
             if path == "/api/process/uploads" and method == "POST":
                 body = self.json_body()
                 name = safe_path(body.get("name"), bool(body.get("directory")))
@@ -938,7 +964,8 @@ def handler(service):
                     if method == "DELETE":
                         if service.store.upload_referenced(self.owner, upload_id):
                             raise HTTPError(409, "File in use")
-                        shutil.rmtree(source.parent)
+                        if source.parent.exists():
+                            shutil.rmtree(source.parent)
                         service.store.delete(self.owner, upload_id)
                         return self.send(200, {"deleted": True})
                     if method == "PUT":
@@ -984,14 +1011,24 @@ def handler(service):
                     raise HTTPError(400, str(error)) from error
                 with service.lock:
                     request_id = body.get("requestId")
+                    recoverable = body.get('recoverable', False)
+                    if type(recoverable) is not bool:
+                        raise HTTPError(400, 'Invalid recovery mode')
+                    if recoverable:
+                        service.projects.get(self.owner, project_id)
+                        identity = ['project-recovery-v1', project_id, sorted(ids), operation, target, bool(body.get('recursive')), quality_mode, metadata_policy]
+                        request_id = hashlib.sha256(json.dumps(identity, separators=(',', ':')).encode()).hexdigest()
                     if request_id is not None and (not isinstance(request_id, str) or not re.fullmatch(r"[a-f0-9]{64}", request_id)):
                         raise HTTPError(400, "Invalid request identifier")
                     job_id = hashlib.sha256((self.owner + request_id).encode()).hexdigest()[:32] if request_id else secrets.token_hex(16)
                     existing = service.store.get(self.owner, "job", job_id)
                     if existing:
-                        if ([i["id"] for i in existing["inputs"]] != ids or existing["operation"] != operation or existing["target"] != target or existing["recursive"] != bool(body.get("recursive")) or
+                        existing_ids = [i['id'] for i in existing['inputs']]
+                        if ((sorted(existing_ids) != sorted(ids) if recoverable else existing_ids != ids) or existing["operation"] != operation or existing["target"] != target or existing["recursive"] != bool(body.get("recursive")) or
                             existing.get('projectId', 'default') != project_id or existing.get('qualityMode', 'lossless') != quality_mode or existing.get('metadataPolicy', 'strip') != metadata_policy):
                             raise HTTPError(409, "Request identifier already used")
+                        if recoverable:
+                            service.projects.forget_uploads(self.owner, project_id, ids)
                         return self.send(200, service.public(self.owner, existing))
                     if service.store.count(self.owner, states=(*ACTIVE, "paused")) >= self.plan['maxQueuedJobs']:
                         raise HTTPError(429, "Queue limit reached. Wait for jobs to finish or cancel queued jobs." + (" Sign in for a larger queue." if not self.account else ""))
@@ -1029,6 +1066,8 @@ def handler(service):
                               "downloadAvailable": False, "error": None}
                     service.store.folder(self.owner, record["id"]).mkdir(mode=0o700, parents=True)
                     service.store.put(self.owner, "job", record)
+                    if recoverable:
+                        service.projects.forget_uploads(self.owner, project_id, ids)
                     # Bound guest history independently of file retention.
                     service.store.trim_history(self.owner, limit=self.plan['historyRecords'])
                 LOG.info("Job queued: %s %s", record["id"], operation)
@@ -1098,7 +1137,7 @@ def handler(service):
                             if record["fileExpires"] <= time.time() or any(not (service.store.folder(self.owner, i["id"]) / "input").exists() for i in record["inputs"]):
                                 raise HTTPError(410, "Input files expired")
                             (directory / "cancel").unlink(missing_ok=True)
-                            service.store.patch(self.owner, "job", job_id, state="queued", error=None, processed=0, entries=0, expanded=0, mediaSeconds=0, duration=None, started=None, finished=None, hidden=False)
+                            service.store.patch(self.owner, "job", job_id, state="queued", error=None, errorInfo=None, retryCount=record.get('retryCount', 0) + 1, processed=0, entries=0, expanded=0, mediaSeconds=0, duration=None, started=None, finished=None, hidden=False)
                         else:
                             raise HTTPError(409, "Action unavailable for this job")
                     return self.send(200, service.public(self.owner, service.store.get(self.owner, "job", job_id)))
@@ -1157,7 +1196,7 @@ def handler(service):
         def handle_request(self):
             try:
                 self.route()
-            except (HTTPError, AccountError) as error:
+            except (HTTPError, AccountError, ProjectError) as error:
                 self.send(error.status, {"error": error.message}, error.retry_after)
             except (ValueError, TypeError, KeyError, ProcessingError):
                 self.send(400, {"error": "Invalid request"})

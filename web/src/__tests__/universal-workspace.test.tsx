@@ -128,10 +128,11 @@ it('adds files without processing them until a direct action and virtualizes lar
   expect(button('Extract')).toBeUndefined();
 });
 
-it('rejects duplicate names as a complete selection', async () => {
+it('keeps duplicate names using distinct archive paths', async () => {
   await render(); await select([new File(['one'], 'Same.txt'), new File(['two'], 'same.txt')]);
-  expect(host.querySelector('[role=alert]')?.textContent).toContain('Duplicate filename');
-  expect(host.querySelector('.source-row')).toBeNull();
+  expect(host.querySelector('[role=alert]')).toBeNull();
+  expect(host.textContent).toContain('2 selected');
+  expect(host.textContent).toContain('duplicate-2/same.txt');
 });
 
 it('renders a new selection after removing a scrolled 5000-file batch', async () => {
