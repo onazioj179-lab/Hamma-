@@ -1,0 +1,13 @@
+{
+  "scope": "synthetic-metadata-only; no payload discovery, transfer, compression or multi-terabyte file was performed",
+  "platform": "Windows-11-10.0.26300-SP0",
+  "python": "3.13.14",
+  "entries": 1000000,
+  "batchSize": 256,
+  "pageSize": 1000,
+  "insertSeconds": 234.63005470001372,
+  "pageAllSeconds": 110.90413639997132,
+  "peakPythonAllocatedBytes": 1007162,
+  "databaseAndWalBytes": 94699520,
+  "verified": true
+}

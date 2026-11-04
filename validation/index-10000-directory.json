@@ -1,0 +1,15 @@
+{
+  "scope": "real directory enumeration and metadata indexing; 29-byte file fixtures; no payload conversion or transfer throughput claim",
+  "mode": "directory",
+  "files": 10000,
+  "platform": "Windows-11-10.0.26300-SP0",
+  "python": "3.13.14",
+  "entries": 10010,
+  "batchSize": 256,
+  "pageSize": 1000,
+  "insertSeconds": 6.468580099986866,
+  "pageAllSeconds": 0.583125300006941,
+  "peakPythonAllocatedBytes": 1370146,
+  "databaseAndWalBytes": 1007616,
+  "verified": true
+}
