@@ -6,6 +6,27 @@ import sys
 MIB = 1024 ** 2
 
 
+def configured_limits(environ=None):
+    environ = os.environ if environ is None else environ
+    defaults = {'input': 8 * 1024**3, 'expanded': 2 * 1024**3, 'files': 5000,
+                'ratio': 1000, 'depth': 8, 'seconds': 1800, 'storage': 20 * 1024**3}
+    names = {'input': 'SHANTE_MAX_INPUT_BYTES', 'expanded': 'SHANTE_MAX_OUTPUT_BYTES',
+             'files': 'SHANTE_MAX_FILES', 'ratio': 'SHANTE_MAX_EXPANSION_RATIO',
+             'depth': 'SHANTE_MAX_ARCHIVE_DEPTH', 'seconds': 'SHANTE_MAX_JOB_SECONDS',
+             'storage': 'SHANTE_MAX_STORAGE_BYTES'}
+    for key, name in names.items():
+        value = environ.get(name)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not value.isascii() or not value.isdecimal() or len(value) > 19:
+            raise ValueError(f'{name} must be a positive integer')
+        number = int(value)
+        if not 1 <= number <= 2**63 - 1 - 64 * MIB:
+            raise ValueError(f'{name} is outside the resource policy range')
+        defaults[key] = number
+    return defaults
+
+
 def cgroup_available(root=Path('/sys/fs/cgroup'), membership=Path('/proc/self/cgroup')):
     """Remaining v1/v2 memory on standard Linux cgroup mounts, if readable.
 

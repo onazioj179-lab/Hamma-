@@ -2,6 +2,7 @@
 import errno
 import gzip
 import lzma
+import sqlite3
 import tarfile
 import zipfile
 
@@ -15,7 +16,8 @@ def describe_failure(error):
         message, category = 'Memory limit reached', 'memory_limit'
     elif isinstance(error, PermissionError):
         message, category, retry = 'Missing permissions', 'permission_denied', False
-    elif isinstance(error, OSError) and error.errno == errno.ENOSPC:
+    elif (isinstance(error, OSError) and error.errno == errno.ENOSPC or message == 'Storage full' or
+          isinstance(error, sqlite3.OperationalError) and getattr(error, 'sqlite_errorcode', None) == sqlite3.SQLITE_FULL):
         message, category = 'Storage full', 'insufficient_storage'
     elif isinstance(error, (zipfile.BadZipFile, tarfile.TarError, gzip.BadGzipFile, lzma.LZMAError, EOFError)):
         message, category, retry = 'Corrupted archive', 'corrupt_file', False
@@ -27,6 +29,6 @@ def describe_failure(error):
         category, retry = 'corrupt_file', False
     elif message.startswith('Unsafe') or message in ('Duplicate archive path', 'Conflicting archive paths'):
         category, retry = 'invalid_input', False
-    elif any(word in message.lower() for word in ('limit reached', 'too many')):
+    elif any(word in message.lower() for word in ('limit reached', 'quota reached', 'too many')):
         category, retry = 'resource_limit', False
     return message, category, retry
