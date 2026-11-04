@@ -7,13 +7,13 @@ automatically full acceptance of a feature in the new directive.
 | --- | --- | --- |
 | Adaptive batches / throttling | PARTIAL | Memory/CPU admission and disk preflight; workload calibration pending |
 | Per-file error isolation | PARTIAL | Existing independent conversion jobs; archives remain atomic jobs |
-| Persistent checkpoints / recovery | PARTIAL | SQLite jobs/upload offsets; browser draft recovery pending |
+| Persistent checkpoints / recovery | PARTIAL | SQLite jobs, complete-upload recovery, settings and deterministic submission retry; incomplete/unuploaded selections still need reselection |
 | Universal input | PARTIAL | Files/folders/drop; duplicate collision selection repaired |
 | Smart planner | PARTIAL | Signature hints and action resolver; resource execution plans pending |
 | Mixed-file workflows | PARTIAL | Common actions; automatic compatible subgroups pending |
 | Capability action resolver | PARTIAL | Existing central registry; codec availability accuracy needs audit |
 | Adaptive action dock | PARTIAL | Existing contextual controls; device validation pending |
-| Multiple projects | PARTIAL | Separate job IDs/settings drafts; durable empty projects pending |
+| Multiple projects | PARTIAL | Owner-scoped settings/empty projects and recovery inputs persisted; simultaneous browser submissions and broader controls pending |
 | Fair scheduling | PARTIAL | Existing project fairness tests; broad starvation/load tests pending |
 | Upload/processing overlap | PARTIAL | Independent conversions queue per upload; grouped archives wait |
 | Progressive downloads | PARTIAL | Verified individual jobs; bulk browser download behavior unverified |

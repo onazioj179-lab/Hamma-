@@ -18,3 +18,12 @@ Encryption at rest, encrypted recovery vault, cross-host worker isolation,
 provider credential handling and externally accessible sharing are NOT VERIFIED.
 No production deployment, destructive migration, paid service or user-data
 deletion was performed.
+
+Project recovery is scoped by the server's authenticated/guest owner, with revision
+checks, a 20-project owner limit, a 10,000-project installation limit, per-project
+file limits and one reference per upload per project. Recovery stores references
+and settings, not extra copies of private files, cookies or browser credentials.
+Complete uploads are hashed before checkpointing; workers still verify their
+contents before processing. Expiry is never extended. Old-owner server-only input
+references are cleared from the UI during account changes. Recovery is not an
+encrypted vault or a guarantee of continued execution after an iPhone closes.

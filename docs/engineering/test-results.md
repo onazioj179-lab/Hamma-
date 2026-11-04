@@ -35,3 +35,32 @@
 
 No physical mobile test has run. This verifies desktop codec isolation, not the
 reported iPhone failure, mobile memory, upload resilience or concurrency at scale.
+
+## Recovery continuation
+
+- New recovery HTTP integration suite: 7 passed. Covers durable settings,
+  revision conflicts, owner isolation, complete/partial/expired inputs, lost
+  submission acknowledgment, reordered input idempotency, limits and cursor paging.
+- Workspace/account/deletion/upload regression selection: 57 passed.
+- Final recovery component suite: 5 passed (refresh without reupload, account
+  change, same-owner recovery after an account action, expired-input removal and
+  durable empty-project creation).
+- Recovery client protocol suite: 4 passed (serialized saves, lost-save response,
+  changing totals/expired inputs and invalid cursor termination).
+- Production web build and TypeScript typecheck passed during this continuation.
+- Initial broad processor run failed the existing quota and one-tick worker tests:
+  the quota test assumed full host admission and was changed to use a controlled
+  two-worker budget while testing plan limits. In the worker test, a job
+  correctly deferred admission remained queued because the test never ticked
+  again. Updated it to exercise the production polling loop with initial memory
+  pressure; focused real-worker rerun passed in 2.024 seconds. Initial evidence:
+  validation/shante-recovery-processor-initial.txt.
+- Broad processor rerun: 135 tests run, OK, 10 skipped, 249.801 seconds. This was
+  the shared working tree and also discovered separate, concurrently developed
+  indexing/container-memory tests. Those unrelated changes are not included in
+  this recovery commit. Report: validation/shante-recovery-processor-results.txt.
+- The final missing-folder deletion regression was added after that broad run;
+  the complete 7-test recovery HTTP suite passed afterward.
+- Focused account-quota test with controlled resource admission: passed.
+- Final recovery HTTP rerun after the route-name edge case: 7 passed in 18.445
+  seconds; validation/shante-recovery-focused-results.txt. Final typecheck passed.
