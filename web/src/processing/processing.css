@@ -82,3 +82,12 @@
 .folder-selection-help { margin-top: 12px; }
 
 .source-error { max-width: 38%; overflow: hidden; text-overflow: ellipsis; text-align: left; min-height: 44px; color: rgb(var(--text)); text-decoration: underline; }
+
+.project-toolbar { display:flex; flex-wrap:wrap; align-items:end; gap:12px; margin-bottom:16px; }
+.project-toolbar label { display:grid; gap:6px; flex:1; min-width:160px; max-width:320px; font-size:12px; }
+.project-summary { display:grid; gap:10px; padding:16px; margin:12px 0; border:1px solid rgb(var(--border)); border-radius:12px; }
+.project-summary small { color:rgb(var(--muted)); line-height:1.5; }
+.universal-picker { display:inline-block; max-width:100%; }
+.universal-picker summary { cursor:pointer; list-style:none; min-height:44px; }
+.universal-picker summary::-webkit-details-marker { display:none; }
+.universal-picker[open] .button-row { margin-top:10px; justify-content:center; flex-wrap:wrap; }

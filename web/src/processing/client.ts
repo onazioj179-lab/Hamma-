@@ -1,4 +1,7 @@
+export interface Inspection { format: string; conversions: string[]; extract: boolean; error?: string }
 export interface Capability {
+  inspection?: boolean;
+  singleFileArchives?: string[];
   actionRegistry?: { mime: string[]; extensions: string[]; conversions: string[]; extract: boolean }[];
   version: number;
   archives: string[];
@@ -8,14 +11,14 @@ export interface Capability {
   plan?: { historyRecords: number };
 }
 export interface Job {
-  id: string; name: string; operation: 'compress' | 'extract' | 'convert'; target: string;
+  projectId?: string; id: string; name: string; operation: 'compress' | 'extract' | 'convert'; target: string;
   state: string; inputSize: number; outputSize: number | null; processed: number;
   created: number; finished?: number | null; duration?: number; error?: string; entries: number; hidden?: boolean;
   download?: string; downloadAvailable: boolean; outputName?: string;
   fileExpires: number; historyExpires: number | null; fileCount: number; format: string;
   expanded?: number; mediaSeconds?: number; track?: number; tracks?: number;
 }
-export interface Source { id: string; file: File | null; name: string; size: number; directory: boolean; upload?: string; uploaded?: number }
+export interface Source { inspection?: Inspection; id: string; file: File | null; name: string; size: number; directory: boolean; upload?: string; uploaded?: number }
 export interface Retention { historyRetention: string; fileRetention: string }
 export const activeJob = (job: Job) => ['queued', 'processing', 'verifying', 'paused'].includes(job.state);
 

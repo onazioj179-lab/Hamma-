@@ -37,7 +37,7 @@ from .engine import ARCHIVES, MEDIA, BLOCK, Context, ProcessingError, archive_fo
 from .worker_limits import apply_worker_limits
 from .accounts import Accounts, AccountError, plan as account_plan
 from .catalog import FileCatalog
-from .capabilities import action_registry
+from .capabilities import action_registry, inspect_headers, single_file_archives
 from .identity_providers import public_providers
 
 LOG = logging.getLogger("hamma.processor")
@@ -216,13 +216,16 @@ class Store:
             for row in rows:
                 yield row["owner"], json.loads(row["data"])
 
-    def queued(self, limit=1, excluded_owners=()):
+    def queued(self, limit=1, excluded_owners=(), fair=False):
         where, parameters = ["kind='job'", "json_extract(data,'$.state')='queued'"], []
         if excluded_owners:
             where.append("owner NOT IN (" + ",".join("?" for _ in excluded_owners) + ")")
             parameters.extend(excluded_owners)
         with self.connect() as db:
-            rows = db.execute("SELECT owner,data FROM records WHERE " + " AND ".join(where) + " ORDER BY created,id,owner LIMIT ?", [*parameters, max(1, min(100, limit))]).fetchall()
+            ordering = "created,id,owner"
+            if fair:
+                ordering = "coalesce((SELECT max(json_extract(previous.data,'$.scheduled')) FROM records AS previous WHERE previous.owner=records.owner AND previous.kind='job' AND coalesce(json_extract(previous.data,'$.projectId'),'default')=coalesce(json_extract(records.data,'$.projectId'),'default')),0),created,id,owner"
+            rows = db.execute("SELECT owner,data FROM records WHERE " + " AND ".join(where) + " ORDER BY " + ordering + " LIMIT ?", [*parameters, max(1, min(100, limit))]).fetchall()
         return [(row[0], json.loads(row[1])) for row in rows]
 
     def reserved_bytes(self, owner=None):
@@ -542,16 +545,16 @@ class Service:
                 attempts += 1
                 owners = {entry[1] for entry in self.running.values()}
                 blocked = {owner for owner in owners if sum(entry[1] == owner for entry in self.running.values()) >= self.owner_plan(owner)['maxConcurrentJobs']}
-                candidates = self.store.queued(excluded_owners=owners)
+                candidates = self.store.queued(excluded_owners=owners, fair=True)
                 if not candidates and owners:
-                    candidates = self.store.queued(excluded_owners=blocked)
+                    candidates = self.store.queued(excluded_owners=blocked, fair=True)
                 if not candidates:
                     break
                 owner, job = candidates[0]
                 if self.reserved() + self.limits["expanded"] > self.limits["storage"]:
                     self.store.patch(owner, "job", job["id"], state="failed", error="Storage full", downloadAvailable=False)
                     continue
-                self.store.patch(owner, "job", job["id"], state="processing")
+                self.store.patch(owner, "job", job["id"], state="processing", scheduled=time.time())
                 try:
                     process = multiprocessing.get_context("spawn").Process(target=run_job, args=(str(self.store.root), owner, job["id"], self.limits, True))
                     process.start()
@@ -806,9 +809,14 @@ def handler(service):
                     running = len(service.running)
                 return self.send(200, {"version": 1, "processing": "local", "instance": service.instance_id,
                                        "pid": os.getpid(), "revision": PROCESSOR_REVISION, "activeJobs": running})
+            if path == "/api/process/inspect" and method == "POST":
+                try:
+                    return self.send(200, {"entries": inspect_headers(self.json_body().get('entries'))})
+                except ValueError as error:
+                    raise HTTPError(400, str(error)) from error
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
-                return self.send(200, {"archives": archive_formats(), "nativeEngine": capability(), "actionRegistry": action_registry(), "conversions": MEDIA if shutil.which("ffmpeg") and shutil.which("ffprobe") else [],
+                return self.send(200, {"archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "actionRegistry": action_registry(), "conversions": MEDIA if shutil.which("ffmpeg") and shutil.which("ffprobe") else [],
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
             if path == "/api/process/settings":
                 if method == "GET":
@@ -923,6 +931,9 @@ def handler(service):
                     raise HTTPError(400, "Unsupported operation")
                 if operation != "compress" and len(ids) != 1:
                     raise HTTPError(400, "One input per extraction or conversion job")
+                project_id = body.get('projectId', 'default')
+                if not isinstance(project_id, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', project_id):
+                    raise HTTPError(400, 'Invalid project identifier')
                 quality_mode = body.get('qualityMode', 'lossless')
                 metadata_policy = body.get('metadataPolicy', 'strip')
                 from .media_policy import validate_conversion_options
@@ -938,7 +949,7 @@ def handler(service):
                     existing = service.store.get(self.owner, "job", job_id)
                     if existing:
                         if ([i["id"] for i in existing["inputs"]] != ids or existing["operation"] != operation or existing["target"] != target or existing["recursive"] != bool(body.get("recursive")) or
-                            existing.get('qualityMode', 'lossless') != quality_mode or existing.get('metadataPolicy', 'strip') != metadata_policy):
+                            existing.get('projectId', 'default') != project_id or existing.get('qualityMode', 'lossless') != quality_mode or existing.get('metadataPolicy', 'strip') != metadata_policy):
                             raise HTTPError(409, "Request identifier already used")
                         return self.send(200, service.public(self.owner, existing))
                     if service.store.count(self.owner, states=(*ACTIVE, "paused")) >= self.plan['maxQueuedJobs']:
@@ -968,7 +979,7 @@ def handler(service):
                     now = time.time()
                     settings = service.defaults(self.owner)
                     retention = RETENTION[settings["historyRetention"]]
-                    record = {"id": job_id, "created": now, "name": inputs[0]["name"] if len(inputs) == 1 else f"{len(inputs)} files",
+                    record = {"id": job_id, "projectId": project_id, "created": now, "name": inputs[0]["name"] if len(inputs) == 1 else f"{len(inputs)} files",
                               "operation": operation, "target": target, "inputs": inputs, "recursive": bool(body.get("recursive")),
                               'qualityMode': quality_mode, 'metadataPolicy': metadata_policy,
                               "state": "queued", "inputSize": sum(i["size"] for i in inputs), "outputSize": None,

@@ -52,6 +52,10 @@ def safe_path(value: str, directory: bool = False) -> str:
 def detect(path: Path) -> str:
     with path.open("rb") as stream:
         head = stream.read(512)
+    return detect_header(head)
+
+
+def detect_header(head: bytes) -> str:
     if head[:4] in (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"):
         return "zip"
     if head.startswith(b"\x1f\x8b"):
@@ -77,9 +81,26 @@ def detect(path: Path) -> str:
     if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
         return "webp"
     if head[4:8] == b"ftyp":
-        return "avif" if head[8:12] == b"avif" else "mp4"
+        brand = head[8:12]
+        if brand == b"avif":
+            return "avif"
+        if brand == b"avis":
+            return "avif-sequence"
+        if brand in (b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1"):
+            return "heic"
+        if brand in (b"M4A ", b"M4B "):
+            return "m4a"
+        return "mp4"
     if head[:4] == b"\x1aE\xdf\xa3":
         return "mkv"
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return "gif"
+    if head.startswith(b"fLaC"):
+        return "flac"
+    if head.startswith(b"OggS"):
+        return "ogg"
+    if head.startswith(b"ID3") or len(head) > 1 and head[0] == 255 and head[1] & 0xE0 == 0xE0:
+        return "mp3"
     if head.startswith(b"%PDF-"):
         return "pdf"
     return "file"

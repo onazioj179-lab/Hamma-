@@ -485,3 +485,41 @@ it('pauses on queue capacity errors and retains only unsubmitted files', async (
   expect(host.textContent).toContain('2 selected');
   expect(host.textContent).toContain('Queue limit reached');
 });
+
+
+it('keeps selections and archive settings independent across projects', async () => {
+  await render(); await select([new File(['one'], 'first.txt')]);
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Archive format"]')!.click());
+  await act(async () => [...document.querySelectorAll<HTMLElement>('[role=option]')].find(option => option.textContent === 'gzip')!.click());
+  await act(async () => button('New project').click());
+  expect(host.querySelector('[aria-label="Archive format"]')?.textContent).toContain('zip');
+  expect(host.textContent).not.toContain('first.txt');
+  await select([new File(['two'], 'second.txt')]);
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Current project"]')!.click());
+  await act(async () => document.querySelector<HTMLElement>('[role=option]')!.click());
+  expect(host.textContent).toContain('first.txt');
+  expect(host.textContent).not.toContain('second.txt');
+  expect(host.querySelector('[aria-label="Archive format"]')?.textContent).toContain('gzip');
+});
+
+
+it('recovers projects from durable jobs and retries only the active project failures', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  const row = { operation: 'convert', target: 'png', inputSize: 4, outputSize: 4, created: 1, fileExpires: 9999999999, fileCount: 1, format: 'png', downloadAvailable: false };
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url.includes('/jobs?')) return { ok: true, json: async () => ({ total: 2, jobs: [
+      { ...row, id: 'good', name: 'good.png', state: 'completed', projectId: 'default' },
+      { ...row, id: 'bad', name: 'bad.png', state: 'failed', projectId: 'images' },
+    ] }) };
+    return initial(url, init);
+  });
+  await render();
+  expect(host.textContent).toContain('good.png');
+  expect(host.textContent).not.toContain('bad.png');
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Current project"]')!.click());
+  await act(async () => [...document.querySelectorAll<HTMLElement>('[role=option]')].find(option => option.textContent === 'Project 2')!.click());
+  expect(host.textContent).toContain('bad.png');
+  expect(host.textContent).not.toContain('good.png');
+  await act(async () => button('Retry failed').click());
+  expect(fetchMock.mock.calls.filter(([url, init]) => init?.method === 'POST' && String(url).endsWith('/retry')).map(([url]) => url)).toEqual(['/api/process/jobs/bad/retry']);
+});
