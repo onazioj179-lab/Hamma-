@@ -1,13 +1,15 @@
 import { jsonRequest, ProcessorError, request, type Source } from './client';
 
 export interface ProjectSettings {
+  groupActions?: Record<string, string>;
   target: string; conversion: string; qualityMode: 'lossless' | 'lossy';
   metadataPolicy: 'strip' | 'preserve'; recursive: boolean;
 }
 export interface SavedProject { id: string; created: number; updated: number; revision: number; settings: ProjectSettings }
 export const defaultProjectSettings: ProjectSettings = { target: 'zip', conversion: 'wav', qualityMode: 'lossless', metadataPolicy: 'strip', recursive: false };
 const sameSettings = (left: ProjectSettings, right: ProjectSettings) =>
-  (Object.keys(defaultProjectSettings) as (keyof ProjectSettings)[]).every(key => left[key] === right[key]);
+  (Object.keys(defaultProjectSettings) as (keyof ProjectSettings)[]).every(key => left[key] === right[key]) &&
+  JSON.stringify(Object.entries(left.groupActions || {}).sort()) === JSON.stringify(Object.entries(right.groupActions || {}).sort());
 
 /** One instance per owner. No file bytes, cookies or credentials in browser storage. */
 export class ProjectRecovery {

@@ -94,6 +94,12 @@
 .project-toolbar label { display:grid; gap:6px; flex:1; min-width:160px; max-width:320px; font-size:12px; }
 .project-summary { display:grid; gap:10px; padding:16px; margin:12px 0; border:1px solid rgb(var(--border)); border-radius:12px; }
 .project-summary small { color:rgb(var(--muted)); line-height:1.5; }
+.workflow-groups { display:grid; gap:12px; padding:14px 12px; grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr)); }
+.workflow-groups > label, .workflow-quality { display:grid; gap:6px; min-width:0; font-size:12px; }
+.workflow-groups small { color:rgb(var(--muted)); }
+.grouped-workflow > .button { margin:0 12px; }
+.grouped-workflow > .footnote, .workflow-quality { margin:10px 12px; }
+.workflow-quality { max-width:240px; }
 .error-center ul { margin:0; padding-left:20px; font-size:12px; overflow-wrap:anywhere; }
 .error-center summary { cursor:pointer; font-size:12px; }
 @media(max-width:600px) {

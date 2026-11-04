@@ -38,9 +38,16 @@ class Projects:
     def save(self, owner, project_id, body):
         self.identifier(project_id)
         settings = body.get('settings', DEFAULT_SETTINGS)
-        if not isinstance(settings, dict) or set(settings) != set(DEFAULT_SETTINGS):
+        if not isinstance(settings, dict) or not set(DEFAULT_SETTINGS).issubset(settings) or set(settings) - set(DEFAULT_SETTINGS) - {'groupActions'}:
             raise ProjectError(400, 'Invalid project settings')
-        if (any(not isinstance(settings[key], str) or not re.fullmatch(r'[a-z0-9.]{1,16}', settings[key]) for key in ('target', 'conversion')) or
+        group_actions = settings.get('groupActions', {})
+        if (not isinstance(group_actions, dict) or len(group_actions) > 64 or
+                any(not isinstance(key, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', key) or
+                    not isinstance(value, str) or not re.fullmatch(r'(?:skip|(?:compress|convert|extract):[a-z0-9.-]{1,16})', value)
+                    for key, value in group_actions.items())):
+            raise ProjectError(400, 'Invalid grouped workflow settings')
+        if (not isinstance(settings['target'], str) or not re.fullmatch(r'[a-z0-9.]{1,16}', settings['target']) or
+                not isinstance(settings['conversion'], str) or not re.fullmatch(r'[a-z0-9.-]{1,16}', settings['conversion']) or
                 settings['qualityMode'] not in ('lossless', 'lossy') or settings['metadataPolicy'] not in ('strip', 'preserve') or type(settings['recursive']) is not bool):
             raise ProjectError(400, 'Invalid project settings')
         expected = body.get('revision', 0)
@@ -52,6 +59,10 @@ class Projects:
             previous = json.loads(row[0]) if row else None
             if expected != (previous['revision'] if previous else 0):
                 raise ProjectError(409, 'Project changed in another tab. Reconnect before saving.')
+            # Older clients cannot edit the optional grouped configuration.
+            # Omission preserves it; an explicit empty mapping clears it.
+            if previous and 'groupActions' not in settings and 'groupActions' in previous['settings']:
+                settings = {**settings, 'groupActions': previous['settings']['groupActions']}
             if not previous and db.execute("SELECT count(*) FROM records WHERE owner=? AND kind='project'", (owner,)).fetchone()[0] >= 20:
                 raise ProjectError(413, 'Project limit reached')
             if not previous and db.execute("SELECT count(*) FROM records WHERE kind='project'").fetchone()[0] >= 10000:

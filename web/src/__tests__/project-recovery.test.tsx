@@ -12,7 +12,7 @@ let checkpoint: { id: string; upload: string; name: string; size: number; direct
 let offset: number, chunkWrites: number, jobAttempts: number;
 let rejectJob: boolean;
 const uploadId = 'c'.repeat(32);
-const caps = { projectRecovery: true, archives: ['zip'], conversions: [], version: 1, processing: 'local', limits: { files: 5000, input: 1e9, expanded: 1e9, seconds: 30 } };
+const caps = { groupedWorkflows: true, projectRecovery: true, archives: ['zip'], conversions: [], version: 1, processing: 'local', limits: { files: 5000, input: 1e9, expanded: 1e9, seconds: 30 } };
 const ok = (data: unknown) => ({ ok: true, status: 200, json: async () => data });
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -137,4 +137,26 @@ it('reattaches the committed upload after an account action returns to the same 
   await act(async () => compress().click());
   expect(chunkWrites).toBe(1);
   expect(jobAttempts).toBe(2);
+});
+
+it('restores grouped choices with pending uploaded inputs and runs the remaining group', async () => {
+  saved = { id: 'default', revision: 1, created: 1, updated: 1, settings: { ...defaultProjectSettings, groupActions: { file: 'compress:zip' } } };
+  checkpoint = { id: 'a'.repeat(32), upload: uploadId, name: 'resume.txt', size: 3, directory: false };
+  offset = 3; rejectJob = false;
+  await render();
+  expect(host.querySelector('[aria-label="Action for Other files"]')?.textContent).toContain('Archive as ZIP');
+  await act(async () => Array.from(host.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Run grouped workflow')!.click());
+  expect(jobAttempts).toBe(1);
+  expect(chunkWrites).toBe(0);
+});
+
+it('refuses an incompatible restored group choice before submitting any work', async () => {
+  saved = { id: 'default', revision: 1, created: 1, updated: 1, settings: { ...defaultProjectSettings, groupActions: { file: 'convert:mp3' } } };
+  checkpoint = { id: 'a'.repeat(32), upload: uploadId, name: 'resume.txt', size: 3, directory: false };
+  offset = 3;
+  await render();
+  expect(host.textContent).toContain('choose a compatible action again');
+  const run = Array.from(host.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Run grouped workflow')!;
+  expect(run.disabled).toBe(true);
+  expect(jobAttempts).toBe(0);
 });

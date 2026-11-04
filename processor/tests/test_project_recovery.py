@@ -28,16 +28,23 @@ class ProjectRecoveryRoutes(unittest.TestCase):
         first = self.save()
         self.assertEqual(first['revision'], 1)
         self.assert_status(409, lambda: self.save())
-        updated = self.save(revision=1, settings={**DEFAULT_SETTINGS, 'conversion': 'png'})
+        updated = self.save(revision=1, settings={**DEFAULT_SETTINGS, 'conversion': 'mp4-h264', 'groupActions': {
+            'png': 'convert:png', 'zip': 'extract:zip', 'mkv': 'convert:mp4-h264'}})
         self.assertEqual(updated['revision'], 2)
         reloaded = Projects(Store(self.temp.name), self.service.limits)
         owner = self.service.store.list(kind='project')[0][0]
-        self.assertEqual(reloaded.get(owner, 'default')['settings']['conversion'], 'png')
+        self.assertEqual(reloaded.get(owner, 'default')['settings']['conversion'], 'mp4-h264')
+        self.assertEqual(reloaded.get(owner, 'default')['settings']['groupActions']['zip'], 'extract:zip')
+        self.assertEqual(reloaded.get(owner, 'default')['settings']['groupActions']['mkv'], 'convert:mp4-h264')
+        legacy_update = self.save(revision=2, settings={**DEFAULT_SETTINGS, 'conversion': 'wav'})
+        self.assertEqual(legacy_update['settings']['groupActions']['png'], 'convert:png')
         stranger = build_opener(HTTPCookieProcessor(CookieJar()))
         self.assertEqual(self.call('/projects', client=stranger)['projects'], [])
         self.assert_status(404, lambda: self.call('/projects/default', client=stranger))
         self.assert_status(400, lambda: self.save(settings={'target': 'zip'}))
         self.assert_status(400, lambda: self.save(revision=True))
+        for invalid in ([], {'png': 'run:shell'}, {'../../': 'convert:png'}, {str(i): 'skip' for i in range(65)}):
+            self.assert_status(400, lambda: self.save(revision=2, settings={**DEFAULT_SETTINGS, 'groupActions': invalid}))
         self.save('inputs')
         self.assertEqual(self.call('/projects/inputs')['id'], 'inputs')
 
