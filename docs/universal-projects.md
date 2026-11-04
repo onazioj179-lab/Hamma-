@@ -51,6 +51,6 @@ Four focused project tests also passed, including cancellation and retry preserv
 another project output. The production build passed. Final frontend regression
 counts are recorded in the PR.
 
-Google and Apple remain unavailable until developer registration, a production
-HTTPS domain and verified OAuth adapters are supplied; see account-providers.md.
+Google and Apple adapters are now implemented; activation still needs provider
+registration, an HTTPS domain and live verification. See account-providers.md.
 Physical mobile layout and whole-process memory tests remain unverified.

@@ -50,3 +50,6 @@ buildlogs/
 /validation/fixtures/
 /.hamma-data/
 /native/build*/
+
+# Optional isolated OAuth development runtime
+.venv-oauth/
