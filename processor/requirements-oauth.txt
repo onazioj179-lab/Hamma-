@@ -1,0 +1,5 @@
+# Optional provider authentication runtime; Python 3.11+
+PyJWT[crypto]==2.15.1
+cryptography==50.0.2
+cffi==2.1.1
+pycparser==3.12
