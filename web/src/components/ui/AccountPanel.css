@@ -38,3 +38,7 @@
 .account-security-note { margin: 0; font-size: 12px; color: rgb(var(--muted)); display: flex; align-items: center; justify-content: center; gap: 8px; }
 .account-security-note svg { flex-shrink: 0; }
 @media(max-width: 380px) { .account-heading { gap: 12px; } .account-emblem { display: none; } .account-provider-grid { grid-template-columns: 1fr; } }
+
+.account-provider-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); }
+.account-provider, .account-provider-widget { min-width: 0; max-width: 100%; }
+.account-provider-widget iframe { max-width: 100%; }

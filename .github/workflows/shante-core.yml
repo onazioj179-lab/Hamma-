@@ -11,6 +11,18 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: python3 scripts/audit-shante.py
+  provider-auth:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Install optional authentication runtime
+        run: |
+          python3 -m venv .venv-oauth
+          .venv-oauth/bin/python -m pip install -r processor/requirements-oauth.txt
+      - name: Verify provider authentication with local signing fixtures
+        run: |
+          .venv-oauth/bin/python -c "from processor.oauth import jwt; assert jwt is not None"
+          .venv-oauth/bin/python -m unittest discover -s processor/tests -p test_oauth.py -v
   native:
     strategy:
       fail-fast: false
