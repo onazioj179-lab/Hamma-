@@ -65,8 +65,9 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 - Select one local ZIP and open **Inspect ZIP**. The browser lists filenames,
   declared sizes and encryption flags, with search and 50 entries per page.
 - Reads are limited to a roughly 64 KiB tail and a 2 MiB central directory.
-  Inspection accepts up to 5,000 records. ZIP64 and split archives are excluded
-  from this preview. Legacy non-ASCII filename bytes are shown as escapes.
+  Inspection accepts up to 5,000 records, including single-disk ZIP64 with a
+  fixed-size end record and safely representable integers. Split archives are
+  excluded. Legacy non-ASCII filename bytes are shown as escapes.
 - Inspection sends no request and invokes no member decoder. Directory metadata
   remains unverified against file contents and checksums.
 
