@@ -448,8 +448,13 @@ def compress(inputs: list[dict], output: Path, target: str, ctx: Context):
     return manifest
 
 
-def zip_members(archive, ctx: Context):
-    for item in archive.infolist():
+def zip_members(archive, ctx: Context, indexes=None):
+    items = archive.infolist()
+    if indexes is not None:
+        if max(indexes) >= len(items):
+            raise ProcessingError("Invalid archive member selection")
+        items = [items[index] for index in indexes]
+    for item in items:
         ctx.check()
         if "\x00" in item.orig_filename or "\x00" in item.filename:
             raise ProcessingError("Unsafe filename")
@@ -489,13 +494,16 @@ def verify_zip(source: Path, output: Path, ctx: Context):
     return manifest
 
 
-def extract(source: Path, original_name: str, output: Path, ctx: Context, recursive=False):
+def extract(source: Path, original_name: str, output: Path, ctx: Context, recursive=False, zip_indexes=None, *, repack=False):
+    if zip_indexes is not None and (recursive or detect(source) != "zip"):
+        raise ProcessingError("Unsupported archive for selective ZIP extraction")
     manifest = []
     # Temporary files allow recursive inspection without buffering members in RAM.
     temp = ctx.root / "expanded"
     temp.mkdir(exist_ok=True)
     work = deque([(source, "", original_name, 0)])
-    with BoundedWriter(output, ctx) as bounded, zipfile.ZipFile(bounded, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as result:
+    method = zipfile.ZIP_DEFLATED if repack else zipfile.ZIP_STORED
+    with BoundedWriter(output, ctx) as bounded, zipfile.ZipFile(bounded, "w", compression=method, allowZip64=True) as result:
         while work:
             path, prefix, name, depth = work.popleft()
             ctx.check()
@@ -534,7 +542,7 @@ def extract(source: Path, original_name: str, output: Path, ctx: Context, recurs
             if kind == "zip":
                 validate_zip(path, ctx)
                 with zipfile.ZipFile(path) as archive:
-                    for item in zip_members(archive, ctx):
+                    for item in zip_members(archive, ctx, zip_indexes):
                         with archive.open(item) as stream:
                             add_entry(item.filename, stream, item.file_size, item.is_dir())
             elif kind in ("tar", "gzip", "bzip2", "xz"):

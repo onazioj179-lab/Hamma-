@@ -319,12 +319,15 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const archiveTarget = target === 'spk' && browserInputs || archiveTargets.includes(target) ? target : archiveTargets[0] || 'zip';
   const actions = resolveActions(chosen, capability);
   const canExtract = chosen.length > 0 && chosen.every(source => /\.spk$/i.test(source.name) ? !!source.file && !!spkReady && projectId === 'default' : resolveActions([source], capability).extract);
+  const canRepack = capability?.archiveRepack && singleSource && !/\.spk$/i.test(singleSource.name) && canExtract;
   const conversionTarget = actions.conversions.includes(conversion) ? conversion : actions.conversions[0];
-  const submit = async (operation: 'compress' | 'extract' | 'convert' | 'verify') => {
+  const submit = async (operation: 'compress' | 'extract' | 'convert' | 'verify', options: { zipIndexes?: number[]; repack?: boolean } = {}) => {
+    const { zipIndexes, repack } = options;
     if (accountChanging()) return;
     if (submitting.current || recovering || capability?.projectRecovery && !recoveryReady || spkBusy || !chosen.length) return;
     if (operation === 'convert' && !conversionTarget) return;
     if (operation === 'verify' && (!zipSource || !capability?.zipVerification)) return;
+    if (repack && !canRepack) return;
     if (operation === 'convert' && ['mp3', 'aac', 'm4a', 'ogg', 'opus', 'jpg'].includes(conversionTarget) && qualityMode !== 'lossy') {
       setError(`${conversionTarget.toUpperCase()} can reduce quality. Choose Allow quality loss before converting.`);
       return;
@@ -372,9 +375,11 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
           inputs.push({ source, id });
           if (operation !== 'compress') {
             const conversionOptions = operation === 'convert' ? { qualityMode, metadataPolicy } : {};
-            const jobTarget = operation === 'verify' ? 'json' : operation === 'extract' ? 'zip' : conversionTarget;
-            const nested = operation !== 'verify' && recursive;
-            await jsonRequest('/jobs', { ...(projectId === 'default' ? {} : { projectId }), uploads: [id], operation, target: jobTarget, recursive: nested, ...conversionOptions, ...(capability.projectRecovery ? { recoverable: true } : { requestId: await requestId([generation, projectId, source.id, operation, operation === 'verify' ? jobTarget : conversionTarget, nested, conversionOptions]) }) }, 'POST', { signal: controller.signal });
+            const jobTarget = operation === 'verify' ? 'json' : operation === 'extract' ? repack ? 'zip-deflate' : 'zip' : conversionTarget;
+            const nested = !zipIndexes && !repack && operation !== 'verify' && recursive;
+            const selection = zipIndexes ? { zipIndexes } : {};
+            const identity = [generation, projectId, source.id, operation, operation === 'verify' || repack ? jobTarget : conversionTarget, nested, conversionOptions, ...(zipIndexes ? [zipIndexes] : [])];
+            await jsonRequest('/jobs', { ...(projectId === 'default' ? {} : { projectId }), uploads: [id], operation, target: jobTarget, recursive: nested, ...conversionOptions, ...selection, ...(capability.projectRecovery ? { recoverable: true } : { requestId: await requestId(identity) }) }, 'POST', { signal: controller.signal });
             submitted.add(source.id);
             setSourceErrors(previous => { const next = { ...previous }; delete next[source.id]; return next; });
           }
@@ -585,7 +590,13 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
         <div className="source-scroll" onScroll={event => setScroll(event.currentTarget.scrollTop)}><div style={{ height: sources.length * 64, position: 'relative' }}>{rendered.map((source, index) => <div className="source-row" key={source.id} style={{ top: (rowStart + index) * 64 }}><input type="checkbox" aria-label={`Select ${source.name}`} checked={selected.has(source.id)} onChange={() => toggleSource(source.id)} /><File size={19} strokeWidth={1.5} /><div><strong title={source.name}>{source.name}</strong><span>{source.directory ? 'Empty folder' : formatFileSize(source.size) + (capability?.inspection ? '  -  ' + (source.inspection?.error || source.inspection?.format || 'Detecting - ') : '')}</span></div>{sourceErrors[source.id] ? <button className="file-state source-error" title={sourceErrors[source.id]} onClick={() => setError(source.name + ': ' + sourceErrors[source.id])}>{sourceErrors[source.id]}</button> : <span className="file-state">Waiting</span>}</div>)}</div></div>
         {new Set(chosen.map(source => source.inspection?.format).filter(Boolean)).size > 1 && <details className="processing-options"><summary>Actions by file type</summary><div className="button-row">{[...new Set(chosen.map(source => source.inspection?.format).filter((format): format is string => !!format))].map(format => <button className="button secondary" key={format} disabled={busy || !!spkBusy} onClick={() => setSelected(new Set(chosen.filter(source => source.inspection?.format === format).map(source => source.id)))}>Select {format.toUpperCase()} ({chosen.filter(source => source.inspection?.format === format).length})</button>)}</div></details>}
         <div className="processing-actions"><button className="button primary" disabled={busy || recovering || spkBusy || !selected.size || (archiveTarget === 'spk' ? !spkReady || chosen.some(source => source.directory) : !capability || offline)} onClick={() => void submit('compress')}><FileArchive size={16} /> Compress</button>{canExtract && <button className="button secondary" disabled={busy || recovering || spkBusy || !selected.size || chosen.some(s => s.directory) || (chosen.every(source => /\.spk$/i.test(source.name)) ? !spkReady : !capability || offline)} onClick={() => void submit('extract')}><ArrowDownToLine size={16} /> Extract</button>}{actions.conversions.length > 0 && <><button className="button secondary" disabled={busy || recovering || spkBusy || !selected.size || !capability?.conversions.length || offline || chosen.some(s => s.directory)} onClick={() => void submit('convert')}><ArrowRightLeft size={16} /> Convert</button><label className="conversion-select">To<SelectField disabled={busy || recovering || spkBusy} aria-label="Conversion format" value={conversionTarget} onChange={value => setConversion(value)}>{actions.conversions.map(format => <option key={format}>{format}</option>)}</SelectField></label><label className="conversion-select">Quality<SelectField disabled={busy || recovering || spkBusy} aria-label="Conversion quality" value={qualityMode} onChange={value => setQualityMode(value as "lossless" | "lossy")}><option value="lossless">Lossless</option><option value="lossy">Allow quality loss</option></SelectField></label></>}</div>
-        {visible && zipSource?.file && <ZipInspection key={projectId + ':' + zipSource.id} file={zipSource.file} />}
+        {visible && zipSource?.file && <ZipInspection key={projectId + ':' + zipSource.id} file={zipSource.file}
+          disabled={busy || recovering || spkBusy || offline}
+          onExtract={capability?.zipSelection ? indexes => void submit('extract', { zipIndexes: indexes }) : undefined} />}
+        {canRepack && <div className="zip-inspection">
+          <button className="button secondary" disabled={busy || recovering || spkBusy || offline}
+            onClick={() => void submit('extract', { repack: true })}><FileArchive size={16} /> Repack as ZIP</button>
+        </div>}
         {zipSource && capability?.zipVerification && <div className="zip-inspection">
           <button className="button secondary" disabled={busy || recovering || spkBusy || offline} onClick={() => void submit('verify')}><ShieldCheck size={16} /> Test ZIP integrity</button>
           <p className="footnote">Uploads the ZIP to the processor for a downloadable integrity report.</p>

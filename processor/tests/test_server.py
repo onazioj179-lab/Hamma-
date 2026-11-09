@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import tarfile
 import threading
 import time
 import unittest
@@ -167,6 +168,50 @@ class ServerTests(unittest.TestCase):
         self.assertNotIn("inputs", job)
         self.assertNotIn("outputFile", job)
         self.assertNotIn(str(self.service.store.root), json.dumps(job))
+
+    def test_tar_repack_produces_verified_deflate_zip(self):
+        payload = b"compressible fixture\n" * 100
+        source = io.BytesIO()
+        with tarfile.open(fileobj=source, mode="w:gz") as archive:
+            item = tarfile.TarInfo("folder/file.txt")
+            item.size = len(payload)
+            archive.addfile(item, io.BytesIO(payload))
+        job = self.job(self.upload(source.getvalue(), "sample.tar.gz"), operation="extract", target="zip-deflate")
+        result = self.execute(job)
+        self.assertEqual(result["state"], "completed", result)
+        self.assertEqual(result["outputName"], "sample.tar.repacked.zip")
+        data = self.call(result["download"].removeprefix("/api/process"), raw=True)
+        self.assertEqual(hashlib.sha256(data).hexdigest(), result["sha256"])
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            self.assertEqual(archive.getinfo("folder/file.txt").compress_type, zipfile.ZIP_DEFLATED)
+            self.assertEqual(archive.read("folder/file.txt"), payload)
+
+    def test_selective_zip_extract_binds_selection_to_job_and_verifies_output(self):
+        from processor.projects import DEFAULT_SETTINGS
+
+        self.call("/projects/default", {"settings": DEFAULT_SETTINGS}, "PUT")
+        source = io.BytesIO()
+        with zipfile.ZipFile(source, "w") as archive:
+            archive.writestr("first.txt", b"ignore")
+            archive.writestr("folder/second.txt", b"keep")
+        upload = self.upload(source.getvalue(), "sample.zip")
+        options = {"operation": "extract", "target": "zip", "recoverable": True}
+        queued = self.job(upload, zipIndexes=[1], **options)
+        self.assertEqual(self.job(upload, zipIndexes=[1], **options)["id"], queued["id"])
+        other = self.job(upload, zipIndexes=[0], **options)
+        self.assertNotEqual(other["id"], queued["id"])
+        self.assert_status(400, lambda: self.job(upload, zipIndexes=[True], **options))
+        self.assert_status(400, lambda: self.job(upload, zipIndexes=[1, 1], **options))
+        self.assert_status(400, lambda: self.job(upload, zipIndexes=[1], recursive=True, **options))
+        result = self.execute(queued)
+        self.assertEqual(result["state"], "completed", result)
+        data = self.call(result["download"].removeprefix("/api/process"), raw=True)
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            self.assertEqual(archive.namelist(), ["folder/second.txt"])
+            self.assertEqual(archive.read("folder/second.txt"), b"keep")
+        missing = self.execute(self.job(upload, zipIndexes=[2], **options))
+        self.assertEqual(missing["state"], "failed", missing)
+        self.assertFalse(missing["downloadAvailable"])
 
     def test_zip_integrity_job_reports_hashes_and_withholds_failed_reports(self):
         payload = b"integrity fixture"

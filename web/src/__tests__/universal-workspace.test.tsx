@@ -50,6 +50,33 @@ it('opens and searches a ZIP directory without uploading the archive', async () 
   expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/uploads'))).toBe(false);
 });
 
+it('submits the original ZIP index after filtering the directory', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
+    ? { ok: true, json: async () => ({ ...caps, zipSelection: true }) } : initial(url));
+  vi.spyOn(processingClient, 'upload').mockResolvedValue('uploaded-zip');
+  vi.spyOn(processingClient, 'requestId').mockResolvedValue('selected-request');
+  const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({});
+  await render();
+  const bytes = new Uint8Array(zipSync({ 'first.txt': new Uint8Array([1]), 'second.txt': new Uint8Array([2]) }));
+  await select([new File([bytes], 'example.zip')]);
+  await act(async () => button('Inspect ZIP').click());
+  await vi.waitFor(async () => {
+    await act(async () => {});
+    expect(host.textContent).toContain('2 of 2 entries');
+  });
+  const search = host.querySelector<HTMLInputElement>('[aria-label="Search ZIP entries"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, 'second');
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    host.querySelector<HTMLInputElement>('[aria-label="Select ZIP entry 2: second.txt"]')!.click();
+  });
+  await act(async () => button('Extract selected entries (1)').click());
+  expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({
+    operation: 'extract', target: 'zip', zipIndexes: [1], uploads: ['uploaded-zip'], recursive: false,
+  }), 'POST', { signal: expect.any(AbortSignal) });
+});
+
 it('queues a ZIP integrity report only when the processor advertises verification', async () => {
   const initial = fetchMock.getMockImplementation()!;
   fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
