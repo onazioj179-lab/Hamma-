@@ -33,7 +33,7 @@ import time
 from urllib.parse import parse_qs, urlsplit, quote
 import zipfile
 
-from .engine import ARCHIVES, MEDIA, BLOCK, Context, ProcessingError, archive_formats, compress, convert, detect, extract, file_digest, safe_path
+from .engine import ARCHIVES, MEDIA, BLOCK, Context, ProcessingError, archive_formats, compress, convert, detect, extract, file_digest, safe_path, verify_zip
 from .worker_limits import apply_worker_limits
 from .resources import available_memory, worker_capacity
 from .errors import describe_failure
@@ -320,6 +320,8 @@ def run_job(root, owner, job_id, limits, isolated=False):
         elif job["operation"] == "extract":
             item = job["inputs"][0]
             manifest = extract(Path(item["path"]), item["name"], output, ctx, job["recursive"])
+        elif job["operation"] == "verify":
+            manifest = verify_zip(Path(job["inputs"][0]["path"]), output, ctx)
         else:
             manifest = convert(Path(job["inputs"][0]["path"]), output, job["target"], ctx,
                                job.get('qualityMode', 'lossless'), job.get('metadataPolicy', 'strip'))
@@ -334,6 +336,8 @@ def run_job(root, owner, job_id, limits, isolated=False):
         # A raw Zstandard frame has no filename field. Preserve the complete
         # source basename in its download name so restoration retains its type.
         stem = leaf if job["operation"] == "compress" and job["target"] == "zstd" else leaf.rsplit(".", 1)[0] or "files"
+        if job["operation"] == "verify":
+            stem += ".verification"
         output_name = ("extracted" if job["operation"] == "extract" else stem) + "." + extension
         ctx.check()
         store.patch(owner, "job", job_id, expected_states=ACTIVE, state="completed", processed=job["inputSize"],
@@ -863,7 +867,7 @@ def handler(service):
                     raise HTTPError(400, str(error)) from error
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
-                return self.send(200, {"projectRecovery": True, "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "actionRegistry": action_registry(), "conversions": MEDIA if shutil.which("ffmpeg") and shutil.which("ffprobe") else [],
+                return self.send(200, {"projectRecovery": True, "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "actionRegistry": action_registry(), "conversions": MEDIA if shutil.which("ffmpeg") and shutil.which("ffprobe") else [],
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
             if path == "/api/process/settings":
                 if method == "GET":
@@ -995,7 +999,8 @@ def handler(service):
                 if not isinstance(ids, list) or not ids or len(ids) > service.limits["files"] or not all(isinstance(i, str) for i in ids) or len(set(ids)) != len(ids):
                     raise HTTPError(400, "Invalid file selection")
                 if (operation == "compress" and target not in archive_formats() or operation == "extract" and target != "zip" or
-                    operation == "convert" and target not in MEDIA or operation not in ("compress", "extract", "convert")):
+                    operation == "convert" and target not in MEDIA or operation == "verify" and target != "json" or
+                    operation not in ("compress", "extract", "convert", "verify")):
                     raise HTTPError(400, "Unsupported operation")
                 if operation != "compress" and len(ids) != 1:
                     raise HTTPError(400, "One input per extraction or conversion job")

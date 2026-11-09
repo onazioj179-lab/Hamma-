@@ -448,6 +448,47 @@ def compress(inputs: list[dict], output: Path, target: str, ctx: Context):
     return manifest
 
 
+def zip_members(archive, ctx: Context):
+    for item in archive.infolist():
+        ctx.check()
+        if "\x00" in item.orig_filename or "\x00" in item.filename:
+            raise ProcessingError("Unsafe filename")
+        if item.is_dir() and (item.file_size or item.CRC):
+            raise ProcessingError("Invalid archive directory size or checksum")
+        if item.flag_bits & 1:
+            raise ProcessingError("Unsupported password-protected ZIP")
+        mode = item.external_attr >> 16
+        if stat.S_IFMT(mode) not in (0, stat.S_IFREG, stat.S_IFDIR):
+            raise ProcessingError("Unsafe archive link or device")
+        if item.file_size > max(1, item.compress_size) * ctx.limits["ratio"]:
+            raise ProcessingError("Archive expansion ratio limit reached")
+        yield item
+
+
+def verify_zip(source: Path, output: Path, ctx: Context):
+    """Verify ZIP member CRCs and sizes without materializing extracted files."""
+    if detect(source) != "zip":
+        raise ProcessingError("Unsupported archive for ZIP verification")
+    validate_zip(source, ctx)
+    manifest = []
+    with zipfile.ZipFile(source) as archive:
+        for item in zip_members(archive, ctx):
+            if item.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+                raise ProcessingError("Unsupported ZIP compression method for verification")
+            name = ctx.register(item.filename, item.is_dir())
+            with archive.open(item) as stream:
+                record = ctx.copy(stream, Sink(), expanding=True, progress=False, expected=item.file_size)
+            manifest.append({"name": name, "directory": item.is_dir(), **record})
+            ctx.report(entries=ctx.count, expanded=ctx.expanded)
+    ctx.report(state="verifying")
+    with BoundedWriter(output, ctx) as report:
+        for chunk in json.JSONEncoder(ensure_ascii=True).iterencode(
+            {"format": "zip", "verified": True, "entries": manifest}
+        ):
+            report.write(chunk.encode("ascii"))
+    return manifest
+
+
 def extract(source: Path, original_name: str, output: Path, ctx: Context, recursive=False):
     manifest = []
     # Temporary files allow recursive inspection without buffering members in RAM.
@@ -493,19 +534,7 @@ def extract(source: Path, original_name: str, output: Path, ctx: Context, recurs
             if kind == "zip":
                 validate_zip(path, ctx)
                 with zipfile.ZipFile(path) as archive:
-                    for item in archive.infolist():
-                        ctx.check()
-                        if "\x00" in item.orig_filename or "\x00" in item.filename:
-                            raise ProcessingError("Unsafe filename")
-                        if item.is_dir() and item.file_size:
-                            raise ProcessingError("Invalid archive directory size")
-                        if item.flag_bits & 1:
-                            raise ProcessingError("Password-protected archive")
-                        mode = item.external_attr >> 16
-                        if stat.S_ISLNK(mode) or (stat.S_IFMT(mode) not in (0, stat.S_IFREG, stat.S_IFDIR)):
-                            raise ProcessingError("Unsafe archive link or device")
-                        if item.file_size > max(1, item.compress_size) * ctx.limits["ratio"]:
-                            raise ProcessingError("Archive expansion ratio limit reached")
+                    for item in zip_members(archive, ctx):
                         with archive.open(item) as stream:
                             add_entry(item.filename, stream, item.file_size, item.is_dir())
             elif kind in ("tar", "gzip", "bzip2", "xz"):

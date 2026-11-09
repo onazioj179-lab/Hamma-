@@ -13,7 +13,7 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 | Responsive UI and motion | PARTIAL | Web workspace styles and mobile-web entry. Audit all requested motion patterns, touch targets, keyboard interactions and reduced motion under load. |
 | Archive creation and compression planning | PARTIAL | `processor/engine.py`, `processor/capabilities.py`, Rust SPK codecs. Verify format compatibility, lossless mode and dictionary/solid policies against reference implementations. |
 | Archive extraction and integrity | PARTIAL | `processor/engine.py` emits a verified ZIP. ZIP index allocation is bounded, ambiguous names are rejected, and TAR preflight checks effective PAX sizes and compressed trailers. Add interoperability and malformed corpus coverage for remaining formats. |
-| Archive inspection, selection, testing and conversion | PARTIAL | Signature detection and recursive extraction exist. The web workspace adds local ZIP directory inspection and search. Selective extraction, standalone integrity testing, and archive conversion remain open. |
+| Archive inspection, selection, testing and conversion | PARTIAL | The workspace supports local ZIP directory inspection and a processor ZIP integrity job. Selective extraction, additional integrity-test formats and archive conversion remain open. |
 | Archive passwords, encryption and repair | PARTIAL | Rust SPK has encryption/recovery modules. The processor rejects password-protected ZIP. Add standard-format interoperability and secret handling tests before exposing those controls. |
 | Split/join and archive comments | MISSING | Add format-specific support after selecting libraries and validating recovery and metadata behavior. |
 | Native C++20 and ABI | PARTIAL | `native/` implements Zstandard streaming behind a versioned subprocess protocol. Expand via measured operations and validate a versioned C ABI if a shared library is introduced. |
@@ -70,6 +70,10 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
   excluded. Legacy non-ASCII filename bytes are shown as escapes.
 - Inspection sends no request and invokes no member decoder. Directory metadata
   remains unverified against file contents and checksums.
+- **Test ZIP integrity** uploads one ZIP to the processor. The job streams
+  stored or Deflate members through the existing archive quotas, checks
+  decoded size and ZIP CRC, and records SHA-256 digests in a JSON report.
+  Password-protected and other compression methods are excluded.
 
 ## TAR acceptance for this change
 

@@ -50,6 +50,22 @@ it('opens and searches a ZIP directory without uploading the archive', async () 
   expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/uploads'))).toBe(false);
 });
 
+it('queues a ZIP integrity report only when the processor advertises verification', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
+    ? { ok: true, json: async () => ({ ...caps, zipVerification: true }) } : initial(url));
+  const upload = vi.spyOn(processingClient, 'upload').mockResolvedValue('uploaded-zip');
+  vi.spyOn(processingClient, 'requestId').mockResolvedValue('verify-request');
+  const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({});
+  await render();
+  await select([new File(['zip fixture'], 'archive.zip')]);
+  await act(async () => button('Test ZIP integrity').click());
+  expect(upload).toHaveBeenCalledTimes(1);
+  expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({
+    operation: 'verify', target: 'json', uploads: ['uploaded-zip'], recursive: false,
+  }), 'POST', { signal: expect.any(AbortSignal) });
+});
+
 it('uses an explicit read-only directory picker and queues nested and empty folders', async () => {
   vi.stubGlobal('isSecureContext', true);
   const picker = vi.fn(async () => ({ kind: 'directory', name: 'Selected', async *values() {

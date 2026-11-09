@@ -168,6 +168,32 @@ class ServerTests(unittest.TestCase):
         self.assertNotIn("outputFile", job)
         self.assertNotIn(str(self.service.store.root), json.dumps(job))
 
+    def test_zip_integrity_job_reports_hashes_and_withholds_failed_reports(self):
+        payload = b"integrity fixture"
+        source = io.BytesIO()
+        with zipfile.ZipFile(source, "w") as archive:
+            archive.writestr("file.txt", payload)
+            archive.writestr("deflated.txt", payload, compress_type=zipfile.ZIP_DEFLATED)
+        valid = source.getvalue()
+        job = self.execute(self.job(self.upload(valid, "sample.zip"), operation="verify", target="json"))
+        self.assertEqual(job["state"], "completed", job)
+        self.assertEqual(job["outputName"], "sample.verification.json")
+        report_bytes = self.call(job["download"].removeprefix("/api/process"), raw=True)
+        self.assertEqual(hashlib.sha256(report_bytes).hexdigest(), job["sha256"])
+        report = json.loads(report_bytes)
+        self.assertTrue(report["verified"])
+        self.assertEqual(report["entries"], [
+            {"name": name, "directory": False, "size": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
+            for name in ("file.txt", "deflated.txt")
+        ])
+
+        damaged = valid.replace(payload, b"!" * len(payload), 1)
+        failed = self.execute(self.job(self.upload(damaged, "damaged.zip"), operation="verify", target="json"))
+        self.assertEqual(failed["state"], "failed", failed)
+        self.assertEqual(failed["errorInfo"]["category"], "corrupt_file")
+        self.assertFalse(failed["downloadAvailable"])
+        self.assertFalse(failed.get("download"))
+
     def test_user_isolation_for_jobs_uploads_and_signed_downloads(self):
         source = self.upload()
         job = self.execute(self.job(source))
