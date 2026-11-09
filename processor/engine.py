@@ -185,14 +185,51 @@ class BoundedWriter(io.BufferedWriter):
         return super().write(data)
 
 
+def pax_size(data: bytes, maximum: int):
+    """Validate PAX framing and return the local file size override, if any."""
+    position = 0
+    size = None
+    while position < len(data):
+        separator = data.find(b" ", position, position + 9)
+        length = data[position:separator] if separator >= 0 else b""
+        if not length.isdigit():
+            raise ProcessingError("Invalid PAX metadata")
+        end = position + int(length)
+        if not separator + 3 < end <= len(data) or data[end - 1] != 10:
+            raise ProcessingError("Invalid PAX metadata")
+        key, equals, value = data[separator + 1:end - 1].partition(b"=")
+        if not key or not equals or b"\x00" in key:
+            raise ProcessingError("Invalid PAX metadata")
+        if key.startswith(b"GNU.sparse."):
+            raise ProcessingError("Unsupported sparse archive")
+        if key == b"size":
+            if not value.isdigit() or len(value) > len(str(maximum)) or int(value) > maximum:
+                raise ProcessingError("Expanded size limit reached")
+            size = int(value)
+        position = end
+    return size
+
+
 def validate_tar(path: Path, ctx: Context, opener=None):
-    """Bound extended headers before tarfile allocates their declared sizes."""
+    """Walk the same payload boundaries tarfile will use for extraction."""
+    pax_types = (tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.SOLARIS_XHDTYPE)
+    local_types = (tarfile.XHDTYPE, tarfile.SOLARIS_XHDTYPE, tarfile.GNUTYPE_LONGNAME)
     total, headers = 0, 0
+    local_header = False
+    metadata_chain = 0
+    global_metadata = 0
+    size_override = None
+    maximum = ctx.limits["expanded"]
+    limit = maximum + ctx.limits["files"] * 1024
     with (opener(path, "rb") if opener else path.open("rb")) as stream:
         while True:
             ctx.check()
             header = stream.read(512)
-            if not header or header == bytes(512):
+            if not header:
+                raise ProcessingError("Missing archive end marker")
+            if header == bytes(512):
+                if metadata_chain:
+                    raise ProcessingError("Truncated archive metadata")
                 break
             if len(header) != 512:
                 raise ProcessingError("Truncated archive")
@@ -201,23 +238,65 @@ def validate_tar(path: Path, ctx: Context, opener=None):
                 raise ProcessingError("Too many archive entries")
             # tarfile's parser handles checksum and base-256 number validation.
             info = tarfile.TarInfo.frombuf(header, "utf-8", "surrogateescape")
-            if info.size < 0 or info.size > ctx.limits["expanded"]:
+            if info.size < 0:
                 raise ProcessingError("Expanded size limit reached")
-            metadata = info.type in (tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK)
-            if info.type == tarfile.GNUTYPE_SPARSE or metadata and info.size > BLOCK:
-                raise ProcessingError("Unsupported archive metadata")
-            remaining = (info.size + 511) // 512 * 512
+            metadata = info.type in pax_types or info.type in local_types
+            size = info.size
+            if metadata:
+                metadata_chain += 1
+                if local_header or metadata_chain > 8 or size > BLOCK:
+                    raise ProcessingError("Unsupported archive metadata")
+                local_header = info.type in local_types
+            else:
+                if info.type == tarfile.GNUTYPE_SPARSE:
+                    raise ProcessingError("Unsupported sparse archive")
+                if not (info.isfile() or info.isdir()):
+                    raise ProcessingError("Unsafe archive link or device")
+                if info.isdir() and (size or size_override):
+                    raise ProcessingError("Invalid archive directory size")
+                if size_override is not None:
+                    size = size_override
+                size_override = None
+                local_header = False
+                metadata_chain = 0
+            if size > maximum:
+                raise ProcessingError("Expanded size limit reached")
+            remaining = (size + 511) // 512 * 512
             total += remaining + 512
-            if total > ctx.limits["expanded"] + ctx.limits["files"] * 1024:
+            if total > limit:
                 raise ProcessingError("Expanded size limit reached")
+            if info.type in pax_types:
+                payload = stream.read(remaining)
+                if len(payload) != remaining:
+                    raise ProcessingError("Truncated archive metadata")
+                if payload[size:].strip(b"\x00"):
+                    raise ProcessingError("Invalid PAX metadata padding")
+                size_override = pax_size(payload[:size], maximum)
+                if info.type == tarfile.XGLTYPE:
+                    if size_override is not None:
+                        raise ProcessingError("Unsupported global PAX size")
+                    global_metadata += size
+                    if global_metadata > BLOCK:
+                        raise ProcessingError("Unsupported archive metadata")
+                continue
             while remaining:
                 ctx.check()
                 chunk = stream.read(min(BLOCK, remaining))
                 if not chunk:
                     raise ProcessingError("Truncated archive")
-                if metadata and b"GNU.sparse" in chunk:
-                    raise ProcessingError("Unsupported sparse archive")
                 remaining -= len(chunk)
+        # Read through the compression trailer and allow only bounded zero padding.
+        if stream.read(512) != bytes(512):
+            raise ProcessingError("Invalid archive end marker")
+        padding = 1024
+        while True:
+            ctx.check()
+            chunk = stream.read(min(BLOCK, BLOCK - padding + 1))
+            if not chunk:
+                break
+            padding += len(chunk)
+            if padding > BLOCK or chunk.strip(b"\x00"):
+                raise ProcessingError("Invalid archive padding")
 
 
 def validate_zip(path: Path, ctx: Context):
@@ -439,7 +518,10 @@ def extract(source: Path, original_name: str, output: Path, ctx: Context, recurs
                         is_tar = len(head) == 512 and (head[257:262] == b"ustar" or head == bytes(512))
                 if is_tar:
                     validate_tar(path, ctx, opener)
-                    with tarfile.open(path, "r|*") as archive:
+                    with (
+                        (opener(path, "rb") if opener else path.open("rb")) as raw,
+                        tarfile.open(fileobj=raw, mode="r|") as archive,
+                    ):
                         for item in archive:
                             ctx.check()
                             if not (item.isfile() or item.isdir()):

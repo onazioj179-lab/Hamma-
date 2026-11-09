@@ -20,6 +20,12 @@ from processor.engine import Context, ProcessingError, compress, convert, detect
 LIMITS = {"expanded": 32 * 1024**2, "files": 5000, "ratio": 1000, "depth": 3, "seconds": 60, "input": 64 * 1024**2, "storage": 256 * 1024**2}
 
 
+def pax_header(**fields):
+    item = tarfile.TarInfo("pax")
+    item.pax_headers = fields
+    return item.tobuf(format=tarfile.PAX_FORMAT)[:-512]
+
+
 class EngineFixture(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -180,6 +186,67 @@ class EngineTests(EngineFixture):
         source.write_bytes(info.tobuf(format=tarfile.USTAR_FORMAT))
         with self.assertRaisesRegex(ProcessingError, "metadata"):
             extract(source, source.name, self.root / "out.zip", self.context())
+
+    def test_pax_size_override_controls_preflight_and_extraction_boundaries(self):
+        source = self.root / "pax.tar"
+        output = self.root / "out.zip"
+        item = tarfile.TarInfo("file")
+        item.size = 1024
+        prefix = pax_header(size="1")
+        data = prefix + item.tobuf(format=tarfile.USTAR_FORMAT) + b"X" + bytes(511)
+        source.write_bytes(data + bytes(1024))
+        extract(source, source.name, output, self.context())
+        with zipfile.ZipFile(output) as result:
+            self.assertEqual(result.read("file"), b"X")
+
+        # A walk using only the raw size skips the oversized header entirely.
+        hidden = tarfile.TarInfo("hidden")
+        hidden.type, hidden.size = tarfile.SOLARIS_XHDTYPE, 2 * 1024**2
+        source.write_bytes(data + hidden.tobuf(format=tarfile.USTAR_FORMAT) + bytes(1024))
+        with self.assertRaisesRegex(ProcessingError, "metadata"):
+            extract(source, source.name, output, self.context())
+
+    def test_tar_rejects_sparse_keys_and_chained_local_metadata(self):
+        source = self.root / "pax.tar"
+        output = self.root / "out.zip"
+        item = tarfile.TarInfo("file").tobuf(format=tarfile.USTAR_FORMAT)
+        for headers in (
+            pax_header(**{"GNU.sparse.realsize": "20"}),
+            pax_header(path="file") * 2,
+        ):
+            with self.subTest(headers=headers[:24]):
+                source.write_bytes(headers + item + bytes(1024))
+                with self.assertRaisesRegex(ProcessingError, "sparse|metadata"):
+                    extract(source, source.name, output, self.context())
+
+    def test_compressed_tar_checks_trailer_after_end_marker(self):
+        source = self.root / "damaged.tar.gz"
+        tar = io.BytesIO()
+        with tarfile.open(fileobj=tar, mode="w") as archive:
+            archive.addfile(tarfile.TarInfo("file"))
+        source.write_bytes(gzip.compress(tar.getvalue())[:-4])
+        with self.assertRaises(EOFError):
+            extract(source, source.name, self.root / "out.zip", self.context())
+
+    def test_tar_requires_complete_end_marker(self):
+        source = self.root / "truncated.tar"
+        source.write_bytes(tarfile.TarInfo("file").tobuf(format=tarfile.USTAR_FORMAT) + bytes(512))
+        with self.assertRaisesRegex(ProcessingError, "end marker"):
+            extract(source, source.name, self.root / "out.zip", self.context())
+
+    def test_long_pax_and_gnu_names_survive_preflight(self):
+        name = "GNU.sparse-" + "a" * 110
+        for fmt in (tarfile.PAX_FORMAT, tarfile.GNU_FORMAT):
+            with self.subTest(fmt=fmt):
+                source = self.root / "long.tar"
+                with tarfile.open(source, "w", format=fmt) as archive:
+                    item = tarfile.TarInfo(name)
+                    item.size = 1
+                    archive.addfile(item, io.BytesIO(b"X"))
+                output = self.root / "out.zip"
+                extract(source, source.name, output, self.context())
+                with zipfile.ZipFile(output) as result:
+                    self.assertEqual(result.read(name), b"X")
 
     def test_zip_directory_allocation_and_output_writes_are_bounded(self):
         source = self.root / "count.zip"

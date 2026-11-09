@@ -12,7 +12,7 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 | Universal input, folders, contextual actions | PARTIAL | `web/src` workspace and capability registry. Exercise drag/drop, native and fallback folder pickers, and mixed selections on the physical-device matrix. |
 | Responsive UI and motion | PARTIAL | Web workspace styles and mobile-web entry. Audit all requested motion patterns, touch targets, keyboard interactions and reduced motion under load. |
 | Archive creation and compression planning | PARTIAL | `processor/engine.py`, `processor/capabilities.py`, Rust SPK codecs. Verify format compatibility, lossless mode and dictionary/solid policies against reference implementations. |
-| Archive extraction and integrity | PARTIAL | `processor/engine.py` emits a verified ZIP. This increment bounds ZIP index allocation and rejects ambiguous names. Add interoperability and malformed corpus coverage for remaining formats, and review TAR metadata parsing separately. |
+| Archive extraction and integrity | PARTIAL | `processor/engine.py` emits a verified ZIP. ZIP index allocation is bounded, ambiguous names are rejected, and TAR preflight checks effective PAX sizes and compressed trailers. Add interoperability and malformed corpus coverage for remaining formats. |
 | Archive inspection, selection, testing and conversion | PARTIAL | Signature detection and recursive extraction exist. Add bounded read-only listing, path selection, standalone test and conversion workflows with nested and corrupt fixtures. |
 | Archive passwords, encryption and repair | PARTIAL | Rust SPK has encryption/recovery modules. The processor rejects password-protected ZIP. Add standard-format interoperability and secret handling tests before exposing those controls. |
 | Split/join and archive comments | MISSING | Add format-specific support after selecting libraries and validating recovery and metadata behavior. |
@@ -60,5 +60,19 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
   requires a bounded-time failure for a named pipe and checks that no output
   appears. This case requires a POSIX test host.
 
+## TAR acceptance for this change
+
+- A local PAX size override determines the payload boundary used for both
+  preflight and extraction. Regression fixtures cover a valid override and
+  oversized metadata concealed by a conflicting raw header size.
+- Require two zero end blocks, allow bounded zero padding, and read compressed
+  streams through the codec trailer. Reject sparse formats, global size
+  overrides and chained local metadata. Allow ordinary PAX and GNU long names.
+- Preflight still reads the archive before extraction. Each metadata header and
+  cumulative global metadata is capped at 1 MiB. A run of metadata headers
+  before a file is capped at eight, with at most one local header at the end.
+  These restrictions define the supported archive profile.
+
 Format references are the [PKWARE ZIP Application Note](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT)
 and [Microsoft Windows file naming rules](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file).
+The TAR reader uses Python's [tarfile module](https://docs.python.org/3/library/tarfile.html).
