@@ -13,7 +13,7 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 | Responsive UI and motion | PARTIAL | Web workspace styles and mobile-web entry. Audit all requested motion patterns, touch targets, keyboard interactions and reduced motion under load. |
 | Archive creation and compression planning | PARTIAL | `processor/engine.py`, `processor/capabilities.py`, Rust SPK codecs. Verify format compatibility, lossless mode and dictionary/solid policies against reference implementations. |
 | Archive extraction and integrity | PARTIAL | `processor/engine.py` emits a verified ZIP. ZIP index allocation is bounded, ambiguous names are rejected, and TAR preflight checks effective PAX sizes and compressed trailers. Add interoperability and malformed corpus coverage for remaining formats. |
-| Archive inspection, selection, testing and conversion | PARTIAL | Signature detection and recursive extraction exist. Add bounded read-only listing, path selection, standalone test and conversion workflows with nested and corrupt fixtures. |
+| Archive inspection, selection, testing and conversion | PARTIAL | Signature detection and recursive extraction exist. The web workspace adds local ZIP directory inspection and search. Selective extraction, standalone integrity testing, and archive conversion remain open. |
 | Archive passwords, encryption and repair | PARTIAL | Rust SPK has encryption/recovery modules. The processor rejects password-protected ZIP. Add standard-format interoperability and secret handling tests before exposing those controls. |
 | Split/join and archive comments | MISSING | Add format-specific support after selecting libraries and validating recovery and metadata behavior. |
 | Native C++20 and ABI | PARTIAL | `native/` implements Zstandard streaming behind a versioned subprocess protocol. Expand via measured operations and validate a versioned C ABI if a shared library is introduced. |
@@ -59,6 +59,16 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 - Open POSIX inputs without waiting for a FIFO writer. The native contract
   requires a bounded-time failure for a named pipe and checks that no output
   appears. This case requires a POSIX test host.
+
+## Browser ZIP inspection
+
+- Select one local ZIP and open **Inspect ZIP**. The browser lists filenames,
+  declared sizes and encryption flags, with search and 50 entries per page.
+- Reads are limited to a roughly 64 KiB tail and a 2 MiB central directory.
+  Inspection accepts up to 5,000 records. ZIP64 and split archives are excluded
+  from this preview. Legacy non-ASCII filename bytes are shown as escapes.
+- Inspection sends no request and invokes no member decoder. Directory metadata
+  remains unverified against file contents and checksums.
 
 ## TAR acceptance for this change
 

@@ -1,4 +1,5 @@
 import { act } from 'react';
+import { zipSync } from 'fflate';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import * as processingClient from '../processing/client';
@@ -28,6 +29,26 @@ const select = async (files: File[]) => {
   Object.defineProperty(input, 'files', { value: files, configurable: true });
   await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })));
 };
+
+it('opens and searches a ZIP directory without uploading the archive', async () => {
+  await render();
+  const bytes = new Uint8Array(zipSync({ 'first.txt': new Uint8Array([1]), 'second.txt': new Uint8Array([2]) }));
+  await select([new File([bytes], 'example.zip')]);
+  await act(async () => button('Inspect ZIP').click());
+  await vi.waitFor(async () => {
+    await act(async () => {});
+    expect(host.textContent).toContain('2 of 2 entries');
+  });
+  const search = host.querySelector<HTMLInputElement>('[aria-label="Search ZIP entries"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, 'SECOND');
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  expect(host.textContent).toContain('1 of 2 entries');
+  expect(host.textContent).toContain('second.txt');
+  expect(host.textContent).not.toContain('first.txt');
+  expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/uploads'))).toBe(false);
+});
 
 it('uses an explicit read-only directory picker and queues nested and empty folders', async () => {
   vi.stubGlobal('isSecureContext', true);
