@@ -452,6 +452,23 @@ it('requires explicit lossy consent and sends quality and metadata choices with 
   expect(key).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ qualityMode: 'lossy', metadataPolicy: 'preserve' })]));
 });
 
+it('queues WAV audio extraction from the video conversion control', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  const video = { mime: ['video/x-matroska'], extensions: ['mkv'], conversions: ['mkv', 'wav'], extract: false };
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
+    ? { ok: true, json: async () => ({ ...caps, actionRegistry: [video], conversions: ['mkv', 'wav'] }) } : initial(url));
+  vi.spyOn(processingClient, 'upload').mockResolvedValue('uploaded-video');
+  vi.spyOn(processingClient, 'requestId').mockResolvedValue('video-audio-request');
+  const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({ id: 'audio-job' });
+  await render();
+  await select([new File(['fixture'], 'source.mkv', { type: 'video/x-matroska' })]);
+  expect(host.querySelector('[aria-label="Conversion format"]')?.textContent).toContain('wav');
+  await act(async () => button('Convert').click());
+  expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({
+    operation: 'convert', target: 'wav', qualityMode: 'lossless', uploads: ['uploaded-video'],
+  }), 'POST', { signal: expect.any(AbortSignal) });
+});
+
 it('cancels a deletion preview when the user leaves the processing page', async () => {
   const initial = fetchMock.getMockImplementation()!;
   let aborted = false;
