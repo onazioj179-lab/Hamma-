@@ -17,10 +17,17 @@ import zipfile
 
 def smoke_workspace(stage, environment):
     interpreter = sys._base_executable if os.name == 'nt' else sys.executable
+    startup = (
+        "import faulthandler, runpy, sys; "
+        "faulthandler.dump_traceback_later(10); "
+        "sys.argv = sys.argv[1:]; "
+        "runpy.run_path(sys.argv[0], run_name='__main__')"
+    )
     with tempfile.TemporaryDirectory(prefix='shante-smoke-') as data:
         log_path = Path(data) / 'startup.log'
         with log_path.open('wb') as log, subprocess.Popen(
-            [interpreter, '-B', 'run-workspace.py', '--port', '0', '--data', str(Path(data) / 'jobs')],
+            [interpreter, '-B', '-u', '-c', startup, 'run-workspace.py', '--port', '0',
+             '--data', str(Path(data) / 'jobs')],
             cwd=stage, env=environment, stdout=log, stderr=log,
         ) as process:
             def get(path):
