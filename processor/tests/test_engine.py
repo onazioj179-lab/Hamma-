@@ -5,10 +5,12 @@ import json
 from pathlib import Path
 import shutil
 import stat
+import struct
 import subprocess
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 import wave
 import zipfile
 
@@ -66,12 +68,12 @@ class EngineTests(EngineFixture):
         self.assertEqual(detect(fake), "zip")
 
     def test_unsafe_names_are_rejected(self):
-        for name in ("../escape", "/etc/passwd", "C:/a", "a/../b", "a\\..\\b", "a//b", "a\x00b", "a:stream", "CON", "dir/nul.txt", "file. ", "file\nname"):
+        for name in ("../escape", "/etc/passwd", "C:/a", "a/../b", "a\\..\\b", "a//b", "a\x00b", "a:stream", "CON", "dir/nul.txt", "dir/COM¹.txt", "lpt² .txt", "file. ", "file\nname"):
             with self.subTest(name=name), self.assertRaises(ProcessingError):
                 safe_path(name)
 
     def test_zip_traversal_links_case_collisions_and_parent_conflicts(self):
-        for names, symlink in ((["../escape"], False), (["link"], True), (["A.txt", "a.txt"], False), (["a", "a/b"], False)):
+        for names, symlink in ((["../escape"], False), (["link"], True), (["A.txt", "a.txt"], False), (["a", "a/b"], False), (["A/b", "a"], False)):
             with self.subTest(names=names):
                 source = self.root / "unsafe.zip"
                 with zipfile.ZipFile(source, "w") as archive:
@@ -84,6 +86,29 @@ class EngineTests(EngineFixture):
                 with self.assertRaises(ProcessingError):
                     extract(source, source.name, self.root / "out.zip", self.context())
                 self.assertFalse((self.root.parent / "escape").exists())
+
+    def test_zip_allows_explicit_directory_after_its_child(self):
+        source = self.root / "directory.zip"
+        with zipfile.ZipFile(source, "w") as archive:
+            archive.writestr("folder/file", self.data)
+            archive.writestr("folder/", b"")
+        output = self.root / "out.zip"
+        extract(source, source.name, output, self.context())
+        with zipfile.ZipFile(output) as archive:
+            self.assertEqual(archive.read("folder/file"), self.data)
+            self.assertIn("folder/", archive.namelist())
+
+    def test_zip_rejects_hidden_nul_and_directory_payload(self):
+        source = self.root / "unsafe.zip"
+        with zipfile.ZipFile(source, "w") as archive:
+            archive.writestr("some-name", self.data)
+        source.write_bytes(source.read_bytes().replace(b"some-name", b"some\x00name"))
+        with self.assertRaisesRegex(ProcessingError, "Unsafe filename"):
+            extract(source, source.name, self.root / "out.zip", self.context())
+        with zipfile.ZipFile(source, "w") as archive:
+            archive.writestr("folder/", self.data)
+        with self.assertRaisesRegex(ProcessingError, "directory size"):
+            extract(source, source.name, self.root / "out.zip", self.context())
 
     def test_tar_links_and_devices_rejected(self):
         for kind in (tarfile.SYMTYPE, tarfile.LNKTYPE, tarfile.CHRTYPE, tarfile.FIFOTYPE):
@@ -157,7 +182,6 @@ class EngineTests(EngineFixture):
             extract(source, source.name, self.root / "out.zip", self.context())
 
     def test_zip_directory_allocation_and_output_writes_are_bounded(self):
-        import struct
         source = self.root / "count.zip"
         with zipfile.ZipFile(source, "w") as archive:
             archive.writestr("text", self.data)
@@ -169,6 +193,43 @@ class EngineTests(EngineFixture):
             extract(source, source.name, self.root / "out.zip", self.context())
         with self.assertRaisesRegex(ProcessingError, "Output size"):
             compress([{"name": "a", "path": str(self.source)}], self.root / "small.zip", "zip", self.context(expanded=40))
+
+    def test_zip_entry_quota_uses_records_even_when_footer_underreports(self):
+        source = self.root / "count.zip"
+        with zipfile.ZipFile(source, "w") as archive:
+            archive.writestr("first", b"1")
+            archive.writestr("second", b"2")
+        content = bytearray(source.read_bytes())
+        struct.pack_into("<HH", content, len(content) - 22 + 8, 1, 1)
+        source.write_bytes(content)
+        with patch("processor.engine.zipfile.ZipFile", wraps=zipfile.ZipFile) as reader:
+            with self.assertRaisesRegex(ProcessingError, "Too many archive entries"):
+                extract(source, source.name, self.root / "out.zip", self.context(files=1))
+            self.assertEqual(reader.call_count, 1)  # Only the output writer was opened.
+
+    def test_zip64_footer_applies_with_ordinary_classic_fields(self):
+        source = self.root / "zip64.zip"
+        # Force the standard writer to emit ZIP64 metadata for a small fixture.
+        with patch.object(zipfile, "ZIP64_LIMIT", 64):
+            with zipfile.ZipFile(source, "w") as archive:
+                archive.writestr("data", self.data)
+        output = self.root / "out.zip"
+        extract(source, source.name, output, self.context())
+        with zipfile.ZipFile(output) as archive:
+            self.assertEqual(archive.read("data"), self.data)
+
+        content = bytearray(source.read_bytes())
+        record = len(content) - 22 - 20 - 56
+        self.assertEqual(content[record:record + 4], b"PK\x06\x06")
+        struct.pack_into("<QQ", content, record + 24, 5001, 5001)
+        # Classic size/offset fit and must not hide the ZIP64 count.
+        central_size, central_offset = struct.unpack_from("<QQ", content, record + 40)
+        struct.pack_into("<II", content, len(content) - 22 + 12, central_size, central_offset)
+        source.write_bytes(content)
+        with patch("processor.engine.zipfile.ZipFile", wraps=zipfile.ZipFile) as reader:
+            with self.assertRaisesRegex(ProcessingError, "Too many archive entries"):
+                extract(source, source.name, output, self.context())
+            self.assertEqual(reader.call_count, 1)
 
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg not installed")

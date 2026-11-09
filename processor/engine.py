@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import bz2
+from collections import deque
 import gzip
 import hashlib
 import io
@@ -43,7 +44,7 @@ def safe_path(value: str, directory: bool = False) -> str:
     if (not value or len(value) > 1024 or value.startswith("/") or
         any(p in ("", ".", "..") or p.rstrip(" .") != p or
             re.search(r'[\x00-\x1f\x7f:<>"|?*]', p) or
-            re.fullmatch(r"(?i)(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?", p)
+            re.fullmatch(r"(?i)(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])", p.split(".", 1)[0].rstrip(" "))
             for p in parts)):
         raise ProcessingError("Unsafe filename")
     return value + ("/" if directory else "")
@@ -113,6 +114,8 @@ class Context:
         self.expanded = 0
         self.count = 0
         self.paths: set[str] = set()
+        self.file_paths: set[str] = set()
+        self.parent_paths: set[str] = set()
         self.started = time.monotonic()
 
     def check(self):
@@ -126,21 +129,18 @@ class Context:
         key = name.rstrip("/").casefold()
         if key in self.paths:
             raise ProcessingError("Duplicate archive path")
-        # A file cannot also be the parent of another entry.
-        for parent in Path(key).parents:
-            if str(parent).replace("\\", "/") in self.paths and str(parent) != ".":
-                if str(parent).replace("\\", "/") in getattr(self, "file_paths", set()):
-                    raise ProcessingError("Conflicting archive paths")
-        if not directory and any(p.startswith(key + "/") for p in self.paths):
+        parents = [key[:index] for index, char in enumerate(key) if char == "/"]
+        if any(parent in self.file_paths for parent in parents) or (
+            not directory and key in self.parent_paths
+        ):
             raise ProcessingError("Conflicting archive paths")
-        if not hasattr(self, "file_paths"):
-            self.file_paths = set()
+        if self.count >= self.limits["files"]:
+            raise ProcessingError("Too many files")
         if not directory:
             self.file_paths.add(key)
         self.paths.add(key)
+        self.parent_paths.update(parents)
         self.count += 1
-        if self.count > self.limits["files"]:
-            raise ProcessingError("Too many files")
         return name
 
     def copy(self, source, target, *, expanding=False, progress=True, expected=None):
@@ -235,25 +235,46 @@ def validate_zip(path: Path, ctx: Context):
         disk, start_disk, disk_entries, count, central_size, central_offset = struct.unpack_from("<HHHHII", end, 4)
         if disk or start_disk or disk_entries != count:
             raise ProcessingError("Split archives are unsupported")
-        if count == 65535 or central_size == 0xffffffff or central_offset == 0xffffffff:
-            position = size - len(end)
-            if position < 20:
-                raise ProcessingError("Invalid ZIP64 archive")
-            stream.seek(position - 20)
+        central_end = size - len(end)
+        locator = b""
+        if central_end >= 20:
+            stream.seek(central_end - 20)
             locator = stream.read(20)
-            if locator[:4] != b"PK\x06\x07":
+        # Readers can prefer ZIP64 metadata even when the classic fields fit.
+        if locator.startswith(b"PK\x06\x07"):
+            locator_disk, record_offset, disks = struct.unpack_from("<IQI", locator, 4)
+            if locator_disk or disks != 1:
+                raise ProcessingError("Split archives are unsupported")
+            central_end -= 76
+            if central_end < 0 or record_offset != central_end:
                 raise ProcessingError("Invalid ZIP64 archive")
-            record_offset = struct.unpack_from("<Q", locator, 8)[0]
-            stream.seek(record_offset)
+            stream.seek(central_end)
             record = stream.read(56)
             if len(record) != 56 or record[:4] != b"PK\x06\x06":
                 raise ProcessingError("Invalid ZIP64 archive")
-            if any(struct.unpack_from("<II", record, 16)):
+            if struct.unpack_from("<Q", record, 4)[0] != 44:
+                raise ProcessingError("Unsupported ZIP64 metadata")
+            disk, start_disk, disk_entries, count, central_size, central_offset = struct.unpack_from("<IIQQQQ", record, 16)
+            if disk or start_disk or disk_entries != count:
                 raise ProcessingError("Split archives are unsupported")
-            count, central_size, central_offset = struct.unpack_from("<QQQ", record, 32)
         if count > ctx.limits["files"] or central_size > ctx.limits["files"] * 4096 + BLOCK:
             raise ProcessingError("Too many archive entries")
-        if central_offset + central_size > size:
+        if central_offset + central_size != central_end:
+            raise ProcessingError("Invalid archive index")
+        # The footer count is untrusted. Count actual records before ZipFile
+        # allocates an object per member.
+        stream.seek(central_offset)
+        actual = 0
+        while stream.tell() < central_end:
+            ctx.check()
+            header = stream.read(46)
+            if len(header) != 46 or header[:4] != b"PK\x01\x02":
+                raise ProcessingError("Invalid archive index")
+            actual += 1
+            if actual > ctx.limits["files"]:
+                raise ProcessingError("Too many archive entries")
+            stream.seek(sum(struct.unpack_from("<HHH", header, 28)), io.SEEK_CUR)
+        if stream.tell() != central_end or actual != count:
             raise ProcessingError("Invalid archive index")
 
 
@@ -353,10 +374,10 @@ def extract(source: Path, original_name: str, output: Path, ctx: Context, recurs
     # Temporary files allow recursive inspection without buffering members in RAM.
     temp = ctx.root / "expanded"
     temp.mkdir(exist_ok=True)
-    work = [(source, "", original_name, 0)]
+    work = deque([(source, "", original_name, 0)])
     with BoundedWriter(output, ctx) as bounded, zipfile.ZipFile(bounded, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as result:
         while work:
-            path, prefix, name, depth = work.pop(0)
+            path, prefix, name, depth = work.popleft()
             ctx.check()
             if depth > ctx.limits["depth"]:
                 raise ProcessingError("Archive nesting limit reached")
@@ -370,6 +391,12 @@ def extract(source: Path, original_name: str, output: Path, ctx: Context, recurs
                     result.writestr(normalized, b"")
                     manifest.append({"name": normalized, "directory": True, "size": 0})
                     return
+                if not recursive:
+                    with result.open(normalized, "w", force_zip64=True) as dest:
+                        record = ctx.copy(stream, dest, expanding=True, progress=False, expected=size)
+                    manifest.append({"name": normalized, **record})
+                    ctx.report(entries=ctx.count, expanded=ctx.expanded)
+                    return
                 staging = temp / str(len(manifest))
                 with staging.open("wb") as dest:
                     record = ctx.copy(stream, dest, expanding=True, progress=False, expected=size)
@@ -379,7 +406,7 @@ def extract(source: Path, original_name: str, output: Path, ctx: Context, recurs
                 manifest.append({"name": normalized, **record})
                 ctx.report(entries=ctx.count, expanded=ctx.expanded)
                 nested = detect(staging)
-                if recursive and nested in ("zip", "tar", "gzip", "bzip2", "xz", "zstd"):
+                if nested in ("zip", "tar", "gzip", "bzip2", "xz", "zstd"):
                     work.append((staging, normalized + ".contents/", entry_name, depth + 1))
                 else:
                     staging.unlink()
@@ -389,6 +416,10 @@ def extract(source: Path, original_name: str, output: Path, ctx: Context, recurs
                 with zipfile.ZipFile(path) as archive:
                     for item in archive.infolist():
                         ctx.check()
+                        if "\x00" in item.orig_filename or "\x00" in item.filename:
+                            raise ProcessingError("Unsafe filename")
+                        if item.is_dir() and item.file_size:
+                            raise ProcessingError("Invalid archive directory size")
                         if item.flag_bits & 1:
                             raise ProcessingError("Password-protected archive")
                         mode = item.external_attr >> 16
