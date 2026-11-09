@@ -452,6 +452,29 @@ it('requires explicit lossy consent and sends quality and metadata choices with 
   expect(key).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ qualityMode: 'lossy', metadataPolicy: 'preserve' })]));
 });
 
+it('shows the H.264 preset and blocks submission until lossy conversion is allowed', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  const video = { mime: ['video/x-matroska'], extensions: ['mkv'], conversions: ['mp4-h264'], extract: false };
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
+    ? { ok: true, json: async () => ({ ...caps, actionRegistry: [video], conversions: ['mp4-h264'] }) } : initial(url));
+  const upload = vi.spyOn(processingClient, 'upload').mockResolvedValue('uploaded-video');
+  vi.spyOn(processingClient, 'requestId').mockResolvedValue('h264-request');
+  const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({ id: 'h264-job' });
+  await render();
+  await select([new File(['fixture'], 'source.mkv', { type: 'video/x-matroska' })]);
+  expect(host.querySelector('[aria-label="Conversion format"]')?.textContent).toContain('MP4 (H.264)');
+  await act(async () => button('Convert').click());
+  expect(host.querySelector('[role=alert]')?.textContent).toContain('Choose Allow quality loss');
+  expect(upload).not.toHaveBeenCalled();
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Conversion quality"]')!.click());
+  const lossy = [...document.querySelectorAll<HTMLElement>('[role=option]')].find(item => item.textContent === 'Allow quality loss')!;
+  await act(async () => lossy.click());
+  await act(async () => button('Convert').click());
+  expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({
+    operation: 'convert', target: 'mp4-h264', qualityMode: 'lossy', uploads: ['uploaded-video'],
+  }), 'POST', { signal: expect.any(AbortSignal) });
+});
+
 it('cancels a deletion preview when the user leaves the processing page', async () => {
   const initial = fetchMock.getMockImplementation()!;
   let aborted = false;

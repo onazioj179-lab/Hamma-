@@ -86,6 +86,16 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
   decoded size and ZIP CRC, and records SHA-256 digests in a JSON report.
   Password-protected and other compression methods are excluded.
 
+## H.264 MP4 preset
+
+The workspace offers **MP4 (H.264)** when FFmpeg has the MP4 muxer and the
+libx264, AAC and timed-text encoders. The preset requires explicit lossy consent
+and encodes even-sized video as 8-bit 4:2:0 at CRF 23 with the medium preset.
+It converts audio to AAC and supported text subtitles to MP4 timed text.
+Unsupported subtitles fail conversion. The job checks output stream counts,
+codecs and duration where available, then decodes audio and video through EOF.
+The regular MP4 choice still uses stream copy.
+
 ## Portable workspace acceptance
 
 - Build the web and native components, then run

@@ -25,6 +25,14 @@ class RegistryTests(unittest.TestCase):
         ]):
             self.assertEqual(_media_targets('fixture-engine', 1, 1), ('mp4', 'png'))
 
+    def test_h264_preset_requires_all_three_encoders(self):
+        encoders = ' V..... libx264 H.264\n A..... aac AAC\n'
+        for suffix in ('', ' S..... mov_text Text\n'):
+            with self.subTest(subtitle_encoder=bool(suffix)), patch('processor.capabilities.subprocess.run', side_effect=[
+                SimpleNamespace(stdout=encoders + suffix), SimpleNamespace(stdout='  E  mp4 MP4\n'),
+            ]):
+                self.assertEqual('mp4-h264' in _media_targets('h264-fixture', len(suffix), 1), bool(suffix))
+
 
     def test_signature_inspection_is_bounded_and_ignores_names(self):
         from processor.capabilities import inspect_headers

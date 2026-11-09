@@ -7,6 +7,8 @@ import json
 import os
 import random
 from pathlib import Path
+import subprocess
+import shutil
 import tempfile
 import tarfile
 import threading
@@ -18,6 +20,8 @@ from urllib.request import HTTPCookieProcessor, Request, build_opener
 import zipfile
 
 from processor.server import ACTIVE, LocalHTTPServer, Service, Store, handler, run_job
+from processor.engine import probe
+from processor.capabilities import media_targets
 from test_engine import LIMITS
 
 
@@ -64,6 +68,34 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(accepted['metadataPolicy'], 'strip')
         self.assert_status(409, lambda: self.job(source, operation='convert', target='mp3', qualityMode='lossy', metadataPolicy='preserve', requestId='d' * 64))
         self.assert_status(400, lambda: self.job(source, operation='convert', target='wav', metadataPolicy='invalid'))
+
+    def test_h264_video_job_requires_consent_and_downloads_verified_mp4(self):
+        if "mp4-h264" not in media_targets():
+            self.skipTest("FFmpeg H.264 MP4 preset unavailable")
+        fixture = Path(self.temp.name) / "source.mkv"
+        subtitles = fixture.with_suffix(".srt")
+        subtitles.write_text("1\n00:00:00,100 --> 00:00:00,400\nSHANTE\n", encoding="ascii")
+        subprocess.run([
+            shutil.which("ffmpeg"), "-v", "error", "-f", "lavfi", "-i", "testsrc=size=64x48:duration=0.6",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=0.6", "-i", str(subtitles),
+            "-c:v", "mpeg4", "-c:a", "pcm_s16le", "-c:s", "srt", str(fixture),
+        ], check=True, capture_output=True, timeout=30)
+        payload = fixture.read_bytes()
+        inspection = self.call("/inspect", {"entries": [{"head": payload[:512].hex()}]}, "POST")
+        self.assertIn("mp4-h264", inspection["entries"][0]["conversions"])
+        upload = self.upload(payload, fixture.name)
+        self.assert_status(400, lambda: self.job(upload, operation="convert", target="mp4-h264"))
+        job = self.job(upload, operation="convert", target="mp4-h264", qualityMode="lossy")
+        completed = self.execute(job)
+        self.assertEqual(completed["state"], "completed", completed)
+        self.assertEqual(completed["outputName"], "source.mp4")
+        downloaded = self.call(completed["download"].removeprefix("/api/process"), raw=True)
+        self.assertEqual(hashlib.sha256(downloaded).hexdigest(), completed["sha256"])
+        output = fixture.with_suffix(".mp4")
+        output.write_bytes(downloaded)
+        streams = probe(output)["streams"]
+        self.assertEqual([s["codec_name"] for s in streams], ["h264", "aac", "mov_text"])
+        self.assertEqual((streams[0]["width"], streams[0]["height"]), (64, 48))
 
     def upload(self, data=b"test data", name="nested/世界.txt", split=False):
         record = self.call("/uploads", {"name": name, "size": len(data)}, "POST")

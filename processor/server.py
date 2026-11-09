@@ -42,6 +42,7 @@ from .projects import Projects, ProjectError
 from .accounts import Accounts, AccountError, plan as account_plan
 from .catalog import FileCatalog
 from .capabilities import action_registry, inspect_headers, media_targets, single_file_archives
+from .media_policy import H264_TARGET
 from .oauth import OAuth
 
 LOG = logging.getLogger("hamma.processor")
@@ -301,7 +302,8 @@ def run_job(root, owner, job_id, limits, isolated=False):
             last_report[0] = now
 
     ctx = Context(directory, limits, report)
-    output = directory / ("output." + job["target"])
+    output_extension = "mp4" if job["target"] == H264_TARGET else job["target"]
+    output = directory / ("output." + output_extension)
     try:
         current = store.patch(owner, "job", job_id, expected_states=ACTIVE,
                               state="processing", started=started, error=None)
@@ -338,7 +340,7 @@ def run_job(root, owner, job_id, limits, isolated=False):
         if digest["size"] > limits["expanded"]:
             raise ProcessingError("Output size limit reached")
         # The API exposes only names and opaque identifiers, never storage paths.
-        extension = "zip" if detect(output) == "zip" else job["target"]
+        extension = "zip" if detect(output) == "zip" else output_extension
         leaf = Path(job["name"]).name
         # A raw Zstandard frame has no filename field. Preserve the complete
         # source basename in its download name so restoration retains its type.
