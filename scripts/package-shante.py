@@ -6,8 +6,8 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
@@ -16,12 +16,10 @@ import zipfile
 
 
 def smoke_workspace(stage, environment):
-    with tempfile.TemporaryDirectory(prefix='shante-smoke-') as data, tempfile.TemporaryFile() as log:
-        with socket.socket() as reservation:
-            reservation.bind(('127.0.0.1', 0))
-            port = reservation.getsockname()[1]
-        with subprocess.Popen(
-            [sys.executable, '-B', 'run-workspace.py', '--port', str(port), '--data', data],
+    with tempfile.TemporaryDirectory(prefix='shante-smoke-') as data:
+        log_path = Path(data) / 'startup.log'
+        with log_path.open('wb') as log, subprocess.Popen(
+            [sys.executable, '-B', 'run-workspace.py', '--port', '0', '--data', str(Path(data) / 'jobs')],
             cwd=stage, env=environment, stdout=log, stderr=log,
         ) as process:
             def get(path):
@@ -38,13 +36,14 @@ def smoke_workspace(stage, environment):
             try:
                 deadline = time.monotonic() + 15
                 while True:
-                    try:
-                        health = json.loads(get('/api/process/health'))
+                    address = re.search(r'HAMMA available at http://127\.0\.0\.1:(\d+)', log_path.read_text(errors='replace'))
+                    if address:
+                        port = int(address[1])
                         break
-                    except ConnectionRefusedError:
-                        if process.poll() is not None or time.monotonic() >= deadline:
-                            raise
-                        time.sleep(.1)
+                    if process.poll() is not None or time.monotonic() >= deadline:
+                        raise RuntimeError('Packaged workspace did not start')
+                    time.sleep(.1)
+                health = json.loads(get('/api/process/health'))
                 if health['pid'] != process.pid or get('/') != (stage / 'web/index.html').read_bytes():
                     raise RuntimeError('Unexpected workspace response')
                 capabilities = json.loads(get('/api/process/capabilities'))
@@ -60,8 +59,7 @@ def smoke_workspace(stage, environment):
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=5)
-                log.seek(0)
-                print(log.read().decode('utf-8', errors='replace'), end='')
+                print(log_path.read_text(errors='replace'), end='')
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--workspace', action='store_true', help='Include the built web UI and local Python processor')

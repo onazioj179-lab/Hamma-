@@ -1271,7 +1271,7 @@ def main():
     server.transport_secure = transport.secure_cookies
     thread = threading.Thread(target=service.loop, daemon=True)
     thread.start()
-    LOG.info("HAMMA available at %s://%s:%s", 'https' if transport.secure_cookies else 'http', args.host, args.port)
+    LOG.info("HAMMA available at %s://%s:%s", 'https' if transport.secure_cookies else 'http', args.host, server.server_port)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
