@@ -24,6 +24,7 @@ import re
 import secrets
 import signal
 import socket
+from socketserver import TCPServer
 import subprocess
 import shutil
 import sqlite3
@@ -325,6 +326,9 @@ def run_job(root, owner, job_id, limits, isolated=False):
                                job.get("zipIndexes"), repack=job["target"] == "zip-deflate")
         elif job["operation"] == "verify":
             manifest = verify_zip(Path(job["inputs"][0]["path"]), output, ctx)
+        elif job["operation"] == "inspect":
+            from .documents import inspect_office
+            manifest = inspect_office(Path(job["inputs"][0]["path"]), output, ctx)
         else:
             manifest = convert(Path(job["inputs"][0]["path"]), output, job["target"], ctx,
                                job.get('qualityMode', 'lossless'), job.get('metadataPolicy', 'strip'))
@@ -341,6 +345,8 @@ def run_job(root, owner, job_id, limits, isolated=False):
         stem = leaf if job["operation"] == "compress" and job["target"] == "zstd" else leaf.rsplit(".", 1)[0] or "files"
         if job["operation"] == "verify":
             stem += ".verification"
+        elif job["operation"] == "inspect":
+            stem += ".inspection"
         if job["operation"] == "extract":
             stem = stem + ".repacked" if job["target"] == "zip-deflate" else "extracted"
         output_name = stem + "." + extension
@@ -656,7 +662,10 @@ class LocalHTTPServer(ThreadingHTTPServer):
         # Windows SO_REUSEADDR otherwise permits two listeners on one port.
         if os.name == "nt":
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-        super().server_bind()
+        # The listener already has a numeric bind address. HTTPServer's
+        # reverse DNS lookup can block startup even for loopback.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 def handler(service):
@@ -872,7 +881,7 @@ def handler(service):
                     raise HTTPError(400, str(error)) from error
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
-                return self.send(200, {"projectRecovery": True, "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "zipSelection": True, "archiveRepack": True, "zipProfiles": list(ZIP_PROFILES), "actionRegistry": action_registry(), "conversions": media_targets(),
+                return self.send(200, {"projectRecovery": True, "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "zipSelection": True, "archiveRepack": True, "officeInspection": True, "zipProfiles": list(ZIP_PROFILES), "actionRegistry": action_registry(), "conversions": media_targets(),
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
             if path == "/api/process/settings":
                 if method == "GET":
@@ -1004,8 +1013,8 @@ def handler(service):
                 if not isinstance(ids, list) or not ids or len(ids) > service.limits["files"] or not all(isinstance(i, str) for i in ids) or len(set(ids)) != len(ids):
                     raise HTTPError(400, "Invalid file selection")
                 if (operation == "compress" and target not in archive_formats() or operation == "extract" and target not in ("zip", "zip-deflate") or
-                    operation == "convert" and target not in MEDIA or operation == "verify" and target != "json" or
-                    operation not in ("compress", "extract", "convert", "verify")):
+                    operation == "convert" and target not in MEDIA or operation in ("verify", "inspect") and target != "json" or
+                    operation not in ("compress", "extract", "convert", "verify", "inspect")):
                     raise HTTPError(400, "Unsupported operation")
                 if operation != "compress" and len(ids) != 1:
                     raise HTTPError(400, "One input per extraction or conversion job")

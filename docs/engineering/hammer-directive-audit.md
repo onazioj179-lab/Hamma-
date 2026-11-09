@@ -20,7 +20,7 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 | Hardware capabilities and dispatch | PARTIAL | Native CPU flags and resource admission exist. Measure device-specific paths and exercise CPU fallback. GPU, power-aware and NUMA scheduling remain open. |
 | Streaming and large payloads | PARTIAL | Native codec, processor transfers and local indexing are bounded in parts. Exercise real large payloads, cancellation, disk exhaustion, memory pressure and 64-bit offsets end to end. |
 | Image, video and audio | PARTIAL | `processor/engine.py`, `media_policy.py` and FFmpeg/ffprobe. Available output encoders and muxers determine the advertised targets. Source compatibility still depends on worker probing. Hardware encoding, additional formats and broader fidelity validation remain open. |
-| PDF and office documents | MISSING | Signature recognition exists. Select isolated PDF and office converters, disable active content, and test structure, page counts and fidelity with hostile fixtures. |
+| PDF and office documents | PARTIAL | The processor reports bounded DOCX, XLSX and PPTX package metadata. PDF operations, document rendering and conversions remain open. |
 | Mixed-file processing | PARTIAL | `processor/projects.py` and web recovery. Verify subgroup planning and per-file resume together on the integration branch. |
 | Scheduler and durable recovery | PARTIAL | `processor/server.py`, `resources.py`, `worker_limits.py`. Windows Job Objects cap committed memory for each worker tree and reap children on worker exit. POSIX limits remain platform-specific. Exercise fairness under sustained load and mid-codec recovery. |
 | History, metadata, retention and indexing | PARTIAL | SQLite in `processor/server.py`, `catalog.py`, and `indexing.py`. Validate migrations, deletion, version history, query plans and end-to-end paged manifests at workload scale. |
@@ -107,6 +107,14 @@ run on Windows 11 and an Intel Core i7-8665U measured medians of 1.65 s for SHAN
 and 1.07 s for bsdtar 3.8.9. Both used Deflate level 6. ZIP sizes were 16,842,006
 and 16,848,662 bytes respectively. Timings include verification and are specific
 to this fixture and machine.
+
+## Office document metadata
+
+The workspace queues an inspection report for conventional DOCX, XLSX and PPTX
+packages. The worker checks the main-part relationship and content type and
+counts conventional worksheet or slide parts. It parses only two capped UTF-8
+metadata files and rejects DTDs and external main relationships. It does not
+render the document, open its contents, or validate layout fidelity.
 
 ## TAR acceptance for this change
 

@@ -56,7 +56,7 @@ def smoke_workspace(stage, environment):
                     raise RuntimeError('Unexpected workspace response')
                 capabilities = json.loads(get('/api/process/capabilities'))
                 if 'zstd' not in capabilities['archives'] or not all(
-                    capabilities.get(name) for name in ('zipVerification', 'zipSelection', 'archiveRepack')
+                    capabilities.get(name) for name in ('zipVerification', 'zipSelection', 'archiveRepack', 'officeInspection')
                 ):
                     raise RuntimeError('Packaged workspace capabilities missing')
             finally:
