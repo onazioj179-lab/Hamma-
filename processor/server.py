@@ -40,7 +40,7 @@ from .errors import describe_failure
 from .projects import Projects, ProjectError
 from .accounts import Accounts, AccountError, plan as account_plan
 from .catalog import FileCatalog
-from .capabilities import action_registry, inspect_headers, single_file_archives
+from .capabilities import action_registry, inspect_headers, media_targets, single_file_archives
 from .oauth import OAuth
 
 LOG = logging.getLogger("hamma.processor")
@@ -872,7 +872,7 @@ def handler(service):
                     raise HTTPError(400, str(error)) from error
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
-                return self.send(200, {"projectRecovery": True, "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "zipSelection": True, "archiveRepack": True, "zipProfiles": list(ZIP_PROFILES), "actionRegistry": action_registry(), "conversions": MEDIA if shutil.which("ffmpeg") and shutil.which("ffprobe") else [],
+                return self.send(200, {"projectRecovery": True, "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "zipSelection": True, "archiveRepack": True, "zipProfiles": list(ZIP_PROFILES), "actionRegistry": action_registry(), "conversions": media_targets(),
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
             if path == "/api/process/settings":
                 if method == "GET":
