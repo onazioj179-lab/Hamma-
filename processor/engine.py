@@ -26,7 +26,7 @@ from .media_policy import AUDIO_TARGETS, validate_conversion_options
 
 BLOCK = 1024 * 1024
 ARCHIVES = ("zip", "tar", "tar.gz", "tar.bz2", "tar.xz", "gzip", "bzip2", "xz")
-MEDIA = (*AUDIO_TARGETS, "mp4", "mkv", "webm", "png", "webp", "jpg")
+MEDIA = (*AUDIO_TARGETS, "mp4", "mkv", "webm", "png", "webp", "jpg", "tiff")
 ZIP_PROFILES = {"auto": 6, "fastest": 1, "balanced": 6, "maximum": 9}
 
 
@@ -80,6 +80,8 @@ def detect_header(head: bytes) -> str:
         return "tar"
     if head.startswith(b"\x89PNG\r\n\x1a\n"):
         return "png"
+    if head.startswith((b"II*\x00", b"MM\x00*")):
+        return "tiff"
     if head.startswith(b"\xff\xd8\xff"):
         return "jpg"
     if head[:4] == b"RIFF" and head[8:12] == b"WAVE":
@@ -725,6 +727,31 @@ def verify_media_decode(path: Path, ctx: Context):
                 process.kill()
 
 
+def require_single_tiff_page(source: Path):
+    with source.open('rb') as stream:
+        header = stream.read(8)
+        if header[:4] not in (b'II*\x00', b'MM\x00*') or len(header) != 8:
+            raise ProcessingError('Unsupported TIFF directory format')
+        endian = '<' if header[:2] == b'II' else '>'
+        offset = struct.unpack_from(endian + 'I', header, 4)[0]
+        if offset < 8 or offset + 6 > source.stat().st_size:
+            raise ProcessingError('Invalid TIFF directory')
+        stream.seek(offset)
+        count_bytes = stream.read(2)
+        if len(count_bytes) != 2:
+            raise ProcessingError('Invalid TIFF directory')
+        count = struct.unpack(endian + 'H', count_bytes)[0]
+        entries = stream.read(count * 12 + 4)
+        if len(entries) != count * 12 + 4:
+            raise ProcessingError('Invalid TIFF directory')
+        # Some FFmpeg builds decode only the first directory of a TIFF.
+        if struct.unpack_from(endian + 'I', entries, count * 12)[0] or any(
+            struct.unpack_from(endian + 'H', entries, index * 12)[0] == 330
+            for index in range(count)
+        ):
+            raise ProcessingError('Choose a still image with one TIFF page and no subimages')
+
+
 def convert(source: Path, output: Path, target: str, ctx: Context, quality_mode='lossless', metadata_policy='strip'):
     if target not in MEDIA:
         raise ProcessingError('Unsupported conversion format')
@@ -736,11 +763,14 @@ def convert(source: Path, output: Path, target: str, ctx: Context, quality_mode=
         raise ProcessingError("Media engine unavailable")
     info = probe(source)
     audio = [s for s in info["streams"] if s["codec_type"] == "audio"]
-    image = target in ("png", "webp", "jpg")
+    image = target in ("png", "webp", "jpg", "tiff")
     outputs = []
     if image:
         formats = set(info.get("format", {}).get("format_name", "").split(","))
-        if not formats.intersection({"image2", "png_pipe", "jpeg_pipe", "webp_pipe", "bmp_pipe", "tiff_pipe", "gif"}) and detect(source) != "avif":
+        source_kind = detect(source)
+        if "tiff_pipe" in formats or source_kind == "tiff":
+            require_single_tiff_page(source)
+        if not formats.intersection({"image2", "png_pipe", "jpeg_pipe", "webp_pipe", "bmp_pipe", "tiff_pipe", "gif"}) and source_kind != "avif":
             raise ProcessingError("Choose a still image")
         frames = [s for s in probe(source, count_frames=True)["streams"] if s["codec_type"] == "video"]
         if len(frames) != 1 or frames[0].get("nb_read_frames") != "1":
@@ -792,6 +822,8 @@ def convert(source: Path, output: Path, target: str, ctx: Context, quality_mode=
                     args += ['-pix_fmt', 'bgra']
             elif target == 'jpg':
                 args += ['-q:v', '2']
+            elif target == 'tiff':
+                args += ['-c:v', 'tiff', '-pix_fmt', 'rgba64le' if high_precision else 'rgba']
         else:
             args += ["-map", "0:v?", "-map", "0:a?", "-map", "0:s?", "-c", "copy"]
         args += ["-fs", str(remaining), "-progress", "pipe:1", str(destination)]
@@ -824,7 +856,7 @@ def convert(source: Path, output: Path, target: str, ctx: Context, quality_mode=
             expected_codec = pcm if target == "wav" else {
                 "flac": "flac", "mp3": "mp3",
                 "aac": "aac", "m4a": "aac", "ogg": "vorbis", "opus": "opus",
-                "png": "png", "webp": "webp", "jpg": "mjpeg",
+                "png": "png", "webp": "webp", "jpg": "mjpeg", "tiff": "tiff",
             }[target]
             streams = [(stream["codec_type"], stream.get("codec_name")) for stream in verified["streams"]
                        if stream["codec_type"] in ("audio", "video")]
