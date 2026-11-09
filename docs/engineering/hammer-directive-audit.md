@@ -86,6 +86,13 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
   decoded size and ZIP CRC, and records SHA-256 digests in a JSON report.
   Password-protected and other compression methods are excluded.
 
+## Video audio extraction
+
+The video conversion picker offers the audio formats supported by the installed
+encoders and muxers. The worker probes for audio streams and packages multiple
+tracks in a ZIP. The HTTP regression downloads a ZIP with two shorter tracks
+from a longer video and checks the archive and member hashes and WAV sample counts.
+
 ## H.264 MP4 preset
 
 The workspace offers **MP4 (H.264)** when FFmpeg has the MP4 muxer and the

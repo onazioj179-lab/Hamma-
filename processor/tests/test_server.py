@@ -7,8 +7,8 @@ import json
 import os
 import random
 from pathlib import Path
-import subprocess
 import shutil
+import subprocess
 import tempfile
 import tarfile
 import threading
@@ -17,6 +17,7 @@ import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import HTTPCookieProcessor, Request, build_opener
+import wave
 import zipfile
 
 from processor.server import ACTIVE, LocalHTTPServer, Service, Store, handler, run_job
@@ -96,6 +97,36 @@ class ServerTests(unittest.TestCase):
         streams = probe(output)["streams"]
         self.assertEqual([s["codec_name"] for s in streams], ["h264", "aac", "mov_text"])
         self.assertEqual((streams[0]["width"], streams[0]["height"]), (64, 48))
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg not installed")
+    def test_video_audio_targets_extract_short_tracks_to_a_verified_zip(self):
+        source = Path(self.temp.name) / "short-tracks.mkv"
+        subprocess.run([
+            shutil.which("ffmpeg"), "-v", "error",
+            "-f", "lavfi", "-i", "color=s=32x32:d=2",
+            "-f", "lavfi", "-i", "sine=frequency=400:duration=0.2",
+            "-f", "lavfi", "-i", "sine=frequency=800:duration=0.4",
+            "-map", "0:v", "-map", "1:a", "-map", "2:a",
+            "-c:v", "mpeg4", "-c:a", "pcm_s16le", str(source),
+        ], check=True, capture_output=True, timeout=30)
+        inspection = self.call("/inspect", {"entries": [{"head": source.read_bytes()[:512].hex()}]}, "POST")
+        self.assertIn("wav", inspection["entries"][0]["conversions"])
+        upload = self.upload(source.read_bytes(), source.name)
+        completed = self.execute(self.job(upload, operation="convert", target="wav"))
+        self.assertEqual(completed["state"], "completed", completed)
+        self.assertEqual(completed["outputName"], "short-tracks.zip")
+        path = "/jobs/" + completed["id"]
+        report = self.call(path + "/manifest")
+        data = self.call(completed["download"].removeprefix("/api/process"), raw=True)
+        self.assertEqual(hashlib.sha256(data).hexdigest(), report["sha256"])
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            self.assertEqual(archive.namelist(), ["audio-1.wav", "audio-2.wav"])
+            for member, frames in zip(report["files"], (8820, 17640)):
+                payload = archive.read(member["name"])
+                self.assertEqual(hashlib.sha256(payload).hexdigest(), member["sha256"])
+                with wave.open(io.BytesIO(payload)) as audio:
+                    self.assertEqual(audio.getframerate(), 44100)
+                    self.assertEqual(audio.getnframes(), frames)
 
     def upload(self, data=b"test data", name="nested/世界.txt", split=False):
         record = self.call("/uploads", {"name": name, "size": len(data)}, "POST")

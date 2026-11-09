@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import lzma
+import math
 import os
 from pathlib import Path
 import re
@@ -21,11 +22,11 @@ import unicodedata
 import zipfile
 import zlib
 
-from .media_policy import H264_TARGET
+from .media_policy import AUDIO_TARGETS, H264_TARGET, validate_conversion_options
 
 BLOCK = 1024 * 1024
 ARCHIVES = ("zip", "tar", "tar.gz", "tar.bz2", "tar.xz", "gzip", "bzip2", "xz")
-MEDIA = ("wav", "flac", "mp3", "aac", "m4a", "ogg", "opus", "mp4", "mkv", "webm", "png", "webp", "jpg", H264_TARGET)
+MEDIA = (*AUDIO_TARGETS, "mp4", "mkv", "webm", "png", "webp", "jpg", H264_TARGET)
 ZIP_PROFILES = {"auto": 6, "fastest": 1, "balanced": 6, "maximum": 9}
 
 
@@ -663,6 +664,14 @@ def probe(path: Path, count_frames=False):
     return json.loads(proc.stdout)
 
 
+def _media_duration(metadata):
+    try:
+        duration = float(metadata.get("duration"))
+    except (TypeError, ValueError):
+        return None
+    return duration if math.isfinite(duration) and duration > 0 else None
+
+
 def decoded_digest(path: Path, ctx: Context, *, stream, encoding, container):
     """Hash canonical decoded pixels/PCM with fixed buffers and an expansion cap."""
     args = [shutil.which("ffmpeg"), "-nostdin", "-v", "error", "-xerror", "-max_alloc", str(64 * BLOCK),
@@ -717,7 +726,6 @@ def verify_media_decode(path: Path, ctx: Context):
 
 
 def convert(source: Path, output: Path, target: str, ctx: Context, quality_mode='lossless', metadata_policy='strip'):
-    from .media_policy import validate_conversion_options
     if target not in MEDIA:
         raise ProcessingError('Unsupported conversion format')
     try:
@@ -754,7 +762,7 @@ def convert(source: Path, output: Path, target: str, ctx: Context, quality_mode=
             raise ProcessingError('WebP cannot preserve this image precision. Choose PNG or explicitly allow lossy conversion.')
         if target == 'jpg' and (pixel_format.startswith(('rgba', 'bgra', 'argb', 'abgr', 'yuva', 'gbrap', 'ya')) or pixel_format == 'pal8'):
             raise ProcessingError('JPEG cannot preserve transparency. Choose PNG or WebP.')
-    tracks = audio if target in ("wav", "flac", "mp3", "aac", "m4a", "ogg", "opus") else [None]
+    tracks = audio if target in AUDIO_TARGETS else [None]
     if not tracks:
         raise ProcessingError("No audio track")
     for index, track in enumerate(tracks):
@@ -840,10 +848,15 @@ def convert(source: Path, output: Path, target: str, ctx: Context, quality_mode=
             if streams != [(expected_type, expected_codec)]:
                 raise ProcessingError("Conversion output codec or stream count did not match")
         # Reject truncated outputs rather than treating FFmpeg's size-limited exit as success.
-        duration = float(track.get("duration", info.get("format", {}).get("duration", 0)) or 0) if track else float(info.get("format", {}).get("duration", 0) or 0)
-        actual = float(verified.get("format", {}).get("duration", 0) or 0)
-        if not image and duration > 0 and (actual <= 0 or abs(actual - duration) > max(0.25, duration * .01)):
-            raise ProcessingError("Incomplete conversion")
+        if not image:
+            # The container can outlast an individual audio track. Fall back
+            # to its duration only when it describes the entire conversion.
+            source_duration = _media_duration(track) if track else None
+            if not track or (source_duration is None and len(info["streams"]) == 1):
+                source_duration = _media_duration(info.get("format", {}))
+            actual = _media_duration(verified.get("format", {}))
+            if source_duration is not None and (actual is None or abs(actual - source_duration) > max(0.25, source_duration * .01)):
+                raise ProcessingError("Incomplete conversion")
         if track and target in ("wav", "flac"):
             converted = next((s for s in verified["streams"] if s["codec_type"] == "audio"), {})
             if any(str(converted.get(k)) != str(track.get(k)) for k in ("sample_rate", "channels")):

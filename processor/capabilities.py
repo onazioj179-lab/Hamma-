@@ -6,7 +6,7 @@ import re
 import shutil
 import subprocess
 
-from .media_policy import H264_TARGET
+from .media_policy import AUDIO_TARGETS, H264_TARGET
 
 
 MEDIA_OUTPUTS = {
@@ -64,9 +64,9 @@ def action_registry():
          'conversions': supported('png', 'webp', 'jpg'), 'extract': False},
         {'mime': ['audio/wav', 'audio/x-wav', 'audio/flac', 'audio/mpeg', 'audio/ogg'],
          'extensions': ['wav', 'flac', 'mp3', 'ogg', 'opus', 'm4a', 'aac'],
-         'conversions': supported('wav', 'flac', 'mp3', 'aac', 'm4a', 'ogg', 'opus'), 'extract': False},
+         'conversions': supported(*AUDIO_TARGETS), 'extract': False},
         {'mime': ['video/mp4', 'video/webm', 'video/x-matroska'], 'extensions': ['mp4', 'webm', 'mkv'],
-         'conversions': supported('mp4', 'mkv', 'webm', H264_TARGET), 'extract': False},
+         'conversions': supported('mp4', 'mkv', 'webm', H264_TARGET, *AUDIO_TARGETS), 'extract': False},
         {'mime': ['application/zip', 'application/gzip', 'application/x-tar', 'application/x-xz', 'application/x-bzip2'],
          'extensions': ['zip', 'gz', 'tar', 'xz', 'bz2'], 'conversions': [], 'extract': True},
         *([{'mime': ['application/zstd'], 'extensions': ['zst', 'zstd'], 'conversions': [], 'extract': True}] if native else []),

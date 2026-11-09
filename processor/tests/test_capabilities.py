@@ -16,6 +16,8 @@ class RegistryTests(unittest.TestCase):
             rows = action_registry()
         image = next(row for row in rows if 'png' in row['extensions'])
         self.assertEqual(image['conversions'], ['png', 'webp', 'jpg'])
+        video = next(row for row in rows if 'mkv' in row['extensions'])
+        self.assertEqual(video['conversions'], ['wav'])
         self.assertTrue(next(row for row in rows if 'zstd' in row['extensions'])['extract'])
 
     def test_media_targets_require_both_the_muxer_and_encoder(self):
