@@ -1,9 +1,35 @@
+import subprocess
+import sys
 import unittest
 from unittest.mock import Mock
 from processor.worker_limits import apply_worker_limits
 
 
 class WorkerLimitTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == 'win32', 'Requires Windows Job Objects')
+    def test_windows_job_caps_child_memory_and_reaps_surviving_children(self):
+        program = """
+import subprocess
+import sys
+from processor.worker_limits import apply_windows_worker_limits
+
+apply_windows_worker_limits(128 * 1024**2)
+child = subprocess.run([sys.executable, '-c', '''
+try:
+    bytearray(256 * 1024**2)
+except MemoryError:
+    raise SystemExit(0)
+raise SystemExit(1)
+'''], check=True)
+# Inherit stdout so the outer process cannot finish reading until this child
+# exits. It is still sleeping when the owning worker exits.
+subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+print('worker complete')
+"""
+        result = subprocess.run([sys.executable, '-c', program], capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('worker complete', result.stdout)
+
     def resource(self, hard=-1):
         resource = Mock(RLIM_INFINITY=-1, RLIMIT_AS=1, RLIMIT_CPU=2, RLIMIT_FSIZE=3)
         resource.getrlimit.return_value = (hard, hard)

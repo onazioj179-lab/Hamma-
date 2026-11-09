@@ -22,7 +22,7 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 | Image, video and audio | PARTIAL | `processor/engine.py`, `media_policy.py` and FFmpeg/ffprobe. Verify advertised codecs and stream policies across installed builds, including metadata, animation, hardware and quality preservation. |
 | PDF and office documents | MISSING | Signature recognition exists. Select isolated PDF and office converters, disable active content, and test structure, page counts and fidelity with hostile fixtures. |
 | Mixed-file processing | PARTIAL | `processor/projects.py` and web recovery. Verify subgroup planning and per-file resume together on the integration branch. |
-| Scheduler and durable recovery | PARTIAL | `processor/server.py`, `resources.py`, `worker_limits.py`. Exercise fairness under sustained load, retries and worker loss. Mid-codec checkpoints and hard OS limits need acceptance. |
+| Scheduler and durable recovery | PARTIAL | `processor/server.py`, `resources.py`, `worker_limits.py`. Windows Job Objects cap committed memory for each worker tree and reap children on worker exit. POSIX limits remain platform-specific. Exercise fairness under sustained load and mid-codec recovery. |
 | History, metadata, retention and indexing | PARTIAL | SQLite in `processor/server.py`, `catalog.py`, and `indexing.py`. Validate migrations, deletion, version history, query plans and end-to-end paged manifests at workload scale. |
 | Authentication, authorization and subscriptions | PARTIAL | `processor/accounts.py`, `oauth.py`, and owner-scoped routes. Validate provider settings, tenant boundaries and plan/entitlement lifecycle. |
 | Storage, uploads, downloads and sharing | PARTIAL | Local storage, resumable transfer and range handlers in `processor/server.py` and `ranges.py`. Verify storage exhaustion and interrupted transfers. Scoped cross-user sharing and encrypted vault acceptance remain open. |
@@ -31,7 +31,7 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 | APIs and MCP | PARTIAL | Python processor HTTP API and Rust compatibility API. No MCP integration established in this scope. Add versioned contracts and authorization tests before exposing tools. |
 | Desktop and mobile packaging | PARTIAL | The portable workspace bundles the built web UI, local processor and native CLI. A native desktop shell, signed update verification, notarization and physical-device support remain open. |
 | Runtime and build performance | PARTIAL | CMake/Ninja presets and local benchmark scripts. Record reproducible workload, memory and clean/incremental build measurements before selecting optimizations. |
-| Benchmarks against reference tools | PARTIAL | Native and processor benchmark scripts exist. Complete same-input archive and media comparisons and record versions, options, hardware and integrity. |
+| Benchmarks against reference tools | PARTIAL | A seeded ZIP comparison measures time through verification and output size against bsdtar or 7-Zip. Broader workload, resource and media measurements remain open. |
 | Distributed jobs and object storage | BLOCKED | Single-node processor acceptance is separate. Multi-node validation requires an authorized deployment and object storage. Durable ownership, recovery and tenant isolation are open design work. |
 | CI, release and production monitoring | PARTIAL | `.github/workflows/` and `scripts/package-shante.py`. Full platform signing requires signing identities. Validate rollback, migration, monitoring and privacy in the intended environment. |
 
@@ -91,6 +91,16 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 - Extract the ZIP and run `python run-workspace.py` with Python 3.11 or newer.
   Open `http://127.0.0.1:5010`. Use `--data` for a separate private job store.
   Media conversion requires FFmpeg and FFprobe on PATH.
+
+## Comparative ZIP measurement
+
+Run `python scripts/benchmark-archives.py --bsdtar PATH --report REPORT.json`
+with bsdtar, or pass `--seven-zip PATH` for 7-Zip. The harness alternates tool
+order and checks the SHA-256 of every restored member. A local 32 MiB, 128-entry
+run on Windows 11 and an Intel Core i7-8665U measured medians of 1.65 s for SHANTE
+and 1.07 s for bsdtar 3.8.9. Both used Deflate level 6. ZIP sizes were 16,842,006
+and 16,848,662 bytes respectively. Timings include verification and are specific
+to this fixture and machine.
 
 ## TAR acceptance for this change
 

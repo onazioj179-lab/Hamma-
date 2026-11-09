@@ -1,15 +1,67 @@
 """Stage and smoke-test the native CLI, optionally with the local workspace."""
 import argparse
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
 import platform
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
+
+
+def smoke_workspace(stage, environment):
+    with tempfile.TemporaryDirectory(prefix='shante-smoke-') as data, tempfile.TemporaryFile() as log:
+        with socket.socket() as reservation:
+            reservation.bind(('127.0.0.1', 0))
+            port = reservation.getsockname()[1]
+        with subprocess.Popen(
+            [sys.executable, '-B', 'run-workspace.py', '--port', str(port), '--data', data],
+            cwd=stage, env=environment, stdout=log, stderr=log,
+        ) as process:
+            def get(path):
+                client = http.client.HTTPConnection('127.0.0.1', port, timeout=5)
+                try:
+                    client.request('GET', path)
+                    response = client.getresponse()
+                    if response.status != 200:
+                        raise RuntimeError(f'{path} returned HTTP {response.status}')
+                    return response.read()
+                finally:
+                    client.close()
+
+            try:
+                deadline = time.monotonic() + 15
+                while True:
+                    try:
+                        health = json.loads(get('/api/process/health'))
+                        break
+                    except ConnectionRefusedError:
+                        if process.poll() is not None or time.monotonic() >= deadline:
+                            raise
+                        time.sleep(.1)
+                if health['pid'] != process.pid or get('/') != (stage / 'web/index.html').read_bytes():
+                    raise RuntimeError('Unexpected workspace response')
+                capabilities = json.loads(get('/api/process/capabilities'))
+                if 'zstd' not in capabilities['archives'] or not all(
+                    capabilities.get(name) for name in ('zipVerification', 'zipSelection', 'archiveRepack')
+                ):
+                    raise RuntimeError('Packaged workspace capabilities missing')
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+                log.seek(0)
+                print(log.read().decode('utf-8', errors='replace'), end='')
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--workspace', action='store_true', help='Include the built web UI and local Python processor')
@@ -63,37 +115,7 @@ with tempfile.TemporaryDirectory(prefix='shante-release-', dir=dist) as temporar
             'The archive contains unsigned, platform-specific native code.\n',
             encoding='utf-8',
         )
-        smoke = """
-from pathlib import Path
-import json
-import os
-import runpy
-import tempfile
-import threading
-from urllib.request import urlopen
-
-runpy.run_path("run-workspace.py")
-from processor.server import LocalHTTPServer, Service, handler
-
-with tempfile.TemporaryDirectory() as data:
-    service = Service(data, "web")
-    with LocalHTTPServer(("127.0.0.1", 0), handler(service)) as server:
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            base = f"http://127.0.0.1:{server.server_port}"
-            with urlopen(base + "/", timeout=5) as response:
-                assert response.read() == Path("web/index.html").read_bytes()
-            with urlopen(base + "/api/process/capabilities", timeout=5) as response:
-                capabilities = json.load(response)
-            assert "zstd" in capabilities["archives"]
-            assert capabilities["zipVerification"] and capabilities["zipSelection"] and capabilities["archiveRepack"]
-        finally:
-            server.shutdown()
-            thread.join()
-            service.close()
-"""
-        subprocess.run([sys.executable, '-B', '-c', smoke], cwd=stage, env=environment, check=True, timeout=30)
+        smoke_workspace(stage, environment)
     files = sorted(path for path in stage.rglob('*') if path.is_file())
     checksums = {path.relative_to(stage).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest() for path in files}
     (stage / 'SHA256SUMS.json').write_text(json.dumps(checksums, indent=2), encoding='utf-8')

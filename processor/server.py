@@ -34,7 +34,7 @@ from urllib.parse import parse_qs, urlsplit, quote
 import zipfile
 
 from .engine import ARCHIVES, MEDIA, BLOCK, Context, ProcessingError, archive_formats, compress, convert, detect, extract, file_digest, safe_path, verify_zip
-from .worker_limits import apply_worker_limits
+from .worker_limits import apply_windows_worker_limits, apply_worker_limits
 from .resources import available_memory, worker_capacity
 from .errors import describe_failure
 from .projects import Projects, ProjectError
@@ -306,6 +306,8 @@ def run_job(root, owner, job_id, limits, isolated=False):
                               state="processing", started=started, error=None)
         if not current or current.get("state") not in ACTIVE:
             return
+        if isolated and os.name == "nt":
+            apply_windows_worker_limits()
         manifest = []
         for upload in job["inputs"]:
             upload["path"] = str(store.folder(owner, upload["id"]) / "input")
