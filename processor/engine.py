@@ -515,7 +515,17 @@ def extract(source: Path, original_name: str, output: Path, ctx: Context, recurs
                 if opener:
                     with opener(path, "rb") as stream:
                         head = stream.read(512)
-                        is_tar = len(head) == 512 and (head[257:262] == b"ustar" or head == bytes(512))
+                    # An empty TAR has no magic. Use the declared archive suffix
+                    # for this ambiguous prefix so ordinary zero data is retained.
+                    tar_suffixes = {
+                        "gzip": (".tar.gz", ".tgz"),
+                        "bzip2": (".tar.bz2", ".tbz", ".tbz2"),
+                        "xz": (".tar.xz", ".txz"),
+                    }
+                    is_tar = len(head) == 512 and (
+                        head[257:262] == b"ustar"
+                        or (head == bytes(512) and name.lower().endswith(tar_suffixes[kind]))
+                    )
                 if is_tar:
                     validate_tar(path, ctx, opener)
                     with (

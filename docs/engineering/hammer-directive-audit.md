@@ -68,6 +68,9 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 - Require two zero end blocks, allow bounded zero padding, and read compressed
   streams through the codec trailer. Reject sparse formats, global size
   overrides and chained local metadata. Allow ordinary PAX and GNU long names.
+- A zero prefix in a gzip, bzip2 or xz stream is ambiguous. An explicit TAR
+  suffix identifies an empty compressed TAR. Standalone compressed streams
+  preserve their zero bytes.
 - Preflight still reads the archive before extraction. Each metadata header and
   cumulative global metadata is capped at 1 MiB. A run of metadata headers
   before a file is capped at eight, with at most one local header at the end.

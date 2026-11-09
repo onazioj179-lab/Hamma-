@@ -1,7 +1,9 @@
+import bz2
 import gzip
 import hashlib
 import io
 import json
+import lzma
 from pathlib import Path
 import shutil
 import stat
@@ -227,6 +229,20 @@ class EngineTests(EngineFixture):
         source.write_bytes(gzip.compress(tar.getvalue())[:-4])
         with self.assertRaises(EOFError):
             extract(source, source.name, self.root / "out.zip", self.context())
+
+    def test_zero_prefix_distinguishes_streams_from_named_empty_tar(self):
+        payload = bytes(1024)
+        for suffix, encode in (("gz", gzip.compress), ("bz2", bz2.compress), ("xz", lzma.compress)):
+            with self.subTest(suffix=suffix):
+                source = self.root / f"zero.{suffix}"
+                output = self.root / "out.zip"
+                source.write_bytes(encode(payload))
+                extract(source, source.name, output, self.context())
+                with zipfile.ZipFile(output) as result:
+                    self.assertEqual(result.read("zero"), payload)
+                extract(source, f"empty.tar.{suffix}", output, self.context())
+                with zipfile.ZipFile(output) as result:
+                    self.assertEqual(result.namelist(), [])
 
     def test_tar_requires_complete_end_marker(self):
         source = self.root / "truncated.tar"
