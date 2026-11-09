@@ -170,6 +170,57 @@ class ServerTests(unittest.TestCase):
         self.assertNotIn("outputFile", job)
         self.assertNotIn(str(self.service.store.root), json.dumps(job))
 
+    def test_listener_starts_without_reverse_dns(self):
+        with patch("socket.getfqdn", side_effect=AssertionError("unexpected reverse DNS")):
+            with LocalHTTPServer(("127.0.0.1", 0), handler(self.service)) as listener:
+                self.assertEqual(listener.server_name, "127.0.0.1")
+                self.assertGreater(listener.server_port, 0)
+
+    def test_office_report_detects_package_type_and_rejects_active_xml(self):
+        from processor.documents import CONTENT_TYPES, RELATIONSHIPS
+
+        def document(main, content, declaration=''):
+            package = io.BytesIO()
+            with zipfile.ZipFile(package, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr('_rels/.rels',
+                                 f'{declaration}<Relationships xmlns="{RELATIONSHIPS}">'
+                                 '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+                                 f'Target="{main}"/></Relationships>')
+                archive.writestr('[Content_Types].xml',
+                                 f'<Types xmlns="{CONTENT_TYPES}"><Override PartName="/{main}" '
+                                 f'ContentType="application/vnd.openxmlformats-officedocument.{content}.main+xml"/></Types>')
+                archive.writestr(main, '<document/>')
+                if main == 'xl/workbook.xml':
+                    archive.writestr('xl/worksheets/sheet1.xml', '<worksheet/>')
+                if main == 'ppt/presentation.xml':
+                    archive.writestr('ppt/slides/slide1.xml', '<slide/>')
+            return package.getvalue()
+
+        source = self.upload(document('xl/workbook.xml', 'spreadsheetml.sheet'), 'misnamed.docx')
+        result = self.execute(self.job(source, operation='inspect', target='json'))
+        self.assertEqual(result['state'], 'completed', result)
+        report = json.loads(self.call(result['download'].removeprefix('/api/process'), raw=True))
+        self.assertEqual(report, {'format': 'xlsx', 'scope': 'package-metadata', 'packageEntries': 4,
+                                  'mainPart': 'xl/workbook.xml', 'hasVbaProjectPart': False, 'worksheetParts': 1})
+        for kind, main, content in (
+            ('docx', 'word/document.xml', 'wordprocessingml.document'),
+            ('pptx', 'ppt/presentation.xml', 'presentationml.presentation'),
+        ):
+            with self.subTest(kind=kind):
+                source = self.upload(document(main, content), 'sample.' + kind)
+                result = self.execute(self.job(source, operation='inspect', target='json'))
+                self.assertEqual(result['state'], 'completed', result)
+                report = json.loads(self.call(result['download'].removeprefix('/api/process'), raw=True))
+                self.assertEqual((report['format'], report['mainPart']), (kind, main))
+                if kind == 'pptx':
+                    self.assertEqual(report['slideParts'], 1)
+
+        hostile = '<!DOCTYPE Relationships [<!ENTITY local SYSTEM "file:///private">]>'
+        source = self.upload(document('word/document.xml', 'wordprocessingml.document', hostile), 'hostile.docx')
+        rejected = self.execute(self.job(source, operation='inspect', target='json'))
+        self.assertEqual(rejected['state'], 'failed', rejected)
+        self.assertFalse(rejected['downloadAvailable'])
+
     def test_auto_zip_profile_stores_incompressible_sample_and_deflates_repeated_data(self):
         noise = random.Random(2027).randbytes(8192)
         repeated = b"sample" * 2000

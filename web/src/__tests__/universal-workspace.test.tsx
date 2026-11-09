@@ -77,6 +77,21 @@ it('submits the original ZIP index after filtering the directory', async () => {
   }), 'POST', { signal: expect.any(AbortSignal) });
 });
 
+it('queues Office package inspection through the document action', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
+    ? { ok: true, json: async () => ({ ...caps, officeInspection: true }) } : initial(url));
+  vi.spyOn(processingClient, 'upload').mockResolvedValue('uploaded-office');
+  vi.spyOn(processingClient, 'requestId').mockResolvedValue('office-request');
+  const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({});
+  await render();
+  await select([new File(['office fixture'], 'sample.docx')]);
+  await act(async () => button('Inspect Office document').click());
+  expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({
+    operation: 'inspect', target: 'json', uploads: ['uploaded-office'], recursive: false,
+  }), 'POST', { signal: expect.any(AbortSignal) });
+});
+
 it('queues a ZIP integrity report only when the processor advertises verification', async () => {
   const initial = fetchMock.getMockImplementation()!;
   fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')

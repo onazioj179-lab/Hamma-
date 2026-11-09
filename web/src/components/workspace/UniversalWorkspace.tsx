@@ -321,13 +321,17 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const actions = resolveActions(chosen, capability);
   const canExtract = chosen.length > 0 && chosen.every(source => /\.spk$/i.test(source.name) ? !!source.file && !!spkReady && projectId === 'default' : resolveActions([source], capability).extract);
   const canRepack = capability?.archiveRepack && singleSource && !/\.spk$/i.test(singleSource.name) && canExtract;
+  const canInspectOffice = capability?.officeInspection && singleSource && !singleSource.directory &&
+    (!singleSource.inspection || singleSource.inspection.error || singleSource.inspection.format === 'zip') &&
+    /\.(docx|xlsx|pptx)$/i.test(singleSource.name);
   const conversionTarget = actions.conversions.includes(conversion) ? conversion : actions.conversions[0];
-  const submit = async (operation: 'compress' | 'extract' | 'convert' | 'verify', options: { zipIndexes?: number[]; repack?: boolean } = {}) => {
+  const submit = async (operation: 'compress' | 'extract' | 'convert' | 'verify' | 'inspect', options: { zipIndexes?: number[]; repack?: boolean } = {}) => {
     const { zipIndexes, repack } = options;
     if (accountChanging()) return;
     if (submitting.current || recovering || capability?.projectRecovery && !recoveryReady || spkBusy || !chosen.length) return;
     if (operation === 'convert' && !conversionTarget) return;
     if (operation === 'verify' && (!zipSource || !capability?.zipVerification)) return;
+    if (operation === 'inspect' && !canInspectOffice) return;
     if (repack && !canRepack) return;
     if (operation === 'convert' && ['mp3', 'aac', 'm4a', 'ogg', 'opus', 'jpg'].includes(conversionTarget) && qualityMode !== 'lossy') {
       setError(`${conversionTarget.toUpperCase()} can reduce quality. Choose Allow quality loss before converting.`);
@@ -376,10 +380,11 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
           inputs.push({ source, id });
           if (operation !== 'compress') {
             const conversionOptions = operation === 'convert' ? { qualityMode, metadataPolicy } : {};
-            const jobTarget = operation === 'verify' ? 'json' : operation === 'extract' ? repack ? 'zip-deflate' : 'zip' : conversionTarget;
-            const nested = !zipIndexes && !repack && operation !== 'verify' && recursive;
+            const report = operation === 'verify' || operation === 'inspect';
+            const jobTarget = report ? 'json' : operation === 'extract' ? repack ? 'zip-deflate' : 'zip' : conversionTarget;
+            const nested = !zipIndexes && !repack && !report && recursive;
             const selection = zipIndexes ? { zipIndexes } : {};
-            const identity = [generation, projectId, source.id, operation, operation === 'verify' || repack ? jobTarget : conversionTarget, nested, conversionOptions, ...(zipIndexes ? [zipIndexes] : [])];
+            const identity = [generation, projectId, source.id, operation, report || repack ? jobTarget : conversionTarget, nested, conversionOptions, ...(zipIndexes ? [zipIndexes] : [])];
             await jsonRequest('/jobs', { ...(projectId === 'default' ? {} : { projectId }), uploads: [id], operation, target: jobTarget, recursive: nested, ...conversionOptions, ...selection, ...(capability.projectRecovery ? { recoverable: true } : { requestId: await requestId(identity) }) }, 'POST', { signal: controller.signal });
             submitted.add(source.id);
             setSourceErrors(previous => { const next = { ...previous }; delete next[source.id]; return next; });
@@ -607,6 +612,11 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
         {canRepack && <div className="zip-inspection">
           <button className="button secondary" disabled={busy || recovering || spkBusy || offline}
             onClick={() => void submit('extract', { repack: true })}><FileArchive size={16} /> Repack as ZIP</button>
+        </div>}
+        {canInspectOffice && <div className="zip-inspection">
+          <button className="button secondary" disabled={busy || recovering || spkBusy || offline}
+            onClick={() => void submit('inspect')}><File size={16} /> Inspect Office document</button>
+          <p className="footnote">Uploads the document and returns a package metadata report.</p>
         </div>}
         {zipSource && capability?.zipVerification && <div className="zip-inspection">
           <button className="button secondary" disabled={busy || recovering || spkBusy || offline} onClick={() => void submit('verify')}><ShieldCheck size={16} /> Test ZIP integrity</button>
