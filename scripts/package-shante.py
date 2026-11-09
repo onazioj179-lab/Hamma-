@@ -1,15 +1,23 @@
-"""Stage, smoke-test and package the built native CLI with licenses and checksums."""
+"""Stage and smoke-test the native CLI, optionally with the local workspace."""
+import argparse
 import hashlib
 import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
 import zipfile
 
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--workspace', action='store_true', help='Include the built web UI and local Python processor')
+args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
+web = root / 'web/dist'
+if args.workspace and not (web / 'index.html').is_file():
+    parser.error('Build the web workspace first with npm run build')
 dist = root / 'dist'
 dist.mkdir(exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='shante-release-', dir=dist) as temporary:
@@ -26,12 +34,73 @@ with tempfile.TemporaryDirectory(prefix='shante-release-', dir=dist) as temporar
     subprocess.run([sys.executable, str(root / 'native/tests/test_cli.py'), str(executable)],
                    env=environment, check=True, timeout=120)
     (stage / 'README.md').write_bytes((root / 'native/README.md').read_bytes())
+    if args.workspace:
+        runtime = stage / 'processor'
+        runtime.mkdir()
+        for path in sorted((root / 'processor').glob('*.py')):
+            shutil.copyfile(path, runtime / path.name)
+        shutil.copyfile(root / 'processor/requirements-oauth.txt', runtime / 'requirements-oauth.txt')
+        shutil.copytree(web, stage / 'web')
+        (stage / 'run-workspace.py').write_text(
+            'import os\nfrom pathlib import Path\nimport sys\n\n'
+            'root = Path(__file__).resolve().parent\n'
+            'os.chdir(root)\n'
+            'name = "shante-core.exe" if os.name == "nt" else "shante-core"\n'
+            'os.environ["SHANTE_CORE_BINARY"] = str(root / "bin" / name)\n'
+            'from processor.server import main\n\n'
+            'if __name__ == "__main__":\n'
+            '    sys.argv[1:1] = ["--web", str(root / "web")]\n'
+            '    main()\n',
+            encoding='utf-8',
+        )
+        (stage / 'WORKSPACE.txt').write_text(
+            'SHANTE local workspace\n\n'
+            'Requires Python 3.11 or newer. Run python run-workspace.py and open\n'
+            'http://127.0.0.1:5010 in a browser. Jobs are stored in .hamma-data\n'
+            'by default. Use --data to choose another private directory.\n'
+            'FFmpeg and FFprobe on PATH enable media conversion. Provider login\n'
+            'requires optional dependencies and separate OAuth configuration.\n'
+            'The archive contains unsigned, platform-specific native code.\n',
+            encoding='utf-8',
+        )
+        smoke = """
+from pathlib import Path
+import json
+import os
+import runpy
+import tempfile
+import threading
+from urllib.request import urlopen
+
+runpy.run_path("run-workspace.py")
+from processor.server import LocalHTTPServer, Service, handler
+
+with tempfile.TemporaryDirectory() as data:
+    service = Service(data, "web")
+    with LocalHTTPServer(("127.0.0.1", 0), handler(service)) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            base = f"http://127.0.0.1:{server.server_port}"
+            with urlopen(base + "/", timeout=5) as response:
+                assert response.read() == Path("web/index.html").read_bytes()
+            with urlopen(base + "/api/process/capabilities", timeout=5) as response:
+                capabilities = json.load(response)
+            assert "zstd" in capabilities["archives"]
+            assert capabilities["zipVerification"] and capabilities["zipSelection"] and capabilities["archiveRepack"]
+        finally:
+            server.shutdown()
+            thread.join()
+            service.close()
+"""
+        subprocess.run([sys.executable, '-B', '-c', smoke], cwd=stage, env=environment, check=True, timeout=30)
     files = sorted(path for path in stage.rglob('*') if path.is_file())
     checksums = {path.relative_to(stage).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest() for path in files}
     (stage / 'SHA256SUMS.json').write_text(json.dumps(checksums, indent=2), encoding='utf-8')
     binary_hash = checksums[executable.relative_to(stage).as_posix()]
     content_hash = hashlib.sha256(json.dumps(checksums, sort_keys=True).encode()).hexdigest()
-    name = f'SHANTE-Core-0.1.0-{platform.system()}-{platform.machine()}-{content_hash[:8]}.zip'
+    product = 'Workspace' if args.workspace else 'Core'
+    name = f'SHANTE-{product}-0.1.0-{platform.system()}-{platform.machine()}-{content_hash[:8]}.zip'
     archive = dist / name
     if archive.exists():
         raise SystemExit('Artifact already exists; preserve the prior verified archive')
@@ -44,6 +113,7 @@ with tempfile.TemporaryDirectory(prefix='shante-release-', dir=dist) as temporar
                 bundle.writestr(entry, path.read_bytes())
     result = {'artifact': name, 'sha256': hashlib.sha256(archive.read_bytes()).hexdigest(),
               'bytes': archive.stat().st_size, 'binarySha256': binary_hash, 'probe': info,
-              'scope': 'Native CLI only; existing Python service/web UI are separate'}
-    (root / 'validation/shante-release.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
+              'scope': 'Local browser workspace and native CLI' if args.workspace else 'Native CLI only'}
+    report = dist / f'{archive.stem}.json' if args.workspace else root / 'validation/shante-release.json'
+    report.write_text(json.dumps(result, indent=2), encoding='utf-8')
     print(json.dumps(result, indent=2))

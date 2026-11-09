@@ -29,7 +29,7 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 | Safe preview and parser isolation | PARTIAL | Signature and media probe paths, worker limits and parser whitelists. Add an isolated preview service, strict per-worker controls and external file/network access tests. |
 | Dependency and security engineering | PARTIAL | Pinned Zstandard source, workflow checks and audit scripts. Expand SBOM and advisory coverage across Python, Rust, native and FFmpeg, and continue fuzzing and threat-model validation. |
 | APIs and MCP | PARTIAL | Python processor HTTP API and Rust compatibility API. No MCP integration established in this scope. Add versioned contracts and authorization tests before exposing tools. |
-| Desktop and mobile packaging | PARTIAL | Native CLI packaging, Windows web/server packaging and Flutter sources. Build and test a native desktop shell, update verification, signing, notarization and physical-device support. |
+| Desktop and mobile packaging | PARTIAL | The portable workspace bundles the built web UI, local processor and native CLI. A native desktop shell, signed update verification, notarization and physical-device support remain open. |
 | Runtime and build performance | PARTIAL | CMake/Ninja presets and local benchmark scripts. Record reproducible workload, memory and clean/incremental build measurements before selecting optimizations. |
 | Benchmarks against reference tools | PARTIAL | Native and processor benchmark scripts exist. Complete same-input archive and media comparisons and record versions, options, hardware and integrity. |
 | Distributed jobs and object storage | BLOCKED | Single-node processor acceptance is separate. Multi-node validation requires an authorized deployment and object storage. Durable ownership, recovery and tenant isolation are open design work. |
@@ -81,6 +81,16 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
   stored or Deflate members through the existing archive quotas, checks
   decoded size and ZIP CRC, and records SHA-256 digests in a JSON report.
   Password-protected and other compression methods are excluded.
+
+## Portable workspace acceptance
+
+- Build the web and native components, then run
+  `python scripts/package-shante.py --workspace`. The package stages licenses
+  and checksums and starts a temporary loopback server to test the browser
+  entry point and native and archive capabilities.
+- Extract the ZIP and run `python run-workspace.py` with Python 3.11 or newer.
+  Open `http://127.0.0.1:5010`. Use `--data` for a separate private job store.
+  Media conversion requires FFmpeg and FFprobe on PATH.
 
 ## TAR acceptance for this change
 
