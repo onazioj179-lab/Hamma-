@@ -1,4 +1,5 @@
 import { act } from 'react';
+import { zipSync } from 'fflate';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import * as processingClient from '../processing/client';
@@ -28,6 +29,84 @@ const select = async (files: File[]) => {
   Object.defineProperty(input, 'files', { value: files, configurable: true });
   await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })));
 };
+
+it('opens and searches a ZIP directory without uploading the archive', async () => {
+  await render();
+  const bytes = new Uint8Array(zipSync({ 'first.txt': new Uint8Array([1]), 'second.txt': new Uint8Array([2]) }));
+  await select([new File([bytes], 'example.zip')]);
+  await act(async () => button('Inspect ZIP').click());
+  await vi.waitFor(async () => {
+    await act(async () => {});
+    expect(host.textContent).toContain('2 of 2 entries');
+  });
+  const search = host.querySelector<HTMLInputElement>('[aria-label="Search ZIP entries"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, 'SECOND');
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  expect(host.textContent).toContain('1 of 2 entries');
+  expect(host.textContent).toContain('second.txt');
+  expect(host.textContent).not.toContain('first.txt');
+  expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/uploads'))).toBe(false);
+});
+
+it('submits the original ZIP index after filtering the directory', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
+    ? { ok: true, json: async () => ({ ...caps, zipSelection: true }) } : initial(url));
+  vi.spyOn(processingClient, 'upload').mockResolvedValue('uploaded-zip');
+  vi.spyOn(processingClient, 'requestId').mockResolvedValue('selected-request');
+  const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({});
+  await render();
+  const bytes = new Uint8Array(zipSync({ 'first.txt': new Uint8Array([1]), 'second.txt': new Uint8Array([2]) }));
+  await select([new File([bytes], 'example.zip')]);
+  await act(async () => button('Inspect ZIP').click());
+  await vi.waitFor(async () => {
+    await act(async () => {});
+    expect(host.textContent).toContain('2 of 2 entries');
+  });
+  const search = host.querySelector<HTMLInputElement>('[aria-label="Search ZIP entries"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, 'second');
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    host.querySelector<HTMLInputElement>('[aria-label="Select ZIP entry 2: second.txt"]')!.click();
+  });
+  await act(async () => button('Extract selected entries (1)').click());
+  expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({
+    operation: 'extract', target: 'zip', zipIndexes: [1], uploads: ['uploaded-zip'], recursive: false,
+  }), 'POST', { signal: expect.any(AbortSignal) });
+});
+
+it('queues Office package inspection through the document action', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
+    ? { ok: true, json: async () => ({ ...caps, officeInspection: true }) } : initial(url));
+  vi.spyOn(processingClient, 'upload').mockResolvedValue('uploaded-office');
+  vi.spyOn(processingClient, 'requestId').mockResolvedValue('office-request');
+  const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({});
+  await render();
+  await select([new File(['office fixture'], 'sample.docx')]);
+  await act(async () => button('Inspect Office document').click());
+  expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({
+    operation: 'inspect', target: 'json', uploads: ['uploaded-office'], recursive: false,
+  }), 'POST', { signal: expect.any(AbortSignal) });
+});
+
+it('queues a ZIP integrity report only when the processor advertises verification', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
+    ? { ok: true, json: async () => ({ ...caps, zipVerification: true }) } : initial(url));
+  const upload = vi.spyOn(processingClient, 'upload').mockResolvedValue('uploaded-zip');
+  vi.spyOn(processingClient, 'requestId').mockResolvedValue('verify-request');
+  const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({});
+  await render();
+  await select([new File(['zip fixture'], 'archive.zip')]);
+  await act(async () => button('Test ZIP integrity').click());
+  expect(upload).toHaveBeenCalledTimes(1);
+  expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({
+    operation: 'verify', target: 'json', uploads: ['uploaded-zip'], recursive: false,
+  }), 'POST', { signal: expect.any(AbortSignal) });
+});
 
 it('uses an explicit read-only directory picker and queues nested and empty folders', async () => {
   vi.stubGlobal('isSecureContext', true);
@@ -371,6 +450,23 @@ it('requires explicit lossy consent and sends quality and metadata choices with 
   await act(async () => button('Convert').click());
   expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({ operation: 'convert', target: 'mp3', qualityMode: 'lossy', metadataPolicy: 'preserve', requestId: 'quality-request' }), 'POST', { signal: expect.any(AbortSignal) });
   expect(key).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ qualityMode: 'lossy', metadataPolicy: 'preserve' })]));
+});
+
+it('queues WAV audio extraction from the video conversion control', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  const video = { mime: ['video/x-matroska'], extensions: ['mkv'], conversions: ['mkv', 'wav'], extract: false };
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
+    ? { ok: true, json: async () => ({ ...caps, actionRegistry: [video], conversions: ['mkv', 'wav'] }) } : initial(url));
+  vi.spyOn(processingClient, 'upload').mockResolvedValue('uploaded-video');
+  vi.spyOn(processingClient, 'requestId').mockResolvedValue('video-audio-request');
+  const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({ id: 'audio-job' });
+  await render();
+  await select([new File(['fixture'], 'source.mkv', { type: 'video/x-matroska' })]);
+  expect(host.querySelector('[aria-label="Conversion format"]')?.textContent).toContain('wav');
+  await act(async () => button('Convert').click());
+  expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({
+    operation: 'convert', target: 'wav', qualityMode: 'lossless', uploads: ['uploaded-video'],
+  }), 'POST', { signal: expect.any(AbortSignal) });
 });
 
 it('cancels a deletion preview when the user leaves the processing page', async () => {

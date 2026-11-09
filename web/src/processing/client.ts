@@ -2,6 +2,11 @@ export interface Inspection { format: string; conversions: string[]; extract: bo
 export interface Capability {
   projectRecovery?: boolean;
   inspection?: boolean;
+  zipVerification?: boolean;
+  zipSelection?: boolean;
+  archiveRepack?: boolean;
+  officeInspection?: boolean;
+  zipProfiles?: string[];
   singleFileArchives?: string[];
   actionRegistry?: { mime: string[]; extensions: string[]; conversions: string[]; extract: boolean }[];
   version: number;
@@ -14,7 +19,7 @@ export interface Capability {
 export interface Job {
   errorInfo?: { category: string; retryEligible: boolean; stage: string; jobId: string; fileIds?: string[] } | null;
   retryCount?: number;
-  projectId?: string; id: string; name: string; operation: 'compress' | 'extract' | 'convert'; target: string;
+  projectId?: string; id: string; name: string; operation: 'compress' | 'extract' | 'convert' | 'verify' | 'inspect'; target: string;
   state: string; inputSize: number; outputSize: number | null; processed: number;
   created: number; finished?: number | null; duration?: number; error?: string; entries: number; hidden?: boolean;
   download?: string; downloadAvailable: boolean; outputName?: string;

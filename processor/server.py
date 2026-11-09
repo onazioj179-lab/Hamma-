@@ -24,6 +24,7 @@ import re
 import secrets
 import signal
 import socket
+from socketserver import TCPServer
 import subprocess
 import shutil
 import sqlite3
@@ -33,14 +34,14 @@ import time
 from urllib.parse import parse_qs, urlsplit, quote
 import zipfile
 
-from .engine import ARCHIVES, MEDIA, BLOCK, Context, ProcessingError, archive_formats, compress, convert, detect, extract, file_digest, safe_path
-from .worker_limits import apply_worker_limits
+from .engine import ARCHIVES, MEDIA, BLOCK, ZIP_PROFILES, Context, ProcessingError, archive_formats, compress, convert, detect, extract, file_digest, safe_path, verify_zip
+from .worker_limits import apply_windows_worker_limits, apply_worker_limits
 from .resources import available_memory, worker_capacity
 from .errors import describe_failure
 from .projects import Projects, ProjectError
 from .accounts import Accounts, AccountError, plan as account_plan
 from .catalog import FileCatalog
-from .capabilities import action_registry, inspect_headers, single_file_archives
+from .capabilities import action_registry, inspect_headers, media_targets, single_file_archives
 from .oauth import OAuth
 
 LOG = logging.getLogger("hamma.processor")
@@ -306,6 +307,8 @@ def run_job(root, owner, job_id, limits, isolated=False):
                               state="processing", started=started, error=None)
         if not current or current.get("state") not in ACTIVE:
             return
+        if isolated and os.name == "nt":
+            apply_windows_worker_limits()
         manifest = []
         for upload in job["inputs"]:
             upload["path"] = str(store.folder(owner, upload["id"]) / "input")
@@ -316,10 +319,16 @@ def run_job(root, owner, job_id, limits, isolated=False):
             if original["size"] != upload["size"] or original["sha256"] != upload["sha256"]:
                 raise ProcessingError("Input integrity check failed")
         if job["operation"] == "compress":
-            manifest = compress(job["inputs"], output, job["target"], ctx)
+            manifest = compress(job["inputs"], output, job["target"], ctx, zip_profile=job.get("zipProfile", "balanced"))
         elif job["operation"] == "extract":
             item = job["inputs"][0]
-            manifest = extract(Path(item["path"]), item["name"], output, ctx, job["recursive"])
+            manifest = extract(Path(item["path"]), item["name"], output, ctx, job["recursive"],
+                               job.get("zipIndexes"), repack=job["target"] == "zip-deflate")
+        elif job["operation"] == "verify":
+            manifest = verify_zip(Path(job["inputs"][0]["path"]), output, ctx)
+        elif job["operation"] == "inspect":
+            from .documents import inspect_office
+            manifest = inspect_office(Path(job["inputs"][0]["path"]), output, ctx)
         else:
             manifest = convert(Path(job["inputs"][0]["path"]), output, job["target"], ctx,
                                job.get('qualityMode', 'lossless'), job.get('metadataPolicy', 'strip'))
@@ -334,7 +343,13 @@ def run_job(root, owner, job_id, limits, isolated=False):
         # A raw Zstandard frame has no filename field. Preserve the complete
         # source basename in its download name so restoration retains its type.
         stem = leaf if job["operation"] == "compress" and job["target"] == "zstd" else leaf.rsplit(".", 1)[0] or "files"
-        output_name = ("extracted" if job["operation"] == "extract" else stem) + "." + extension
+        if job["operation"] == "verify":
+            stem += ".verification"
+        elif job["operation"] == "inspect":
+            stem += ".inspection"
+        if job["operation"] == "extract":
+            stem = stem + ".repacked" if job["target"] == "zip-deflate" else "extracted"
+        output_name = stem + "." + extension
         ctx.check()
         store.patch(owner, "job", job_id, expected_states=ACTIVE, state="completed", processed=job["inputSize"],
                     error=None,
@@ -647,7 +662,10 @@ class LocalHTTPServer(ThreadingHTTPServer):
         # Windows SO_REUSEADDR otherwise permits two listeners on one port.
         if os.name == "nt":
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-        super().server_bind()
+        # The listener already has a numeric bind address. HTTPServer's
+        # reverse DNS lookup can block startup even for loopback.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 def handler(service):
@@ -863,7 +881,7 @@ def handler(service):
                     raise HTTPError(400, str(error)) from error
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
-                return self.send(200, {"projectRecovery": True, "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "actionRegistry": action_registry(), "conversions": MEDIA if shutil.which("ffmpeg") and shutil.which("ffprobe") else [],
+                return self.send(200, {"projectRecovery": True, "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "zipSelection": True, "archiveRepack": True, "officeInspection": True, "zipProfiles": list(ZIP_PROFILES), "actionRegistry": action_registry(), "conversions": media_targets(),
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
             if path == "/api/process/settings":
                 if method == "GET":
@@ -994,11 +1012,24 @@ def handler(service):
                 operation, target = body.get("operation"), body.get("target")
                 if not isinstance(ids, list) or not ids or len(ids) > service.limits["files"] or not all(isinstance(i, str) for i in ids) or len(set(ids)) != len(ids):
                     raise HTTPError(400, "Invalid file selection")
-                if (operation == "compress" and target not in archive_formats() or operation == "extract" and target != "zip" or
-                    operation == "convert" and target not in MEDIA or operation not in ("compress", "extract", "convert")):
+                if (operation == "compress" and target not in archive_formats() or operation == "extract" and target not in ("zip", "zip-deflate") or
+                    operation == "convert" and target not in MEDIA or operation in ("verify", "inspect") and target != "json" or
+                    operation not in ("compress", "extract", "convert", "verify", "inspect")):
                     raise HTTPError(400, "Unsupported operation")
                 if operation != "compress" and len(ids) != 1:
                     raise HTTPError(400, "One input per extraction or conversion job")
+                zip_profile = body.get("zipProfile", "balanced")
+                if "zipProfile" in body and (operation != "compress" or target != "zip" or
+                                              not isinstance(zip_profile, str) or zip_profile not in ZIP_PROFILES):
+                    raise HTTPError(400, "Invalid ZIP compression profile")
+                zip_indexes = body.get("zipIndexes")
+                if "zipIndexes" in body:
+                    if (operation != "extract" or body.get("recursive") or not isinstance(zip_indexes, list)
+                            or not 0 < len(zip_indexes) <= service.limits["files"]
+                            or not all(type(index) is int and 0 <= index < service.limits["files"] for index in zip_indexes)
+                            or len(set(zip_indexes)) != len(zip_indexes)):
+                        raise HTTPError(400, "Invalid ZIP member selection")
+                    zip_indexes = sorted(zip_indexes)
                 project_id = body.get('projectId', 'default')
                 if not isinstance(project_id, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', project_id):
                     raise HTTPError(400, 'Invalid project identifier')
@@ -1017,6 +1048,10 @@ def handler(service):
                     if recoverable:
                         service.projects.get(self.owner, project_id)
                         identity = ['project-recovery-v1', project_id, sorted(ids), operation, target, bool(body.get('recursive')), quality_mode, metadata_policy]
+                        if zip_indexes is not None:
+                            identity.append(zip_indexes)
+                        if zip_profile != "balanced":
+                            identity.append(zip_profile)
                         request_id = hashlib.sha256(json.dumps(identity, separators=(',', ':')).encode()).hexdigest()
                     if request_id is not None and (not isinstance(request_id, str) or not re.fullmatch(r"[a-f0-9]{64}", request_id)):
                         raise HTTPError(400, "Invalid request identifier")
@@ -1025,7 +1060,7 @@ def handler(service):
                     if existing:
                         existing_ids = [i['id'] for i in existing['inputs']]
                         if ((sorted(existing_ids) != sorted(ids) if recoverable else existing_ids != ids) or existing["operation"] != operation or existing["target"] != target or existing["recursive"] != bool(body.get("recursive")) or
-                            existing.get('projectId', 'default') != project_id or existing.get('qualityMode', 'lossless') != quality_mode or existing.get('metadataPolicy', 'strip') != metadata_policy):
+                            existing.get('projectId', 'default') != project_id or existing.get('qualityMode', 'lossless') != quality_mode or existing.get('metadataPolicy', 'strip') != metadata_policy or existing.get('zipIndexes') != zip_indexes or existing.get('zipProfile', 'balanced') != zip_profile):
                             raise HTTPError(409, "Request identifier already used")
                         if recoverable:
                             service.projects.forget_uploads(self.owner, project_id, ids)
@@ -1064,6 +1099,10 @@ def handler(service):
                               "format": inputs[0]["format"] if len(inputs) == 1 else "batch", "processed": 0, "entries": 0,
                               "fileExpires": now + RETENTION[settings["fileRetention"]], "historyExpires": now + retention if retention else None,
                               "downloadAvailable": False, "error": None}
+                    if zip_indexes is not None:
+                        record["zipIndexes"] = zip_indexes
+                    if zip_profile != "balanced":
+                        record["zipProfile"] = zip_profile
                     service.store.folder(self.owner, record["id"]).mkdir(mode=0o700, parents=True)
                     service.store.put(self.owner, "job", record)
                     if recoverable:
@@ -1249,7 +1288,7 @@ def main():
     server.transport_secure = transport.secure_cookies
     thread = threading.Thread(target=service.loop, daemon=True)
     thread.start()
-    LOG.info("HAMMA available at %s://%s:%s", 'https' if transport.secure_cookies else 'http', args.host, args.port)
+    LOG.info("HAMMA available at %s://%s:%s", 'https' if transport.secure_cookies else 'http', args.host, server.server_port)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

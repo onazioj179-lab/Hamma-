@@ -1,7 +1,7 @@
 name: SHANTE native kernel
 on:
   pull_request:
-    paths: ['native/**', '!native/**/*.md', 'processor/**', 'scripts/*shante*', '.github/workflows/shante-core.yml']
+    paths: ['native/**', '!native/**/*.md', 'processor/**', 'scripts/*shante*', 'web/**', 'package.json', 'package-lock.json', '.github/workflows/shante-core.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -31,6 +31,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
       - name: Configure Unix
         if: runner.os != 'Windows'
         run: cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -50,6 +53,30 @@ jobs:
         run: |
           $env:SHANTE_CORE_BINARY = "$PWD/native/build/Release/shante-core.exe"
           python -m unittest discover -s processor/tests -v
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Package and smoke-test the workspace (Unix)
+        if: runner.os != 'Windows'
+        run: python3 scripts/package-shante.py --workspace
+      - name: Package and smoke-test the workspace (Windows)
+        if: runner.os == 'Windows'
+        run: python scripts/package-shante.py --workspace
+      - name: Check packaging repeatability from the same build
+        if: runner.os == 'Linux'
+        run: |
+          python3 scripts/package-shante.py --workspace --output-dir "$RUNNER_TEMP/shante-repeat"
+          cmp dist/SHANTE-Workspace-*.zip "$RUNNER_TEMP"/shante-repeat/SHANTE-Workspace-*.zip
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: shante-workspace-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            dist/SHANTE-Workspace-*.zip
+            dist/SHANTE-Workspace-*.json
+          if-no-files-found: error
   sanitizers:
     runs-on: ubuntu-latest
     steps:

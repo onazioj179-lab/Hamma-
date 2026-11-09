@@ -23,6 +23,12 @@
 .source-row div span { font-size: 11px; color: rgb(var(--muted)); display: block; margin-top: 4px; }
 .file-state { font-size: 11px; color: rgb(var(--muted)); white-space: nowrap; }
 .processing-actions { display: flex; gap: 8px; padding: 16px 18px; align-items: center; flex-wrap: wrap; }
+.zip-inspection { padding: 0 18px 16px; }
+.zip-inspection .search-field { max-width: 360px; }
+.zip-inspection .search-field input { min-width: 0; width: 100%; background: transparent; color: inherit; }
+.zip-inspection-list { list-style: none; padding: 0; max-height: 320px; overflow: auto; }
+.zip-inspection-list li { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 8px 0; border-bottom: 1px solid rgb(var(--border)); overflow-wrap: anywhere; }
+.zip-inspection-list small { color: rgb(var(--muted)); }
 .conversion-select { margin-left: auto; display: flex; gap: 8px; align-items: center; color: rgb(var(--muted)); font-size: 12px; }
 .universal-workspace select { background: rgb(var(--card)); color: rgb(var(--foreground)); border: 1px solid rgb(var(--border)); border-radius: 8px; padding: 8px 10px; min-height: 36px; }
 .processing-options { margin: 18px 0 28px; }

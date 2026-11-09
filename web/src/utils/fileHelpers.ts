@@ -92,7 +92,7 @@ export function chunkArray<T>(array: T[], chunkSize: number): T[][] {
 /**
  * Read file as ArrayBuffer
  */
-export function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
+export function readFileAsArrayBuffer(file: Blob): Promise<ArrayBuffer> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result as ArrayBuffer);
