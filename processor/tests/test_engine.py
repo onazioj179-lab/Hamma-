@@ -16,7 +16,7 @@ from unittest.mock import patch
 import wave
 import zipfile
 
-from processor.engine import Context, ProcessingError, compress, convert, detect, extract, safe_path
+from processor.engine import Context, ProcessingError, compress, convert, detect, extract, probe, safe_path, verify_media_decode
 
 
 LIMITS = {"expanded": 32 * 1024**2, "files": 5000, "ratio": 1000, "depth": 3, "seconds": 60, "input": 64 * 1024**2, "storage": 256 * 1024**2}
@@ -325,6 +325,39 @@ class MediaTests(EngineFixture):
             audio.setframerate(48000)
             audio.writeframes(b"\x01\x00\x02\x00" * 4800)
         return source
+
+    def test_decode_verification_rejects_partial_audio_packet(self):
+        source = self.wav()
+        # The WAV header still reports a valid PCM stream, but its final sample
+        # is incomplete. A successful metadata probe cannot detect this.
+        source.write_bytes(source.read_bytes()[:-1])
+        self.assertEqual(probe(source)["streams"][0]["codec_name"], "pcm_s16le")
+        with self.assertRaisesRegex(ProcessingError, "could not be decoded"):
+            verify_media_decode(source, self.context())
+
+    def test_conversion_rejects_unexpected_output_codec(self):
+        source = self.wav()
+        output = self.root / "out.mp3"
+        def probe_wrong_output_codec(path, **options):
+            result = probe(path, **options)
+            if path == output:
+                result["streams"][0]["codec_name"] = "aac"
+            return result
+        with patch("processor.engine.probe", side_effect=probe_wrong_output_codec):
+            with self.assertRaisesRegex(ProcessingError, "output codec or stream count"):
+                convert(source, output, "mp3", self.context(), quality_mode="lossy")
+
+    def test_remux_verifies_video_and_audio_streams(self):
+        source = self.root / "source.mp4"
+        subprocess.run([
+            shutil.which("ffmpeg"), "-v", "error", "-f", "lavfi",
+            "-i", "color=c=blue:s=32x32:d=0.4", "-i", str(self.wav()),
+            "-c:v", "mpeg4", "-c:a", "aac", str(source),
+        ], check=True, capture_output=True)
+        output = self.root / "out.mkv"
+        manifest = convert(source, output, "mkv", self.context())
+        self.assertEqual(manifest[0]["size"], output.stat().st_size)
+        self.assertEqual([s["codec_name"] for s in probe(output)["streams"]], ["mpeg4", "aac"])
 
     def test_real_wav_and_flac_conversion_preserves_pcm(self):
         source = self.wav()
