@@ -16,10 +16,11 @@ import zipfile
 
 
 def smoke_workspace(stage, environment):
+    interpreter = sys._base_executable if os.name == 'nt' else sys.executable
     with tempfile.TemporaryDirectory(prefix='shante-smoke-') as data:
         log_path = Path(data) / 'startup.log'
         with log_path.open('wb') as log, subprocess.Popen(
-            [sys.executable, '-B', 'run-workspace.py', '--port', '0', '--data', str(Path(data) / 'jobs')],
+            [interpreter, '-B', 'run-workspace.py', '--port', '0', '--data', str(Path(data) / 'jobs')],
             cwd=stage, env=environment, stdout=log, stderr=log,
         ) as process:
             def get(path):
@@ -63,19 +64,21 @@ def smoke_workspace(stage, environment):
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--workspace', action='store_true', help='Include the built web UI and local Python processor')
+parser.add_argument('--output-dir', type=Path, help='Override the default dist directory')
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 web = root / 'web/dist'
 if args.workspace and not (web / 'index.html').is_file():
     parser.error('Build the web workspace first with npm run build')
-dist = root / 'dist'
-dist.mkdir(exist_ok=True)
+dist = args.output_dir.resolve() if args.output_dir else root / 'dist'
+dist.mkdir(parents=True, exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='shante-release-', dir=dist) as temporary:
     stage = Path(temporary)
-    subprocess.run(['cmake', '--install', str(root / 'native/build'), '--prefix', str(stage),
-                    '--component', 'ShanteCore', '--config', 'Release', '--strip'], check=True)
-    executable = stage / 'bin' / ('shante-core.exe' if os.name == 'nt' else 'shante-core')
     environment = os.environ.copy()
+    environment.setdefault('SOURCE_DATE_EPOCH', '0')
+    subprocess.run(['cmake', '--install', str(root / 'native/build'), '--prefix', str(stage),
+                    '--component', 'ShanteCore', '--config', 'Release', '--strip'], env=environment, check=True)
+    executable = stage / 'bin' / ('shante-core.exe' if os.name == 'nt' else 'shante-core')
     if os.name == 'nt':
         environment['PATH'] = str(Path(os.environ['SystemRoot']) / 'System32')
     info = json.loads(subprocess.check_output([str(executable), 'probe'], env=environment, timeout=10))

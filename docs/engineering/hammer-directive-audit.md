@@ -11,7 +11,7 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 | --- | --- | --- |
 | Universal input, folders, contextual actions | PARTIAL | `web/src` workspace and capability registry. Exercise drag/drop, native and fallback folder pickers, and mixed selections on the physical-device matrix. |
 | Responsive UI and motion | PARTIAL | Web workspace styles and mobile-web entry. Audit all requested motion patterns, touch targets, keyboard interactions and reduced motion under load. |
-| Archive creation and compression planning | PARTIAL | `processor/engine.py`, `processor/capabilities.py`, Rust SPK codecs. Verify format compatibility, lossless mode and dictionary/solid policies against reference implementations. |
+| Archive creation and compression planning | PARTIAL | ZIP has Fastest, Balanced, Maximum and sample-based Auto profiles. Other formats, dictionary/solid policies and a shared cross-format planner remain open. |
 | Archive extraction and integrity | PARTIAL | `processor/engine.py` emits a verified ZIP. ZIP index allocation is bounded, ambiguous names are rejected, and TAR preflight checks effective PAX sizes and compressed trailers. Add interoperability and malformed corpus coverage for remaining formats. |
 | Archive inspection, selection, testing and conversion | PARTIAL | Local ZIP inspection, selective ZIP extraction, ZIP integrity checks and repacking supported inputs as Deflate ZIP are available. Additional integrity-test formats and repack targets remain open. |
 | Archive passwords, encryption and repair | PARTIAL | Rust SPK has encryption/recovery modules. The processor rejects password-protected ZIP. Add standard-format interoperability and secret handling tests before exposing those controls. |
@@ -77,6 +77,10 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 - **Repack as ZIP** converts a supported single archive or compressed stream
   to a Deflate ZIP, preserving verified member bytes. It uses the extraction
   safety policy and retains top-level archive boundaries.
+- ZIP compression profiles use Deflate levels 1, 6 and 9. Auto samples at
+  most 64 KiB per file and stores members whose sample saves less than 1%.
+  Every profile verifies original bytes after packaging. The job records the
+  chosen profile for retries. The selector resets to Balanced on project changes.
 - **Test ZIP integrity** uploads one ZIP to the processor. The job streams
   stored or Deflate members through the existing archive quotas, checks
   decoded size and ZIP CRC, and records SHA-256 digests in a JSON report.
@@ -91,6 +95,8 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 - Extract the ZIP and run `python run-workspace.py` with Python 3.11 or newer.
   Open `http://127.0.0.1:5010`. Use `--data` for a separate private job store.
   Media conversion requires FFmpeg and FFprobe on PATH.
+- Packaging sets a stable strip timestamp. CI compares two archives from the
+  same built inputs. This check does not compare clean builds across toolchains.
 
 ## Comparative ZIP measurement
 

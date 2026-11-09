@@ -5,6 +5,7 @@ export interface Capability {
   zipVerification?: boolean;
   zipSelection?: boolean;
   archiveRepack?: boolean;
+  zipProfiles?: string[];
   singleFileArchives?: string[];
   actionRegistry?: { mime: string[]; extensions: string[]; conversions: string[]; extract: boolean }[];
   version: number;

@@ -5,6 +5,7 @@ from http.server import ThreadingHTTPServer
 import io
 import json
 import os
+import random
 from pathlib import Path
 import tempfile
 import tarfile
@@ -168,6 +169,25 @@ class ServerTests(unittest.TestCase):
         self.assertNotIn("inputs", job)
         self.assertNotIn("outputFile", job)
         self.assertNotIn(str(self.service.store.root), json.dumps(job))
+
+    def test_auto_zip_profile_stores_incompressible_sample_and_deflates_repeated_data(self):
+        noise = random.Random(2027).randbytes(8192)
+        repeated = b"sample" * 2000
+        first = self.upload(noise, "noise.bin")
+        second = self.upload(repeated, "repeated.txt")
+        body = {"uploads": [first["id"], second["id"]], "operation": "compress", "target": "zip",
+                "zipProfile": "auto", "requestId": "f" * 64}
+        queued = self.call("/jobs", body, "POST")
+        self.assert_status(409, lambda: self.call("/jobs", {**body, "zipProfile": "maximum"}, "POST"))
+        self.assert_status(400, lambda: self.call("/jobs", {**body, "zipProfile": "unknown"}, "POST"))
+        result = self.execute(queued)
+        self.assertEqual(result["state"], "completed", result)
+        data = self.call(result["download"].removeprefix("/api/process"), raw=True)
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            self.assertEqual(archive.getinfo("noise.bin").compress_type, zipfile.ZIP_STORED)
+            self.assertEqual(archive.getinfo("repeated.txt").compress_type, zipfile.ZIP_DEFLATED)
+            self.assertEqual(archive.read("noise.bin"), noise)
+            self.assertEqual(archive.read("repeated.txt"), repeated)
 
     def test_tar_repack_produces_verified_deflate_zip(self):
         payload = b"compressible fixture\n" * 100

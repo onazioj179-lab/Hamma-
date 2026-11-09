@@ -14,7 +14,10 @@ import sys
 from processor.worker_limits import apply_windows_worker_limits
 
 apply_windows_worker_limits(128 * 1024**2)
-child = subprocess.run([sys.executable, '-c', '''
+# Use the real interpreter, as the Windows venv redirector can launch
+# through an app execution alias rather than as a direct job child.
+interpreter = sys._base_executable
+subprocess.run([interpreter, '-c', '''
 try:
     bytearray(256 * 1024**2)
 except MemoryError:
@@ -23,7 +26,7 @@ raise SystemExit(1)
 '''], check=True)
 # Inherit stdout so the outer process cannot finish reading until this child
 # exits. It is still sleeping when the owning worker exits.
-subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+subprocess.Popen([interpreter, '-c', 'import time; time.sleep(30)'])
 print('worker complete')
 """
         result = subprocess.run([sys.executable, '-c', program], capture_output=True, text=True, timeout=15)

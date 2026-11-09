@@ -19,10 +19,12 @@ import tarfile
 import time
 import unicodedata
 import zipfile
+import zlib
 
 BLOCK = 1024 * 1024
 ARCHIVES = ("zip", "tar", "tar.gz", "tar.bz2", "tar.xz", "gzip", "bzip2", "xz")
 MEDIA = ("wav", "flac", "mp3", "aac", "m4a", "ogg", "opus", "mp4", "mkv", "webm", "png", "webp", "jpg")
+ZIP_PROFILES = {"auto": 6, "fastest": 1, "balanced": 6, "maximum": 9}
 
 
 def archive_formats():
@@ -362,7 +364,7 @@ def file_digest(path: Path, context: Context):
         return context.copy(stream, Sink(), progress=False)
 
 
-def compress(inputs: list[dict], output: Path, target: str, ctx: Context):
+def compress(inputs: list[dict], output: Path, target: str, ctx: Context, *, zip_profile="balanced"):
     manifest = []
     names = [(item, ctx.register(item["name"], item.get("directory", False))) for item in inputs]
     if target == "zstd":
@@ -381,15 +383,27 @@ def compress(inputs: list[dict], output: Path, target: str, ctx: Context):
             raise ProcessingError("Input changed during verification")
         manifest.append({"name": names[0][1], **original})
     elif target == "zip":
-        with BoundedWriter(output, ctx) as bounded, zipfile.ZipFile(bounded, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as archive:
+        if zip_profile not in ZIP_PROFILES:
+            raise ProcessingError("Unsupported ZIP compression profile")
+        with BoundedWriter(output, ctx) as bounded, zipfile.ZipFile(
+            bounded, "w", compression=zipfile.ZIP_DEFLATED,
+            compresslevel=ZIP_PROFILES[zip_profile], allowZip64=True,
+        ) as archive:
             for item, name in names:
                 ctx.check()
                 if item.get("directory"):
                     archive.writestr(name, b"")
                     manifest.append({"name": name, "directory": True, "size": 0})
                 else:
-                    with Path(item["path"]).open("rb") as source, archive.open(name, "w", force_zip64=True) as dest:
-                        manifest.append({"name": name, **ctx.copy(source, dest)})
+                    with Path(item["path"]).open("rb") as source:
+                        entry = name
+                        if zip_profile == "auto":
+                            sample = source.read(64 * 1024)
+                            source.seek(0)
+                            if not sample or len(zlib.compress(sample, level=1)) >= len(sample) * 0.99:
+                                entry = zipfile.ZipInfo(name)  # ZIP_STORED for this member.
+                        with archive.open(entry, "w", force_zip64=True) as dest:
+                            manifest.append({"name": name, **ctx.copy(source, dest)})
         ctx.report(state="verifying")
         with zipfile.ZipFile(output) as archive:
             if archive.namelist() != [row["name"] for row in manifest]:

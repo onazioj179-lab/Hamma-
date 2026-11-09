@@ -33,7 +33,7 @@ import time
 from urllib.parse import parse_qs, urlsplit, quote
 import zipfile
 
-from .engine import ARCHIVES, MEDIA, BLOCK, Context, ProcessingError, archive_formats, compress, convert, detect, extract, file_digest, safe_path, verify_zip
+from .engine import ARCHIVES, MEDIA, BLOCK, ZIP_PROFILES, Context, ProcessingError, archive_formats, compress, convert, detect, extract, file_digest, safe_path, verify_zip
 from .worker_limits import apply_windows_worker_limits, apply_worker_limits
 from .resources import available_memory, worker_capacity
 from .errors import describe_failure
@@ -318,7 +318,7 @@ def run_job(root, owner, job_id, limits, isolated=False):
             if original["size"] != upload["size"] or original["sha256"] != upload["sha256"]:
                 raise ProcessingError("Input integrity check failed")
         if job["operation"] == "compress":
-            manifest = compress(job["inputs"], output, job["target"], ctx)
+            manifest = compress(job["inputs"], output, job["target"], ctx, zip_profile=job.get("zipProfile", "balanced"))
         elif job["operation"] == "extract":
             item = job["inputs"][0]
             manifest = extract(Path(item["path"]), item["name"], output, ctx, job["recursive"],
@@ -872,7 +872,7 @@ def handler(service):
                     raise HTTPError(400, str(error)) from error
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
-                return self.send(200, {"projectRecovery": True, "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "zipSelection": True, "archiveRepack": True, "actionRegistry": action_registry(), "conversions": MEDIA if shutil.which("ffmpeg") and shutil.which("ffprobe") else [],
+                return self.send(200, {"projectRecovery": True, "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "zipSelection": True, "archiveRepack": True, "zipProfiles": list(ZIP_PROFILES), "actionRegistry": action_registry(), "conversions": MEDIA if shutil.which("ffmpeg") and shutil.which("ffprobe") else [],
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
             if path == "/api/process/settings":
                 if method == "GET":
@@ -1009,6 +1009,10 @@ def handler(service):
                     raise HTTPError(400, "Unsupported operation")
                 if operation != "compress" and len(ids) != 1:
                     raise HTTPError(400, "One input per extraction or conversion job")
+                zip_profile = body.get("zipProfile", "balanced")
+                if "zipProfile" in body and (operation != "compress" or target != "zip" or
+                                              not isinstance(zip_profile, str) or zip_profile not in ZIP_PROFILES):
+                    raise HTTPError(400, "Invalid ZIP compression profile")
                 zip_indexes = body.get("zipIndexes")
                 if "zipIndexes" in body:
                     if (operation != "extract" or body.get("recursive") or not isinstance(zip_indexes, list)
@@ -1037,6 +1041,8 @@ def handler(service):
                         identity = ['project-recovery-v1', project_id, sorted(ids), operation, target, bool(body.get('recursive')), quality_mode, metadata_policy]
                         if zip_indexes is not None:
                             identity.append(zip_indexes)
+                        if zip_profile != "balanced":
+                            identity.append(zip_profile)
                         request_id = hashlib.sha256(json.dumps(identity, separators=(',', ':')).encode()).hexdigest()
                     if request_id is not None and (not isinstance(request_id, str) or not re.fullmatch(r"[a-f0-9]{64}", request_id)):
                         raise HTTPError(400, "Invalid request identifier")
@@ -1045,7 +1051,7 @@ def handler(service):
                     if existing:
                         existing_ids = [i['id'] for i in existing['inputs']]
                         if ((sorted(existing_ids) != sorted(ids) if recoverable else existing_ids != ids) or existing["operation"] != operation or existing["target"] != target or existing["recursive"] != bool(body.get("recursive")) or
-                            existing.get('projectId', 'default') != project_id or existing.get('qualityMode', 'lossless') != quality_mode or existing.get('metadataPolicy', 'strip') != metadata_policy or existing.get('zipIndexes') != zip_indexes):
+                            existing.get('projectId', 'default') != project_id or existing.get('qualityMode', 'lossless') != quality_mode or existing.get('metadataPolicy', 'strip') != metadata_policy or existing.get('zipIndexes') != zip_indexes or existing.get('zipProfile', 'balanced') != zip_profile):
                             raise HTTPError(409, "Request identifier already used")
                         if recoverable:
                             service.projects.forget_uploads(self.owner, project_id, ids)
@@ -1086,6 +1092,8 @@ def handler(service):
                               "downloadAvailable": False, "error": None}
                     if zip_indexes is not None:
                         record["zipIndexes"] = zip_indexes
+                    if zip_profile != "balanced":
+                        record["zipProfile"] = zip_profile
                     service.store.folder(self.owner, record["id"]).mkdir(mode=0o700, parents=True)
                     service.store.put(self.owner, "job", record)
                     if recoverable:
