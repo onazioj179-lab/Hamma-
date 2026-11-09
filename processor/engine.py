@@ -689,6 +689,31 @@ def decoded_digest(path: Path, ctx: Context, *, stream, encoding, container):
         process.stdout.close()
 
 
+def verify_media_decode(path: Path, ctx: Context):
+    """Read all output audio and video streams without retaining decoded data."""
+    ctx.check()
+    args = [shutil.which("ffmpeg"), "-nostdin", "-v", "error", "-xerror",
+            "-max_alloc", str(64 * BLOCK), "-protocol_whitelist", "file,pipe",
+            "-format_whitelist", INPUT_FORMATS, "-threads", "2", "-i", str(path),
+            "-map", "0:v?", "-map", "0:a?", "-threads", "2",
+            "-abort_on", "empty_output+empty_output_stream",
+            "-f", "null", "-"]
+    with subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as process:
+        try:
+            while True:
+                ctx.check()
+                try:
+                    status = process.wait(timeout=0.25)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            if status:
+                raise ProcessingError("Converted media could not be decoded")
+        finally:
+            if process.poll() is None:
+                process.kill()
+
+
 def convert(source: Path, output: Path, target: str, ctx: Context, quality_mode='lossless', metadata_policy='strip'):
     from .media_policy import validate_conversion_options
     if target not in MEDIA:
@@ -784,6 +809,17 @@ def convert(source: Path, output: Path, target: str, ctx: Context, quality_mode=
         verified = probe(destination)
         if not verified.get("streams"):
             raise ProcessingError("Conversion verification failed")
+        if track or image:
+            expected_type = "audio" if track else "video"
+            expected_codec = pcm if target == "wav" else {
+                "flac": "flac", "mp3": "mp3",
+                "aac": "aac", "m4a": "aac", "ogg": "vorbis", "opus": "opus",
+                "png": "png", "webp": "webp", "jpg": "mjpeg",
+            }[target]
+            streams = [(stream["codec_type"], stream.get("codec_name")) for stream in verified["streams"]
+                       if stream["codec_type"] in ("audio", "video")]
+            if streams != [(expected_type, expected_codec)]:
+                raise ProcessingError("Conversion output codec or stream count did not match")
         # Reject truncated outputs rather than treating FFmpeg's size-limited exit as success.
         duration = float(track.get("duration", info.get("format", {}).get("duration", 0)) or 0) if track else float(info.get("format", {}).get("duration", 0) or 0)
         actual = float(verified.get("format", {}).get("duration", 0) or 0)
@@ -813,6 +849,9 @@ def convert(source: Path, output: Path, target: str, ctx: Context, quality_mode=
             after_streams = [(s['codec_type'], s.get('codec_name')) for s in verified['streams'] if s['codec_type'] in ('video', 'audio', 'subtitle')]
             if sorted(before_streams, key=lambda row: (row[0], row[1] or '')) != sorted(after_streams, key=lambda row: (row[0], row[1] or '')):
                 raise ProcessingError('Container conversion did not preserve all streams')
+        checksum_verified = quality_mode == "lossless" and (image or target in ("wav", "flac"))
+        if not checksum_verified and any(stream["codec_type"] in ("audio", "video") for stream in verified["streams"]):
+            verify_media_decode(destination, ctx)
         outputs.append({"name": destination.name, **file_digest(destination, ctx)})
     if len(tracks) > 1:
         inputs = [{"name": row["name"], "path": str(ctx.root / row["name"])} for row in outputs]
