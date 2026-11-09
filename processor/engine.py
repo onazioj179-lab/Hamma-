@@ -193,13 +193,13 @@ def pax_size(data: bytes, maximum: int):
         separator = data.find(b" ", position, position + 9)
         length = data[position:separator] if separator >= 0 else b""
         if not length.isdigit():
-            raise ProcessingError("Invalid PAX metadata")
+            raise ProcessingError("Invalid archive PAX metadata")
         end = position + int(length)
         if not separator + 3 < end <= len(data) or data[end - 1] != 10:
-            raise ProcessingError("Invalid PAX metadata")
+            raise ProcessingError("Invalid archive PAX metadata")
         key, equals, value = data[separator + 1:end - 1].partition(b"=")
         if not key or not equals or b"\x00" in key:
-            raise ProcessingError("Invalid PAX metadata")
+            raise ProcessingError("Invalid archive PAX metadata")
         if key.startswith(b"GNU.sparse."):
             raise ProcessingError("Unsupported sparse archive")
         if key == b"size":
@@ -226,7 +226,7 @@ def validate_tar(path: Path, ctx: Context, opener=None):
             ctx.check()
             header = stream.read(512)
             if not header:
-                raise ProcessingError("Missing archive end marker")
+                raise ProcessingError("Truncated archive end marker")
             if header == bytes(512):
                 if metadata_chain:
                     raise ProcessingError("Truncated archive metadata")
@@ -270,7 +270,7 @@ def validate_tar(path: Path, ctx: Context, opener=None):
                 if len(payload) != remaining:
                     raise ProcessingError("Truncated archive metadata")
                 if payload[size:].strip(b"\x00"):
-                    raise ProcessingError("Invalid PAX metadata padding")
+                    raise ProcessingError("Invalid archive PAX metadata padding")
                 size_override = pax_size(payload[:size], maximum)
                 if info.type == tarfile.XGLTYPE:
                     if size_override is not None:
