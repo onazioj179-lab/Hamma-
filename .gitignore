@@ -27,9 +27,28 @@ npm-debug.log*
 Thumbs.db
 
 # Environment
-.env
-.env.local
-.env.*.local
+.env*
+!.env.example
+!.env.*.example
+
+# Credentials and private keys
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.secret
+*.secrets
+.envrc
+.netrc
+.pypirc
+.npmrc
+.ssh/
+secrets/
+credentials/
+**/*credentials*.json
+**/service-account*.json
 
 # Build artifacts
 *.spk
@@ -50,3 +69,6 @@ buildlogs/
 /validation/fixtures/
 /.hamma-data/
 /native/build*/
+
+# Optional isolated OAuth development runtime
+.venv-oauth/
