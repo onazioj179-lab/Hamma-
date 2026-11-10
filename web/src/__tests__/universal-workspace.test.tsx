@@ -132,6 +132,22 @@ it('queues a ZIP integrity report only when the processor advertises verificatio
   }), 'POST', { signal: expect.any(AbortSignal) });
 });
 
+it('queues compressed TAR integrity checks when supported', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
+    ? { ok: true, json: async () => ({ ...caps, tarVerification: true }) } : initial(url));
+  vi.spyOn(processingClient, 'upload').mockResolvedValue('uploaded-tar');
+  vi.spyOn(processingClient, 'requestId').mockResolvedValue('verify-tar');
+  const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({});
+  await render();
+  await select([new File(['fixture'], 'archive.tar.xz')]);
+  expect(button('Test ZIP integrity')).toBeUndefined();
+  await act(async () => button('Test TAR integrity').click());
+  expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({
+    operation: 'verify', target: 'json', uploads: ['uploaded-tar'], recursive: false,
+  }), 'POST', { signal: expect.any(AbortSignal) });
+});
+
 it('uses an explicit read-only directory picker and queues nested and empty folders', async () => {
   vi.stubGlobal('isSecureContext', true);
   const picker = vi.fn(async () => ({ kind: 'directory', name: 'Selected', async *values() {

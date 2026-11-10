@@ -316,6 +316,15 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const singleSource = chosen.length === 1 ? chosen[0] : undefined;
   const zipSource = singleSource && !singleSource.directory && (singleSource.inspection && !singleSource.inspection.error
     ? singleSource.inspection.format === 'zip' : /\.zip$/i.test(singleSource.name)) ? singleSource : null;
+  const signature = singleSource?.inspection?.format;
+  const tarName = singleSource?.name ?? '';
+  const tarSource = singleSource && !singleSource.directory && (signature === 'tar'
+    || (signature === 'file' || !signature) && /\.tar$/i.test(tarName)
+    || (!signature || signature === 'gzip') && /\.(tar\.gz|tgz)$/i.test(tarName)
+    || (!signature || signature === 'bzip2') && /\.(tar\.bz2|tbz2?)$/i.test(tarName)
+    || (!signature || signature === 'xz') && /\.(tar\.xz|txz)$/i.test(tarName));
+  const verificationLabel = zipSource && capability?.zipVerification ? 'Test ZIP integrity'
+    : tarSource && capability?.tarVerification ? 'Test TAR integrity' : '';
   const archiveTargets = resolveArchiveTargets(chosen, capability);
   const browserInputs = chosen.every(source => !!source.file);
   const archiveTarget = target === 'spk' && browserInputs || archiveTargets.includes(target) ? target : archiveTargets[0] || 'zip';
@@ -336,7 +345,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       setError('ZIP comments accept printable ASCII characters only.');
       return;
     }
-    if (operation === 'verify' && (!zipSource || !capability?.zipVerification)) return;
+    if (operation === 'verify' && !verificationLabel) return;
     if (operation === 'inspect' && !canInspectOffice) return;
     if (repack && !canRepack) return;
     if (operation === 'convert' && ['mp3', 'aac', 'm4a', 'ogg', 'opus', 'jpg'].includes(conversionTarget) && qualityMode !== 'lossy') {
@@ -634,9 +643,9 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
             onClick={() => void submit('inspect')}><File size={16} /> Inspect Office document</button>
           <p className="footnote">Uploads the document and returns a package metadata report.</p>
         </div>}
-        {zipSource && capability?.zipVerification && <div className="zip-inspection">
-          <button className="button secondary" disabled={busy || recovering || spkBusy || offline} onClick={() => void submit('verify')}><ShieldCheck size={16} /> Test ZIP integrity</button>
-          <p className="footnote">Uploads the ZIP to the processor for a downloadable integrity report.</p>
+        {verificationLabel && <div className="zip-inspection">
+          <button className="button secondary" disabled={busy || recovering || spkBusy || offline} onClick={() => void submit('verify')}><ShieldCheck size={16} /> {verificationLabel}</button>
+          <p className="footnote">Uploads the archive to the processor for a downloadable integrity report.</p>
         </div>}
       </section>}
       {capability?.inspection && sources.length > 0 && <p className="footnote">File detection sends the first 512 bytes to your processor. Processor jobs upload full files. ZIP inspection runs in this browser.</p>}

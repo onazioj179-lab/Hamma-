@@ -13,7 +13,7 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 | Responsive UI and motion | PARTIAL | Web workspace styles and mobile-web entry. Audit all requested motion patterns, touch targets, keyboard interactions and reduced motion under load. |
 | Archive creation and compression planning | PARTIAL | ZIP has Fastest, Balanced, Maximum and sample-based Auto profiles. Other formats, dictionary/solid policies and a shared cross-format planner remain open. |
 | Archive extraction and integrity | PARTIAL | `processor/engine.py` emits a verified ZIP. ZIP index allocation is bounded, ambiguous names are rejected, and TAR preflight checks effective PAX sizes and compressed trailers. Add interoperability and malformed corpus coverage for remaining formats. |
-| Archive inspection, selection, testing and conversion | PARTIAL | Local ZIP inspection, selective ZIP extraction, ZIP integrity checks and repacking supported inputs as Deflate ZIP are available. Additional integrity-test formats and repack targets remain open. |
+| Archive inspection, selection, testing and conversion | PARTIAL | Local ZIP inspection, selective ZIP extraction, integrity reports for ZIP and TAR (including gzip, bzip2 and xz wrappers), and repacking supported inputs as Deflate ZIP are available. Additional integrity-test formats and repack targets remain open. |
 | Archive passwords, encryption and repair | PARTIAL | Rust SPK has encryption/recovery modules. The processor rejects password-protected ZIP. Add standard-format interoperability and secret handling tests before exposing those controls. |
 | Split/join and archive comments | PARTIAL | ZIP creation and local inspection support archive comments. Split/join, member comments and other formats remain open. |
 | Native C++20 and ABI | PARTIAL | `native/` implements Zstandard streaming behind a versioned subprocess protocol and a C ABI v1 shared library. The ABI has a compiled C round-trip test. Other codecs and media remain outside the native ABI. |
@@ -129,6 +129,11 @@ render the document, open its contents, or validate layout fidelity.
 
 ## TAR acceptance for this change
 
+- **Test TAR integrity** uses the same preflight and member safety checks as
+  extraction. It reports observed member SHA-256 digests without writing
+  extracted files. A TAR header checksum covers header metadata. Comparing
+  member digests with an independent reference is required to authenticate
+  original contents.
 - A local PAX size override determines the payload boundary used for both
   preflight and extraction. Regression fixtures cover a valid override and
   oversized metadata concealed by a conflicting raw header size.

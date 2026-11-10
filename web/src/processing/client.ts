@@ -3,6 +3,7 @@ export interface Capability {
   projectRecovery?: boolean;
   inspection?: boolean;
   zipVerification?: boolean;
+  tarVerification?: boolean;
   zipSelection?: boolean;
   archiveRepack?: boolean;
   officeInspection?: boolean;
