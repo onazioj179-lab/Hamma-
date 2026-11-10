@@ -15,7 +15,7 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 | Archive extraction and integrity | PARTIAL | `processor/engine.py` emits a verified ZIP. ZIP index allocation is bounded, ambiguous names are rejected, and TAR preflight checks effective PAX sizes and compressed trailers. Add interoperability and malformed corpus coverage for remaining formats. |
 | Archive inspection, selection, testing and conversion | PARTIAL | Local ZIP inspection, selective ZIP extraction, ZIP integrity checks and repacking supported inputs as Deflate ZIP are available. Additional integrity-test formats and repack targets remain open. |
 | Archive passwords, encryption and repair | PARTIAL | Rust SPK has encryption/recovery modules. The processor rejects password-protected ZIP. Add standard-format interoperability and secret handling tests before exposing those controls. |
-| Split/join and archive comments | MISSING | Add format-specific support after selecting libraries and validating recovery and metadata behavior. |
+| Split/join and archive comments | PARTIAL | ZIP creation and local inspection support archive comments. Split/join, member comments and other formats remain open. |
 | Native C++20 and ABI | PARTIAL | `native/` implements Zstandard streaming behind a versioned subprocess protocol and a C ABI v1 shared library. The ABI has a compiled C round-trip test. Other codecs and media remain outside the native ABI. |
 | Hardware capabilities and dispatch | PARTIAL | Native CPU flags and resource admission exist. Measure device-specific paths and exercise CPU fallback. GPU, power-aware and NUMA scheduling remain open. |
 | Streaming and large payloads | PARTIAL | Native codec, processor transfers and local indexing are bounded in parts. Exercise real large payloads, cancellation, disk exhaustion, memory pressure and 64-bit offsets end to end. |
@@ -81,6 +81,10 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
   most 64 KiB per file and stores members whose sample saves less than 1%.
   Every profile verifies original bytes after packaging. The job records the
   chosen profile for retries. The selector resets to Balanced on project changes.
+- ZIP creation accepts an optional plain-text archive comment of up to 1,024
+  printable ASCII characters. The worker verifies the embedded bytes before
+  publishing. Local inspection previews up to 4,096 comment bytes and escapes
+  bytes outside printable ASCII.
 - **Test ZIP integrity** uploads one ZIP to the processor. The job streams
   stored or Deflate members through the existing archive quotas, checks
   decoded size and ZIP CRC, and records SHA-256 digests in a JSON report.
@@ -92,6 +96,16 @@ The video conversion picker offers the audio formats supported by the installed
 encoders and muxers. The worker probes for audio streams and packages multiple
 tracks in a ZIP. The HTTP regression downloads a ZIP with two shorter tracks
 from a longer video and checks the archive and member hashes and WAV sample counts.
+
+## H.264 MP4 preset
+
+The workspace offers **MP4 (H.264)** when FFmpeg has the MP4 muxer and the
+libx264, AAC and timed-text encoders. The preset requires explicit lossy consent
+and encodes even-sized video as 8-bit 4:2:0 at CRF 23 with the medium preset.
+It converts audio to AAC and supported text subtitles to MP4 timed text.
+Unsupported subtitles fail conversion. The job checks output stream counts,
+codecs and duration where available, then decodes audio and video through EOF.
+The regular MP4 choice still uses stream copy.
 
 ## Portable workspace acceptance
 

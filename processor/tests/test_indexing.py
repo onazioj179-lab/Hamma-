@@ -1,5 +1,6 @@
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import subprocess
@@ -75,10 +76,20 @@ class DurableDiscoveryTests(unittest.TestCase):
         outside = self.base / 'outside'
         outside.mkdir()
         (outside / 'secret').write_text('private')
+        link = self.root / 'link'
         try:
-            (self.root / 'link').symlink_to(outside, target_is_directory=True)
-        except OSError:
-            self.skipTest('Symlink creation unavailable on this account')
+            link.symlink_to(outside, target_is_directory=True)
+        except OSError as error:
+            if sys.platform != 'win32' or error.winerror != 1314:
+                raise
+            # A junction exercises the Windows reparse-point path without
+            # requiring the account privilege to create a symbolic link.
+            subprocess.run([
+                'powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+                'New-Item -ItemType Junction -Path $env:SHANTE_TEST_LINK '
+                '-Target $env:SHANTE_TEST_TARGET -ErrorAction Stop | Out-Null',
+            ], env={**os.environ, 'SHANTE_TEST_LINK': str(link), 'SHANTE_TEST_TARGET': str(outside)},
+                check=True, capture_output=True, timeout=20)
         index = self.index()
         self.assertTrue(index.discover())
         self.assertEqual([(row['path'], row['kind']) for row in index.page()], [('link', 'link')])
