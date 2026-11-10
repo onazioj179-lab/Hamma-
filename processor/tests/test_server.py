@@ -1,5 +1,7 @@
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
+from http.client import HTTPConnection
 from http.cookiejar import CookieJar
 from http.server import ThreadingHTTPServer
 import io
@@ -8,6 +10,7 @@ import os
 import random
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import tempfile
 import tarfile
@@ -34,7 +37,8 @@ class ServerTests(unittest.TestCase):
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.base = f"http://127.0.0.1:{self.server.server_port}/api/process"
-        self.client = build_opener(HTTPCookieProcessor(CookieJar()))
+        self.cookies = CookieJar()
+        self.client = build_opener(HTTPCookieProcessor(self.cookies))
 
     def tearDown(self):
         self.service.close()
@@ -192,6 +196,65 @@ class ServerTests(unittest.TestCase):
         missing = self.upload(b"missing", "missing.txt")
         (self.service.store.folder(owner, missing["id"]) / "input").unlink()
         self.assert_status(410, lambda: self.call("/uploads/" + missing["id"]))
+
+    def start_partial_upload(self, path):
+        connection = HTTPConnection("127.0.0.1", self.server.server_port, timeout=5)
+        self.addCleanup(connection.close)
+        entered = threading.Event()
+        get_record = self.service.store.get
+
+        def observe_lookup(*args, **kwargs):
+            record = get_record(*args, **kwargs)
+            entered.set()
+            return record
+
+        with patch.object(self.service.store, "get", side_effect=observe_lookup):
+            connection.putrequest("PUT", "/api/process" + path)
+            connection.putheader("Cookie", "; ".join(f"{c.name}={c.value}" for c in self.cookies))
+            connection.putheader("X-Hamma-Request", "1")
+            connection.putheader("Upload-Offset", "0")
+            connection.putheader("Content-Length", "8")
+            connection.endheaders(b"old")
+            self.assertTrue(entered.wait(5), "The PUT request did not reach the upload route")
+        return connection
+
+    def test_stalled_upload_allows_health_checks_and_rechecks_competing_writes(self):
+        record = self.call("/uploads", {"name": "race.txt", "size": 8}, "POST")
+        path = "/uploads/" + record["id"]
+        pending = self.start_partial_upload(path)
+        with closing(HTTPConnection("127.0.0.1", self.server.server_port, timeout=5)) as health:
+            health.request("GET", "/api/process/health")
+            with health.getresponse() as response:
+                self.assertEqual(response.status, 200)
+                self.assertEqual(json.load(response)["activeJobs"], 0)
+        self.assertEqual(self.call(path)["offset"], 0)
+        self.assertEqual(json.loads(self.call(path, b"new data", "PUT", {"Upload-Offset": "0"}, raw=True)), {"offset": 8})
+        pending.send(b" data")
+        with pending.getresponse() as response:
+            self.assertEqual(response.status, 409)
+        owner = self.service.store.list(kind="upload")[0][0]
+        self.assertEqual((self.service.store.folder(owner, record["id"]) / "input").read_bytes(), b"new data")
+
+    def test_interrupted_chunk_leaves_committed_offset_unchanged(self):
+        record = self.call("/uploads", {"name": "resume.txt", "size": 8}, "POST")
+        path = "/uploads/" + record["id"]
+        pending = self.start_partial_upload(path)
+        pending.sock.shutdown(socket.SHUT_WR)
+        with pending.getresponse() as response:
+            self.assertEqual(response.status, 400)
+        self.assertEqual(self.call(path)["offset"], 0)
+        self.assertEqual(json.loads(self.call(path, b"new data", "PUT", {"Upload-Offset": "0"}, raw=True)), {"offset": 8})
+
+    def test_pending_chunk_cannot_recreate_deleted_upload(self):
+        record = self.call("/uploads", {"name": "deleted.txt", "size": 8}, "POST")
+        path = "/uploads/" + record["id"]
+        pending = self.start_partial_upload(path)
+        owner = self.service.store.list(kind="upload")[0][0]
+        self.assertEqual(self.call(path, method="DELETE"), {"deleted": True})
+        pending.send(b" data")
+        with pending.getresponse() as response:
+            self.assertEqual(response.status, 404)
+        self.assertFalse(self.service.store.folder(owner, record["id"]).exists())
 
     def test_retry_cannot_bypass_queue_capacity(self):
         job = self.job()
@@ -552,12 +615,12 @@ class ServerTests(unittest.TestCase):
 
     def test_actual_background_worker_process_completes_and_releases_slot(self):
         job = self.job()
-        # Admission can correctly defer a job under transient memory pressure.
-        # Exercise the production scheduler loop rather than expecting one tick
-        # to admit work regardless of host resources.
+        # Exercise both admission outcomes independently of host memory pressure.
         with patch('processor.server.available_memory', return_value=0):
             self.service.tick()
         self.assertEqual(self.call('/jobs/' + job['id'])['state'], 'queued')
+        with patch('processor.server.available_memory', return_value=2 * 1024**3):
+            self.service.tick()
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             self.service.tick()
