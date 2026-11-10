@@ -28,6 +28,7 @@ from socketserver import TCPServer
 import subprocess
 import shutil
 import sqlite3
+import tempfile
 import threading
 import tarfile
 import time
@@ -775,6 +776,50 @@ def handler(service):
                 raise HTTPError(400, "Expected a JSON object")
             return value
 
+        def upload_source(self, upload_id):
+            record = service.store.get(self.owner, "upload", upload_id)
+            if not record:
+                raise HTTPError(404, "File unavailable")
+            return record, service.store.folder(self.owner, upload_id) / "input"
+
+        def check_upload_chunk(self, upload_id, offset, length):
+            record, source = self.upload_source(upload_id)
+            if record["expires"] <= time.time() or not source.is_file():
+                raise HTTPError(410, "Upload expired or unavailable")
+            if record.get("sha256"):
+                raise HTTPError(409, "Upload already finalized")
+            if offset != source.stat().st_size:
+                raise HTTPError(409, "Upload offset changed")
+            if not 0 <= length <= 8 * BLOCK or offset + length > record["size"]:
+                raise HTTPError(413, "Invalid upload chunk")
+            return source
+
+        def upload_chunk(self, upload_id):
+            offset = int(self.headers.get("Upload-Offset", "-1"))
+            length = int(self.headers.get("Content-Length", "-1"))
+            with service.lock:
+                self.check_upload_chunk(upload_id, offset, length)
+
+            # Network reads can stall. Stage at most one bounded chunk per
+            # request, then recheck state before committing any bytes.
+            with tempfile.TemporaryFile(dir=service.store.root) as pending:
+                remaining = length
+                while remaining:
+                    chunk = self.rfile.read(min(BLOCK, remaining))
+                    if not chunk:
+                        raise HTTPError(400, "Upload interrupted")
+                    pending.write(chunk)
+                    remaining -= len(chunk)
+                pending.seek(0)
+                with service.lock:
+                    source = self.check_upload_chunk(upload_id, offset, length)
+                    with source.open("ab") as stream:
+                        shutil.copyfileobj(pending, stream, BLOCK)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    committed = source.stat().st_size
+            return self.send(200, {"offset": committed})
+
         def route(self):
             self.connection.settimeout(30)
             self.identity()
@@ -970,42 +1015,23 @@ def handler(service):
             match = re.fullmatch(r"/api/process/uploads/([a-f0-9]{32})", path)
             if match:
                 upload_id = match[1]
+                if method == "PUT":
+                    return self.upload_chunk(upload_id)
                 with service.lock:
-                    record = service.store.get(self.owner, "upload", upload_id)
-                    if not record:
-                        raise HTTPError(404, "File unavailable")
-                    source = service.store.folder(self.owner, upload_id) / "input"
-                    if method in ("GET", "PUT") and (record["expires"] <= time.time() or not source.is_file()):
-                        raise HTTPError(410, "Upload expired or unavailable")
+                    record, source = self.upload_source(upload_id)
                     if method == "GET":
-                        return self.send(200, {**record, "offset": source.stat().st_size})
+                        if record["expires"] <= time.time() or not source.is_file():
+                            raise HTTPError(410, "Upload expired or unavailable")
+                        result = {**record, "offset": source.stat().st_size}
                     if method == "DELETE":
                         if service.store.upload_referenced(self.owner, upload_id):
                             raise HTTPError(409, "File in use")
                         if source.parent.exists():
                             shutil.rmtree(source.parent)
                         service.store.delete(self.owner, upload_id)
-                        return self.send(200, {"deleted": True})
-                    if method == "PUT":
-                        if record.get("sha256"):
-                            raise HTTPError(409, "Upload already finalized")
-                        offset = int(self.headers.get("Upload-Offset", "-1"))
-                        length = int(self.headers.get("Content-Length", "-1"))
-                        if offset != source.stat().st_size:
-                            raise HTTPError(409, "Upload offset changed")
-                        if not 0 <= length <= 8 * BLOCK or offset + length > record["size"]:
-                            raise HTTPError(413, "Invalid upload chunk")
-                        remaining = length
-                        with source.open("ab") as stream:
-                            while remaining:
-                                chunk = self.rfile.read(min(BLOCK, remaining))
-                                if not chunk:
-                                    raise HTTPError(400, "Upload interrupted")
-                                stream.write(chunk)
-                                remaining -= len(chunk)
-                            stream.flush()
-                            os.fsync(stream.fileno())
-                        return self.send(200, {"offset": source.stat().st_size})
+                        result = {"deleted": True}
+                if method in ("GET", "DELETE"):
+                    return self.send(200, result)
             if path == "/api/process/jobs" and method == "POST":
                 body = self.json_body()
                 ids = body.get("uploads")
