@@ -53,6 +53,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const [savingRetention, setSavingRetention] = useState(false);
   const [target, setTarget] = useState('zip');
   const [zipProfile, setZipProfile] = useState('balanced');
+  const [zipComment, setZipComment] = useState('');
   const [conversion, setConversion] = useState('wav');
   const [qualityMode, setQualityMode] = useState<'lossless' | 'lossy'>('lossless');
   const [metadataPolicy, setMetadataPolicy] = useState<'strip' | 'preserve'>('strip');
@@ -195,7 +196,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       const transferableIds = new Set(transferable.map(source => source.id));
       setSources(transferable); setSelected(previous => new Set([...previous].filter(id => transferableIds.has(id))));
       drafts.current.clear(); setProjectIds(['default']); setProjectId('default'); currentProject.current = 'default';
-      setSourceErrors({}); setTarget('zip'); setZipProfile('balanced'); setConversion('wav'); setQualityMode('lossless'); setMetadataPolicy('strip'); setRecursive(false);
+      setSourceErrors({}); setTarget('zip'); setZipProfile('balanced'); setZipComment(''); setConversion('wav'); setQualityMode('lossless'); setMetadataPolicy('strip'); setRecursive(false);
       abort.current?.abort(); folderController.current?.abort(); setFolderHelp(false);
       refreshController.current?.abort(); refreshFlight.current = null;
       deletionPreviewController.current?.abort();
@@ -292,7 +293,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     drafts.current.set(projectId, { sources, selected, target, conversion, qualityMode, metadataPolicy, recursive, errors: sourceErrors });
     const draft = drafts.current.get(id);
     setSources(draft?.sources || []); setSelected(draft?.selected || new Set());
-    setTarget(draft?.target || 'zip'); setZipProfile('balanced'); setConversion(draft?.conversion || 'wav');
+    setTarget(draft?.target || 'zip'); setZipProfile('balanced'); setZipComment(''); setConversion(draft?.conversion || 'wav');
     setQualityMode(draft?.qualityMode || 'lossless'); setMetadataPolicy(draft?.metadataPolicy || 'strip');
     setRecursive(draft?.recursive || false); setSourceErrors(draft?.errors || {});
     setProjectId(id); setPage(0); setScroll(0); setError(''); setJobSelected(new Set());
@@ -325,11 +326,16 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     (!singleSource.inspection || singleSource.inspection.error || singleSource.inspection.format === 'zip') &&
     /\.(docx|xlsx|pptx)$/i.test(singleSource.name);
   const conversionTarget = actions.conversions.includes(conversion) ? conversion : actions.conversions[0];
+  const comment = archiveTarget === 'zip' && capability?.zipComments ? zipComment : '';
   const submit = async (operation: 'compress' | 'extract' | 'convert' | 'verify' | 'inspect', options: { zipIndexes?: number[]; repack?: boolean } = {}) => {
     const { zipIndexes, repack } = options;
     if (accountChanging()) return;
     if (submitting.current || recovering || capability?.projectRecovery && !recoveryReady || spkBusy || !chosen.length) return;
     if (operation === 'convert' && !conversionTarget) return;
+    if (operation === 'compress' && /[^ -~]/.test(comment)) {
+      setError('ZIP comments accept printable ASCII characters only.');
+      return;
+    }
     if (operation === 'verify' && (!zipSource || !capability?.zipVerification)) return;
     if (operation === 'inspect' && !canInspectOffice) return;
     if (repack && !canRepack) return;
@@ -402,8 +408,9 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       if (operation === 'compress') {
         const profiles = archiveTarget === 'zip' && capability.zipProfiles?.includes(zipProfile) && zipProfile !== 'balanced'
           ? { zipProfile } : {};
-        const identity = [generation, projectId, inputs.map(i => i.source.id), operation, archiveTarget, ...Object.values(profiles)];
-        await jsonRequest('/jobs', { ...(projectId === 'default' ? {} : { projectId }), uploads: inputs.map(i => i.id), operation, target: archiveTarget, ...profiles, ...(capability.projectRecovery ? { recoverable: true } : { requestId: await requestId(identity) }) }, 'POST', { signal: controller.signal });
+        const identity = [generation, projectId, inputs.map(i => i.source.id), operation, archiveTarget, ...Object.values(profiles), ...(comment ? [['zipComment', comment]] : [])];
+        await jsonRequest('/jobs', { ...(projectId === 'default' ? {} : { projectId }), uploads: inputs.map(i => i.id), operation, target: archiveTarget, ...profiles, ...(comment ? { zipComment: comment } : {}), ...(capability.projectRecovery ? { recoverable: true } : { requestId: await requestId(identity) }) }, 'POST', { signal: controller.signal });
+        if (comment && generation === ownerGeneration.current) setZipComment('');
         inputs.forEach(i => submitted.add(i.source.id));
       }
     } catch (caught) {
@@ -605,6 +612,15 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
               {capability.zipProfiles.map(profile => <option key={profile} value={profile}>{profile[0].toUpperCase() + profile.slice(1)}</option>)}
             </SelectField>
           </label>
+        </div>}
+        {archiveTarget === 'zip' && capability?.zipComments && <div className="zip-inspection">
+          <details>
+            <summary>ZIP comment</summary>
+            <label className="search-field"><input aria-label="ZIP archive comment" placeholder="Optional archive comment"
+              value={zipComment} maxLength={1024} disabled={busy || recovering || spkBusy}
+              onChange={event => setZipComment(event.target.value)} /></label>
+            <p className="footnote">The ZIP stores this comment in plain text. Use up to 1,024 printable ASCII characters.</p>
+          </details>
         </div>}
         {visible && zipSource?.file && <ZipInspection key={projectId + ':' + zipSource.id} file={zipSource.file}
           disabled={busy || recovering || spkBusy || offline}

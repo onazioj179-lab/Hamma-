@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react';
-import { inspectZip, type ZipMember } from '../../processing/zip-inspection';
+import { inspectZip, type ZipDirectory } from '../../processing/zip-inspection';
 import { formatFileSize } from '../../utils/fileHelpers';
 
 const PAGE_SIZE = 50;
@@ -22,7 +22,7 @@ export function ZipInspection(props: Props) {
 }
 
 function ZipMembers({ file, disabled, onExtract }: Props) {
-  const [members, setMembers] = useState<ZipMember[] | null>(null);
+  const [directory, setDirectory] = useState<ZipDirectory | null>(null);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(0);
@@ -30,7 +30,7 @@ function ZipMembers({ file, disabled, onExtract }: Props) {
   useEffect(() => {
     let active = true;
     void inspectZip(file).then(result => {
-      if (active) setMembers(result);
+      if (active) setDirectory(result);
     }).catch(caught => {
       if (active) setError(caught instanceof Error ? caught.message : 'ZIP inspection failed');
     });
@@ -38,12 +38,14 @@ function ZipMembers({ file, disabled, onExtract }: Props) {
   }, [file]);
 
   if (error) return <p role="alert">{error}</p>;
-  if (!members) return <p role="status">Reading ZIP directory…</p>;
+  if (!directory) return <p role="status">Reading ZIP directory…</p>;
+  const { members, comment } = directory;
   const search = query.toLowerCase();
   const matches = members.map((member, index) => ({ member, index }))
     .filter(({ member }) => member.name.toLowerCase().includes(search));
   return <>
     <p className="footnote">Local directory listing. File contents and checksums are unchecked.</p>
+    {comment && <details><summary>Archive comment</summary><p className="zip-comment-preview"><bdi>{comment}</bdi></p></details>}
     <label className="search-field"><input aria-label="Search ZIP entries" placeholder="Search ZIP entries" value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} /></label>
     <p role="status">{matches.length.toLocaleString()} of {members.length.toLocaleString()} entries</p>
     {onExtract && <button className="button secondary" type="button" disabled={disabled || !selected.size}

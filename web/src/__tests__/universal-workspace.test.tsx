@@ -33,12 +33,15 @@ const select = async (files: File[]) => {
 it('opens and searches a ZIP directory without uploading the archive', async () => {
   await render();
   const bytes = new Uint8Array(zipSync({ 'first.txt': new Uint8Array([1]), 'second.txt': new Uint8Array([2]) }));
-  await select([new File([bytes], 'example.zip')]);
+  const comment = new TextEncoder().encode('Release archive');
+  new DataView(bytes.buffer).setUint16(bytes.length - 2, comment.length, true);
+  await select([new File([bytes, comment], 'example.zip')]);
   await act(async () => button('Inspect ZIP').click());
   await vi.waitFor(async () => {
     await act(async () => {});
     expect(host.textContent).toContain('2 of 2 entries');
   });
+  expect(host.querySelector('.zip-comment-preview')?.textContent).toBe('Release archive');
   const search = host.querySelector<HTMLInputElement>('[aria-label="Search ZIP entries"]')!;
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, 'SECOND');
@@ -48,6 +51,27 @@ it('opens and searches a ZIP directory without uploading the archive', async () 
   expect(host.textContent).toContain('second.txt');
   expect(host.textContent).not.toContain('first.txt');
   expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/uploads'))).toBe(false);
+});
+
+it('submits a ZIP comment with the compression request and its identity', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
+    ? { ok: true, json: async () => ({ ...caps, zipComments: true }) } : initial(url));
+  vi.spyOn(processingClient, 'upload').mockResolvedValue('uploaded');
+  const key = vi.spyOn(processingClient, 'requestId').mockResolvedValue('comment-request');
+  const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({});
+  await render();
+  await select([new File(['fixture'], 'entry.txt')]);
+  const input = host.querySelector<HTMLInputElement>('[aria-label="ZIP archive comment"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Release notes');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await act(async () => button('Compress').click());
+  expect(key).toHaveBeenCalledWith(expect.arrayContaining([['zipComment', 'Release notes']]));
+  expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({
+    operation: 'compress', target: 'zip', zipComment: 'Release notes', requestId: 'comment-request',
+  }), 'POST', { signal: expect.any(AbortSignal) });
 });
 
 it('submits the original ZIP index after filtering the directory', async () => {

@@ -367,7 +367,16 @@ def file_digest(path: Path, context: Context):
         return context.copy(stream, Sink(), progress=False)
 
 
-def compress(inputs: list[dict], output: Path, target: str, ctx: Context, *, zip_profile="balanced"):
+def encode_zip_comment(comment):
+    if not isinstance(comment, str) or len(comment) > 1024 or any(not " " <= char <= "~" for char in comment):
+        raise ProcessingError("ZIP comments must be at most 1024 printable ASCII characters")
+    return comment.encode("ascii")
+
+
+def compress(inputs: list[dict], output: Path, target: str, ctx: Context, *, zip_profile="balanced", zip_comment=""):
+    comment = encode_zip_comment(zip_comment)
+    if comment and target != "zip":
+        raise ProcessingError("Archive comments require ZIP")
     manifest = []
     names = [(item, ctx.register(item["name"], item.get("directory", False))) for item in inputs]
     if target == "zstd":
@@ -392,6 +401,7 @@ def compress(inputs: list[dict], output: Path, target: str, ctx: Context, *, zip
             bounded, "w", compression=zipfile.ZIP_DEFLATED,
             compresslevel=ZIP_PROFILES[zip_profile], allowZip64=True,
         ) as archive:
+            archive.comment = comment
             for item, name in names:
                 ctx.check()
                 if item.get("directory"):
@@ -409,7 +419,7 @@ def compress(inputs: list[dict], output: Path, target: str, ctx: Context, *, zip
                             manifest.append({"name": name, **ctx.copy(source, dest)})
         ctx.report(state="verifying")
         with zipfile.ZipFile(output) as archive:
-            if archive.namelist() != [row["name"] for row in manifest]:
+            if archive.comment != comment or archive.namelist() != [row["name"] for row in manifest]:
                 raise ProcessingError("Archive verification failed")
             for row in manifest:
                 if not row.get("directory"):
