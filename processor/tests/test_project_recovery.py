@@ -84,6 +84,29 @@ class ProjectRecoveryRoutes(unittest.TestCase):
         self.service.projects.cleanup()
         self.assertEqual(self.call('/projects/default/inputs')['total'], 0)
 
+    def test_upload_reservation_recovers_after_final_chunk_without_checkpoint(self):
+        self.save()
+        source_id = 'c' * 32
+        body = {'projectId': 'default', 'sourceId': source_id, 'name': 'restart.txt', 'size': 3}
+        upload = self.call('/uploads', body, 'POST')
+        self.assertEqual(self.call('/uploads', body, 'POST')['id'], upload['id'])
+        self.assertEqual(self.service.store.count(kind='upload'), 1)
+        self.assert_status(409, lambda: self.call('/uploads', {**body, 'size': 4}, 'POST'))
+        stranger = build_opener(HTTPCookieProcessor(CookieJar()))
+        self.assert_status(404, lambda: self.call('/uploads', body, 'POST', client=stranger))
+        self.call('/uploads/' + upload['id'], b'a', 'PUT', {'Upload-Offset': '0'}, raw=True)
+        page = self.call('/projects/default/inputs')
+        self.assertEqual((page['sources'], page['unavailable']), ([], 1))
+        self.call('/uploads/' + upload['id'], b'bc', 'PUT', {'Upload-Offset': '1'}, raw=True)
+        owner = self.service.store.list(kind='project')[0][0]
+        recovered = Projects(Store(self.temp.name), self.service.limits).inputs(owner, 'default')
+        self.assertEqual([(s['id'], s['upload'], s['uploaded']) for s in recovered['sources']],
+                         [(source_id, upload['id'], 3)])
+        job = self.call('/jobs', {'uploads': [upload['id']], 'operation': 'compress',
+                                 'target': 'zip', 'recoverable': True}, 'POST')
+        self.assertEqual(self.execute(job)['state'], 'completed')
+        self.assertEqual(self.call('/projects/default/inputs')['total'], 0)
+
     def test_lost_submission_response_reconciles_without_duplicate_job(self):
         self.save()
         upload = self.upload()

@@ -1,4 +1,4 @@
-"""Owner-scoped settings and references to completely uploaded recovery inputs.
+"""Owner-scoped settings and references to project uploads.
 
 Inputs retain their upload expiry. This store neither copies file contents nor
 extends retention, and it never treats a partial upload as recoverable.
@@ -83,6 +83,27 @@ class Projects:
         if not record:
             raise ProjectError(404, 'Project unavailable')
         return record
+
+    def prepare_upload(self, owner, project_id, source_id, name, size, directory):
+        """Under the service lock, reconcile a lost reservation response."""
+        self.get(owner, project_id)
+        if not isinstance(source_id, str) or not re.fullmatch(r'[a-f0-9]{32}', source_id):
+            raise ProjectError(400, 'Invalid recovery input')
+        with self.store.connect() as db:
+            existing = db.execute('SELECT upload_id FROM project_inputs WHERE owner=? AND project_id=? AND source_id=?',
+                                  (owner, project_id, source_id)).fetchone()
+            if not existing:
+                count = db.execute('SELECT count(*) FROM project_inputs WHERE owner=? AND project_id=?',
+                                   (owner, project_id)).fetchone()[0]
+                if count >= self.limits['files']:
+                    raise ProjectError(413, 'Project file limit reached')
+                return None
+        upload = self.store.get(owner, 'upload', existing[0])
+        if not upload or upload['expires'] <= time.time() or not (self.store.folder(owner, upload['id']) / 'input').is_file():
+            return None
+        if (upload['name'], upload['size'], upload['directory']) != (name, size, directory):
+            raise ProjectError(409, 'Recovery input identifier already used')
+        return upload
 
     def checkpoint(self, owner, project_id, source_id, upload_id):
         self.get(owner, project_id)

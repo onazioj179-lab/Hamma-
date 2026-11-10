@@ -8,12 +8,16 @@ VERIFIED applies to the stated scope. PARTIAL describes an implemented subset.
 MISSING denotes a capability without implementation evidence in this scope.
 BLOCKED denotes acceptance that requires external infrastructure or credentials.
 
-## Remaining release work
+## HAMMA web backlog
+
+The older engineering status documents record earlier validation snapshots.
+Use this table to track current HAMMA web work in priority order.
 
 | Work | Acceptance |
 | --- | --- |
-| Validate the integrated web release | Integrate PRs #37 and #38 and verify browser workflows, processor behavior, and the production web build on the resulting commit. |
-| Scale browser jobs and recovery | Connect browser folder discovery to disk-backed manifests. Verify paged input and output lists, concurrent project fairness, per-file retry, and browser restart recovery with real payloads. |
+| Validate the integrated web release | PR #39 combines PRs #37 and #38. Review its web build, browser workflow and processor checks before merging. |
+| Finish browser recovery | Completed uploads survive a refresh even when the final upload response is lost. Restore incomplete uploads and unuploaded selections after a tab closes, then verify with interrupted multi-file jobs and real payloads. |
+| Scale browser jobs | Connect browser folder discovery to disk-backed manifests. Verify paged input and output lists, concurrent project fairness, and per-file retry under sustained load. |
 | Complete processing coverage | Exercise archive interoperability, encryption, split/join, and broader codecs. Build PDF and Office conversions with isolated parsers. Check decoded bytes, format fidelity and advertised capabilities. |
 | Harden untrusted processing | Enforce per-worker filesystem and network isolation, test the production tenant boundary, and expand advisory, SBOM and fuzz coverage. |
 | Validate browser devices | Test mobile and foldable layouts, touch input, keyboard access, and recovery on physical devices. |
@@ -41,11 +45,10 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 | Safe preview and parser isolation | PARTIAL | Signature and media probe paths, worker limits and parser whitelists. Add an isolated preview service, strict per-worker controls and external file/network access tests. |
 | Dependency and security engineering | PARTIAL | Pinned Zstandard source, workflow checks and audit scripts. Expand SBOM and advisory coverage across Python, Rust, native and FFmpeg, and continue fuzzing and threat-model validation. |
 | APIs and MCP | PARTIAL | Python processor HTTP API and Rust compatibility API. No MCP integration established in this scope. Add versioned contracts and authorization tests before exposing tools. |
-| Desktop and mobile packaging | PARTIAL | The portable workspace bundles the built web UI, local processor and native CLI. A native desktop shell, signed update verification, notarization and physical-device support remain open. |
 | Runtime and build performance | PARTIAL | CMake/Ninja presets and local benchmark scripts. Record reproducible workload, memory and clean/incremental build measurements before selecting optimizations. |
 | Benchmarks against reference tools | PARTIAL | A seeded ZIP comparison measures time through verification and output size against bsdtar or 7-Zip. Broader workload, resource and media measurements remain open. |
 | Distributed jobs and object storage | BLOCKED | Single-node processor acceptance is separate. Multi-node validation requires an authorized deployment and object storage. Durable ownership, recovery and tenant isolation are open design work. |
-| CI, release and production monitoring | PARTIAL | `.github/workflows/` and `scripts/package-shante.py`. Full platform signing requires signing identities. Validate rollback, migration, monitoring and privacy in the intended environment. |
+| CI, release and production monitoring | PARTIAL | `.github/workflows/` checks the HAMMA web build and SHANTE processor. Validate rollback, migration, monitoring and privacy in the intended environment. |
 
 ## ZIP acceptance for this change
 
@@ -118,18 +121,6 @@ It converts audio to AAC and supported text subtitles to MP4 timed text.
 Unsupported subtitles fail conversion. The job checks output stream counts,
 codecs and duration where available, then decodes audio and video through EOF.
 The regular MP4 choice still uses stream copy.
-
-## Portable workspace acceptance
-
-- Build the web and native components, then run
-  `python scripts/package-shante.py --workspace`. The package stages licenses
-  and checksums and starts a temporary loopback server to test the browser
-  entry point and native and archive capabilities.
-- Extract the ZIP and run `python run-workspace.py` with Python 3.11 or newer.
-  Open `http://127.0.0.1:5010`. Use `--data` for a separate private job store.
-  Media conversion requires FFmpeg and FFprobe on PATH.
-- Packaging sets a stable strip timestamp. CI compares two archives from the
-  same built inputs. This check does not compare clean builds across toolchains.
 
 ## Comparative ZIP measurement
 

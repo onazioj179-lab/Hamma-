@@ -29,8 +29,11 @@ existing processing queue/download controls while other jobs continue.
 
 On processors advertising `groupedWorkflows: true`, per-type choices are saved
 with the owner's project settings. Complete-upload recovery restores the choices
-and pending input references after refresh. They are checked again against the
-current capabilities. A saved unsupported choice must be changed before running.
+and pending input references after refresh. Processors advertising
+`recoverableUploads: true` save the project reference when the upload starts,
+so a completed upload survives a lost final response or immediate page close.
+Choices are checked again against the current capabilities. A saved unsupported
+choice must be changed before running.
 Configured choices remain available even when just one failed group is left.
 Incomplete uploads and unuploaded local selections still need their original
 files after closing the page.

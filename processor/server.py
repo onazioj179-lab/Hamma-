@@ -104,11 +104,15 @@ class Store:
         finally:
             db.close()
 
-    def put(self, owner, kind, record):
+    def put(self, owner, kind, record, *, project_input=None):
         with self.connect() as db:
             db.execute("INSERT OR REPLACE INTO records VALUES (?,?,?,?,?)", (record["id"], owner, kind, record["created"], json.dumps(record)))
             if kind == "job":
                 self._sync_inputs(db, owner, record)
+            if project_input is not None:
+                project_id, source_id = project_input
+                db.execute("INSERT OR REPLACE INTO project_inputs VALUES (?,?,?,?,?)",
+                           (owner, project_id, source_id, record["id"], record["created"]))
 
     @staticmethod
     def _sync_inputs(db, owner, record):
@@ -856,6 +860,28 @@ def handler(service):
                 raise HTTPError(400, "Expected a JSON object")
             return value
 
+        def create_upload(self, name, size, directory, project_input):
+            if service.store.count(self.owner, "upload") >= self.plan['maxUploadFiles']:
+                raise HTTPError(413, "Retained file limit reached. Delete unused files before adding more.")
+            if service.store.count(kind="upload") >= service.max_uploads:
+                raise HTTPError(429, "Upload capacity reached. Delete unused uploads or wait for expiry.")
+            if service.reserved() + size > service.limits["storage"]:
+                raise HTTPError(507, "Storage full")
+            if service.store.reserved_bytes(self.owner) + size > self.plan['maxStorageBytes']:
+                raise HTTPError(413, 'Storage limit reached. Delete unused files or wait for their expiry.')
+            now = time.time()
+            record = {"id": secrets.token_hex(16), "created": now, "name": name, "size": size,
+                      "directory": directory, "expires": now + 86400, "offset": 0}
+            folder = service.store.folder(self.owner, record["id"])
+            folder.mkdir(mode=0o700, parents=True)
+            try:
+                (folder / "input").touch(mode=0o600)
+                service.store.put(self.owner, "upload", record, project_input=project_input)
+            except Exception:
+                shutil.rmtree(folder, ignore_errors=True)
+                raise
+            return record
+
         def upload_source(self, upload_id):
             record = service.store.get(self.owner, "upload", upload_id)
             if not record:
@@ -1006,7 +1032,7 @@ def handler(service):
                     raise HTTPError(400, str(error)) from error
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
-                return self.send(200, {"groupedWorkflows": True, "projectRecovery": True, "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "tarVerification": True, "zipSelection": True, "archiveRepack": True, "officeInspection": True, "zipComments": True, "zipProfiles": list(ZIP_PROFILES), "actionRegistry": action_registry(), "conversions": media_targets(),
+                return self.send(200, {"groupedWorkflows": True, "projectRecovery": True, "recoverableUploads": True, "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "tarVerification": True, "zipSelection": True, "archiveRepack": True, "officeInspection": True, "zipComments": True, "zipProfiles": list(ZIP_PROFILES), "actionRegistry": action_registry(), "conversions": media_targets(),
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
             if path == "/api/process/settings":
                 if method == "GET":
@@ -1060,38 +1086,33 @@ def handler(service):
                 body = self.json_body() if method == 'PUT' else None
                 with service.lock:
                     if not is_inputs and method == 'GET':
-                        return self.send(200, service.projects.get(self.owner, project_id))
-                    if not is_inputs and method == 'PUT':
-                        return self.send(200, service.projects.save(self.owner, project_id, body))
-                    if is_inputs and not source_id and method == 'GET':
+                        result = service.projects.get(self.owner, project_id)
+                    elif not is_inputs and method == 'PUT':
+                        result = service.projects.save(self.owner, project_id, body)
+                    elif is_inputs and not source_id and method == 'GET':
                         query = parse_qs(url.query)
-                        return self.send(200, service.projects.inputs(self.owner, project_id, query.get('after', [''])[0], int(query.get('limit', [100])[0])))
-                    if is_inputs and source_id and method == 'PUT':
+                        result = service.projects.inputs(self.owner, project_id, query.get('after', [''])[0], int(query.get('limit', [100])[0]))
+                    elif is_inputs and source_id and method == 'PUT':
                         service.projects.checkpoint(self.owner, project_id, source_id, body.get('upload'))
-                        return self.send(200, {'saved': True})
-                    if is_inputs and source_id and method == 'DELETE':
+                        result = {'saved': True}
+                    elif is_inputs and source_id and method == 'DELETE':
                         service.projects.forget_source(self.owner, project_id, source_id)
-                        return self.send(200, {'removed': True})
+                        result = {'removed': True}
+                    else:
+                        raise HTTPError(404, 'Not found')
+                return self.send(200, result)
             if path == "/api/process/uploads" and method == "POST":
                 body = self.json_body()
                 name = safe_path(body.get("name"), bool(body.get("directory")))
                 size = body.get("size")
                 if type(size) is not int or not 0 <= size <= self.plan['maxInputBytes'] or (body.get("directory") and size != 0):
                     raise HTTPError(413, "Upload size limit reached. Choose a smaller file.")
+                directory = bool(body.get("directory"))
+                project_input = (body.get('projectId'), body.get('sourceId')) if 'projectId' in body or 'sourceId' in body else None
                 with service.lock:
-                    if service.store.count(self.owner, "upload") >= self.plan['maxUploadFiles']:
-                        raise HTTPError(413, "Retained file limit reached. Delete unused files before adding more.")
-                    if service.store.count(kind="upload") >= service.max_uploads:
-                        raise HTTPError(429, "Upload capacity reached. Delete unused uploads or wait for expiry.")
-                    if service.reserved() + size > service.limits["storage"]:
-                        raise HTTPError(507, "Storage full")
-                    if service.store.reserved_bytes(self.owner) + size > self.plan['maxStorageBytes']:
-                        raise HTTPError(413, 'Storage limit reached. Delete unused files or wait for their expiry.')
-                    record = {"id": secrets.token_hex(16), "created": time.time(), "name": name, "size": size, "directory": bool(body.get("directory")), "expires": time.time() + 86400, "offset": 0}
-                    folder = service.store.folder(self.owner, record["id"])
-                    folder.mkdir(mode=0o700, parents=True)
-                    (folder / "input").touch(mode=0o600)
-                    service.store.put(self.owner, "upload", record)
+                    record = service.projects.prepare_upload(self.owner, *project_input, name, size, directory) if project_input is not None else None
+                    if record is None:
+                        record = self.create_upload(name, size, directory, project_input)
                 return self.send(201, record)
             match = re.fullmatch(r"/api/process/uploads/([a-f0-9]{32})", path)
             if match:

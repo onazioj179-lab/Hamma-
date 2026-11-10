@@ -2,6 +2,7 @@ export interface Inspection { format: string; conversions: string[]; extract: bo
 export interface Capability {
   groupedWorkflows?: boolean;
   projectRecovery?: boolean;
+  recoverableUploads?: boolean;
   inspection?: boolean;
   zipVerification?: boolean;
   tarVerification?: boolean;
@@ -85,11 +86,12 @@ export async function requestId(parts: unknown[]): Promise<string> {
 }
 
 /** Chunk retries reconcile the server's committed offset before sending more bytes. */
-export async function upload(source: Source, signal: AbortSignal, update: (offset: number) => void): Promise<string> {
+export async function upload(source: Source, signal: AbortSignal, update: (offset: number) => void, projectId?: string): Promise<string> {
   signal.throwIfAborted();
   const create = async () => {
     if (!source.directory && !source.file && source.size > 0) throw new Error('This recovered upload is unavailable. Select the original file again.');
-    const record = await jsonRequest<{ id: string }>('/uploads', { name: source.name, size: source.size, directory: source.directory }, 'POST', { signal });
+    const recovery = projectId === undefined ? {} : { projectId, sourceId: source.id };
+    const record = await jsonRequest<{ id: string }>('/uploads', { name: source.name, size: source.size, directory: source.directory, ...recovery }, 'POST', { signal });
     source.upload = record.id;
   };
   if (!source.upload) await create();

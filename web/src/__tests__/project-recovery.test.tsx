@@ -12,12 +12,13 @@ let checkpoint: { id: string; upload: string; name: string; size: number; direct
 let offset: number, chunkWrites: number, jobAttempts: number;
 let rejectJob: boolean;
 const uploadId = 'c'.repeat(32);
-const caps = { groupedWorkflows: true, projectRecovery: true, archives: ['zip'], conversions: [], version: 1, processing: 'local', limits: { files: 5000, input: 1e9, expanded: 1e9, seconds: 30 } };
+const caps = { groupedWorkflows: true, projectRecovery: true, recoverableUploads: false, archives: ['zip'], conversions: [], version: 1, processing: 'local', limits: { files: 5000, input: 1e9, expanded: 1e9, seconds: 30 } };
 const ok = (data: unknown) => ({ ok: true, status: 200, json: async () => data });
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   useAppStore.setState({ sessionOutputs: {}, recentArchives: [], history: [], result: null });
   saved = undefined; checkpoint = undefined; offset = 0; chunkWrites = 0; jobAttempts = 0; rejectJob = true;
+  caps.recoverableUploads = false;
   host = document.createElement('div'); document.body.append(host); root = createRoot(host);
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     const body = init?.body && typeof init.body === 'string' ? JSON.parse(init.body) : {};
@@ -30,10 +31,18 @@ beforeEach(() => {
     }
     if (url.includes('/projects/default/inputs?')) return ok({ sources: checkpoint ? [{ ...checkpoint, uploaded: checkpoint.size, inspection: { format: 'file', conversions: [], extract: false } }] : [], total: checkpoint ? 1 : 0, scanned: checkpoint ? 1 : 0, unavailable: 0, nextCursor: null });
     if (/\/projects\/default\/inputs\/[a-f0-9]{32}$/.test(url) && init?.method === 'PUT') {
+      expect(caps.recoverableUploads).toBe(false);
       checkpoint = { id: url.split('/').pop()!, upload: body.upload, name: 'resume.txt', size: 3, directory: false };
       return ok({ saved: true });
     }
-    if (url.endsWith('/uploads') && init?.method === 'POST') return ok({ id: uploadId });
+    if (url.endsWith('/uploads') && init?.method === 'POST') {
+      if (caps.recoverableUploads) {
+        expect(body.projectId).toBe('default');
+        expect(body.sourceId).toMatch(/^[a-f0-9]{32}$/);
+        checkpoint = { id: body.sourceId, upload: uploadId, name: body.name, size: body.size, directory: body.directory };
+      }
+      return ok({ id: uploadId });
+    }
     if (url.endsWith('/uploads/' + uploadId)) {
       if (init?.method === 'PUT') { chunkWrites++; offset += (init.body as Blob).size; }
       return ok({ offset });
@@ -54,7 +63,8 @@ afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi
 const render = async () => { await act(async () => root.render(<UniversalWorkspace visible screen="workspace" onHistory={() => {}} />)); };
 const compress = () => Array.from(host.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Compress')!;
 
-it('restores a completed upload after refresh and submits it without uploading its bytes again', async () => {
+it.each([false, true])('restores a completed upload without sending its bytes again (recoverableUploads=%s)', async recoverableUploads => {
+  caps.recoverableUploads = recoverableUploads;
   await render();
   const input = host.querySelector<HTMLInputElement>('[aria-label="Add files to queue"]')!;
   Object.defineProperty(input, 'files', { value: [new File(['abc'], 'resume.txt')], configurable: true });

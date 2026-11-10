@@ -146,7 +146,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
         return [...allocateSourcePaths(restored, retained), ...restored];
       });
       setSelected(previous => new Set([...previous, ...result.sources.map(source => source.id)]));
-      setRecoveryNotice(result.sources.length || result.unavailable ? `Recovered ${result.sources.length} uploaded ${result.sources.length === 1 ? 'file' : 'files'}.${result.unavailable ? ` ${result.unavailable} expired or unavailable files must be selected again.` : ''}` : '');
+      setRecoveryNotice(result.sources.length || result.unavailable ? `Recovered ${result.sources.length} uploaded ${result.sources.length === 1 ? 'file' : 'files'}.${result.unavailable ? ` Select the original files again for ${result.unavailable} incomplete, expired, or unavailable uploads.` : ''}` : '');
     } catch (caught) {
       if (!controller.signal.aborted && generation === ownerGeneration.current) throw caught;
     } finally {
@@ -398,8 +398,9 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
           if (!await onSpkSelect([source.file], true)) throw new Error('SPK restoration did not complete.');
         },
         prepare: async source => {
-          const id = await upload(source, controller.signal, offset => { if (generation === ownerGeneration.current) { source.uploaded = offset; setUploadStatus({ name: source.name, offset, size: source.size }); } });
-          if (capability.projectRecovery) await recovery.current.checkpoint(projectId, source, controller.signal);
+          const recoverOnUpload = capability.projectRecovery && capability.recoverableUploads;
+          const id = await upload(source, controller.signal, offset => { if (generation === ownerGeneration.current) { source.uploaded = offset; setUploadStatus({ name: source.name, offset, size: source.size }); } }, recoverOnUpload ? projectId : undefined);
+          if (capability.projectRecovery && !recoverOnUpload) await recovery.current.checkpoint(projectId, source, controller.signal);
           if (!planned && !capability.projectRecovery) sourcesByUpload.set(id, source.id);
           return id;
         },
