@@ -79,11 +79,13 @@ class Store:
             db.execute("CREATE INDEX IF NOT EXISTS records_owner_state ON records(owner,kind,json_extract(data,'$.state'))")
             db.execute("CREATE INDEX IF NOT EXISTS records_upload_bytes ON records(kind,json_extract(data,'$.size'))")
             db.execute("CREATE INDEX IF NOT EXISTS records_output_bytes ON records(kind,json_extract(data,'$.downloadAvailable'),json_extract(data,'$.outputSize'))")
+            db.execute("CREATE INDEX IF NOT EXISTS records_index_bytes ON records(kind,json_extract(data,'$.indexBytes'))")
             db.execute("CREATE INDEX IF NOT EXISTS records_expiry ON records(kind,json_extract(data,'$.expires'))")
             db.execute("CREATE INDEX IF NOT EXISTS records_file_expiry ON records(kind,json_extract(data,'$.fileExpires'))")
             db.execute("CREATE INDEX IF NOT EXISTS records_history_expiry ON records(kind,json_extract(data,'$.historyExpires'))")
             db.execute("CREATE INDEX IF NOT EXISTS records_owner_download_expiry ON records(owner,kind,json_extract(data,'$.downloadAvailable'),json_extract(data,'$.fileExpires'),created DESC)")
             db.execute("CREATE TABLE IF NOT EXISTS job_inputs (owner TEXT NOT NULL, job_id TEXT NOT NULL, upload_id TEXT NOT NULL, PRIMARY KEY(owner,job_id,upload_id))")
+            db.execute("CREATE TABLE IF NOT EXISTS local_index_sources(owner TEXT NOT NULL,job_id TEXT NOT NULL,root TEXT NOT NULL,PRIMARY KEY(owner,job_id))")
             db.execute("CREATE INDEX IF NOT EXISTS job_inputs_upload ON job_inputs(owner,upload_id,job_id)")
             db.execute("CREATE TABLE IF NOT EXISTS store_migrations (name TEXT PRIMARY KEY)")
             if not db.execute("SELECT 1 FROM store_migrations WHERE name='job-inputs-v1'").fetchone():
@@ -148,6 +150,16 @@ class Store:
         with self.connect() as db:
             db.execute("DELETE FROM records WHERE owner=? AND id=?", (owner, record_id))
             db.execute("DELETE FROM job_inputs WHERE owner=? AND job_id=?", (owner, record_id))
+            db.execute("DELETE FROM local_index_sources WHERE owner=? AND job_id=?", (owner, record_id))
+
+    def local_source(self, owner, job_id):
+        with self.connect() as db:
+            row = db.execute('SELECT root FROM local_index_sources WHERE owner=? AND job_id=?', (owner, job_id)).fetchone()
+        return Path(row[0]) if row else None
+
+    def forget_local_source(self, owner, job_id):
+        with self.connect() as db:
+            db.execute('DELETE FROM local_index_sources WHERE owner=? AND job_id=?', (owner, job_id))
 
     def count(self, owner=None, kind="job", states=None, visible=False):
         where, parameters = ["kind=?"], [kind]
@@ -181,7 +193,7 @@ class Store:
         with self.connect() as db:
             db.execute("BEGIN")
             total = db.execute("SELECT count(*) FROM records WHERE " + condition, parameters).fetchone()[0]
-            projection = "json_remove(data,'$.inputs','$.manifest','$.outputFile','$.filesCleaned','$.errorInfo.fileIds') AS data,json_array_length(data,'$.inputs') AS file_count" if summary else "data"
+            projection = "json_remove(data,'$.inputs','$.manifest','$.outputFile','$.filesCleaned','$.errorInfo.fileIds') AS data,coalesce(json_extract(data,'$.fileCount'),json_array_length(data,'$.inputs')) AS file_count" if summary else "data"
             rows = db.execute("SELECT " + projection + " FROM records WHERE " + condition + " ORDER BY " + ordering + " LIMIT ? OFFSET ?",
                               [*parameters, min(100, max(1, limit)), min(2**63 - 1, max(0, offset))]).fetchall()
         records = [json.loads(row["data"]) for row in rows]
@@ -238,7 +250,8 @@ class Store:
             scope, parameters = (" AND owner=?", (owner,)) if owner is not None else ("", ())
             uploads = db.execute("SELECT coalesce(sum(json_extract(data,'$.size')),0) FROM records WHERE kind='upload'" + scope, parameters).fetchone()[0]
             outputs = db.execute("SELECT coalesce(sum(coalesce(json_extract(data,'$.outputSize'),0)),0) FROM records WHERE kind='job' AND json_extract(data,'$.downloadAvailable')=1" + scope, parameters).fetchone()[0]
-        return uploads + outputs
+            indexes = db.execute("SELECT coalesce(sum(json_extract(data,'$.indexBytes')),0) FROM records WHERE kind='job'" + scope, parameters).fetchone()[0]
+        return uploads + outputs + indexes
 
     def upload_referenced(self, owner, upload_id, *, now=None, exclude_job=None):
         where, parameters = ["i.owner=?", "i.upload_id=?", "j.kind='job'"], [owner, upload_id]
@@ -297,7 +310,7 @@ def run_job(root, owner, job_id, limits, isolated=False):
 
     def report(**updates):
         now = time.monotonic()
-        if "state" in updates or now - last_report[0] >= .2:
+        if "state" in updates or 'phase' in updates or now - last_report[0] >= .2:
             store.patch(owner, "job", job_id, expected_states=ACTIVE, **updates)
             last_report[0] = now
 
@@ -320,7 +333,38 @@ def run_job(root, owner, job_id, limits, isolated=False):
             original = file_digest(Path(upload["path"]), ctx)
             if original["size"] != upload["size"] or original["sha256"] != upload["sha256"]:
                 raise ProcessingError("Input integrity check failed")
-        if job["operation"] == "compress":
+        indexed = None
+        if job.get('inputMode') == 'directory-index':
+            from .indexing import DirectoryIndex
+            from .indexed_archive import compress_index
+            source = store.local_source(owner, job_id)
+            if source is None:
+                raise ProcessingError('Local source authorization expired')
+            index = DirectoryIndex(directory / 'discovery.sqlite3', source, max_entries=limits['files'])
+
+            def account_index():
+                ctx.check()
+                size = sum(path.stat().st_size for path in directory.glob('discovery.sqlite3*') if path.is_file())
+                previous = store.get(owner, 'job', job_id) or {}
+                reserved = store.reserved_bytes() - previous.get('indexBytes', 0) + size
+                store.patch(owner, 'job', job_id, indexBytes=size)
+                if reserved + limits['expanded'] > limits['storage'] or shutil.disk_usage(directory).free < 64 * 1024**2:
+                    raise ProcessingError('Storage full')
+
+            index.checkpoint = account_index
+            account_index()
+            report(phase='indexing')
+            index.discover(cancelled=lambda: (directory / 'cancel').exists())
+            ctx.check()
+            with index.connect() as db:
+                input_size = db.execute("SELECT coalesce(sum(size),0) FROM entries WHERE kind='file'").fetchone()[0]
+            report(inputSize=input_size, fileCount=index.summary()['entries'], phase='processing')
+            if input_size > limits['input']:
+                raise ProcessingError('Input size limit reached')
+            indexed = compress_index(index, output, job['target'], ctx)
+            account_index()  # settle WAL accounting after the manifest writer closes
+            job['inputSize'] = indexed['inputBytes']
+        elif job["operation"] == "compress":
             manifest = compress(job["inputs"], output, job["target"], ctx,
                                 zip_profile=job.get("zipProfile", "balanced"), zip_comment=job.get("zipComment", ""))
         elif job["operation"] == "extract":
@@ -358,7 +402,8 @@ def run_job(root, owner, job_id, limits, isolated=False):
                     error=None,
                     outputSize=digest["size"], sha256=digest["sha256"], manifest=manifest,
                     outputFile=output.name, outputName=output_name, finished=time.time(),
-                    duration=time.time() - started, downloadAvailable=True)
+                    duration=time.time() - started, downloadAvailable=True,
+                    **({'manifestStorage': 'index', 'fileCount': indexed['entries'], 'entries': indexed['entries'], 'inputSize': indexed['inputBytes'], 'phase': 'completed'} if indexed else {}))
     except Exception as error:
         message, category, retry = describe_failure(error)
         LOG.warning("Job failed: %s (%s)", job_id, category)
@@ -398,8 +443,8 @@ class Service:
             self.instance_lock.close()
             raise RuntimeError("Another processor is using this data directory") from None
         self.web = Path(web).resolve() if web else None
-        self.limits = limits or {"input": 8 * 1024**3, "expanded": 2 * 1024**3, "files": 5000,
-                                 "ratio": 1000, "depth": 8, "seconds": 1800, "storage": 20 * 1024**3}
+        from .resources import configured_limits
+        self.limits = limits or configured_limits()
         self.lock = threading.RLock()
         self.projects = Projects(self.store, self.limits)
         self.running = {}
@@ -457,8 +502,37 @@ class Service:
             expiry = min(int(time.time()) + 3600, int(record["fileExpires"]))
             token = self.sign(f"{owner}:{record['id']}:{expiry}")
             result["download"] = f"/api/process/jobs/{record['id']}/download?expires={expiry}&token={token}"
-        result["fileCount"] = len(record["inputs"]) if "inputs" in record else record.get("fileCount", 0)
+        result["fileCount"] = record.get('fileCount', 0) if record.get('inputMode') == 'directory-index' else len(record["inputs"]) if "inputs" in record else record.get("fileCount", 0)
         return result
+
+    def enqueue_directory(self, owner, root, target='tar.gz', project_id='default'):
+        """Trusted operator entry point only. Never call with an HTTP path field."""
+        from .indexed_archive import TARGETS
+        if target not in TARGETS or not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', project_id):
+            raise ValueError('Invalid indexed archive settings')
+        source = Path(root).resolve(strict=True)
+        if not source.is_dir() or source == self.store.root or source in self.store.root.parents or self.store.root in source.parents:
+            raise ValueError('Choose a source directory outside processor storage')
+        job_id = secrets.token_hex(16)
+        folder = self.store.folder(owner, job_id)  # validate owner before storing any source
+        with self.lock, self.store.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if self.store.count(owner, states=(*ACTIVE, 'paused')) >= self.owner_plan(owner)['maxQueuedJobs'] or self.store.count(states=(*ACTIVE, 'paused')) >= self.max_queued_jobs:
+                raise ValueError('Processor queue full')
+            now = time.time()
+            settings = self.defaults(owner)
+            retention = RETENTION[settings['historyRetention']]
+            record = {'id': job_id, 'projectId': project_id, 'created': now, 'name': source.name or 'files',
+                      'operation': 'compress', 'target': target, 'inputMode': 'directory-index', 'inputs': [],
+                      'recursive': False, 'state': 'queued', 'phase': 'queued', 'inputSize': 0, 'outputSize': None,
+                      'format': 'directory', 'fileCount': 0, 'processed': 0, 'entries': 0,
+                      'fileExpires': now + RETENTION[settings['fileRetention']],
+                      'historyExpires': now + retention if retention else None, 'downloadAvailable': False, 'error': None}
+            folder.mkdir(mode=0o700, parents=True)
+            db.execute('INSERT INTO local_index_sources VALUES (?,?,?)', (owner, job_id, str(source)))
+            db.execute('INSERT INTO records VALUES (?,?,?,?,?)', (job_id, owner, 'job', now, json.dumps(record)))
+        self.store.trim_history(owner, self.owner_plan(owner)['historyRecords'])
+        return self.public(owner, record)
 
     def cleanup(self):
         self.oauth.cleanup()
@@ -478,7 +552,8 @@ class Service:
                     directory = self.store.folder(owner, job["id"])
                     if directory.exists():
                         shutil.rmtree(directory)
-                    self.store.patch(owner, "job", job["id"], downloadAvailable=False, outputFile=None, filesCleaned=True)
+                    self.store.patch(owner, "job", job["id"], downloadAvailable=False, outputFile=None, filesCleaned=True, indexBytes=0)
+                    self.store.forget_local_source(owner, job['id'])
                 if job.get("historyExpires") is not None and job["historyExpires"] <= now:
                     # History expires independently; file cleanup remains tracked by a tombstone.
                     self.store.patch(owner, "job", job["id"], hidden=True)
@@ -526,7 +601,7 @@ class Service:
         if not directory.exists():
             return
         for path in directory.iterdir():
-            if path.name in ("cancel", "media.log"):
+            if path.name in ("cancel", "media.log", "discovery.sqlite3", "discovery.sqlite3-wal", "discovery.sqlite3-shm"):
                 continue
             if path.is_dir():
                 shutil.rmtree(path)
@@ -539,7 +614,8 @@ class Service:
         directory = self.store.folder(owner, record["id"])
         if directory.exists():
             shutil.rmtree(directory, ignore_errors=False)
-        self.store.patch(owner, "job", record["id"], downloadAvailable=False, outputFile=None, filesCleaned=True, fileExpires=time.time())
+        self.store.patch(owner, "job", record["id"], downloadAvailable=False, outputFile=None, filesCleaned=True, fileExpires=time.time(), indexBytes=0)
+        self.store.forget_local_source(owner, record['id'])
         for upload in record["inputs"]:
             if not self.store.upload_referenced(owner, upload["id"], now=time.time(), exclude_job=record["id"]):
                 folder = self.store.folder(owner, upload["id"])
@@ -1152,6 +1228,15 @@ def handler(service):
                         raise HTTPError(410, "File expired")
                     return self.download(directory / record["outputFile"], record["outputName"], record["sha256"])
                 if action == "manifest" and method == "GET":
+                    if record.get('inputMode') == 'directory-index':
+                        if not record.get('downloadAvailable') or record['fileExpires'] <= time.time():
+                            raise HTTPError(410, 'Verified manifest unavailable')
+                        from .indexed_archive import manifest_page
+                        query = parse_qs(url.query)
+                        limit = min(1000, max(1, int(query.get('limit', [100])[0])))
+                        rows = manifest_page(directory / 'discovery.sqlite3', int(query.get('after', [0])[0]), limit)
+                        return self.send(200, {'id': job_id, 'sha256': record.get('sha256'), 'files': rows,
+                                               'total': record['fileCount'], 'nextCursor': str(rows[-1]['id']) if len(rows) == limit else None})
                     return self.send(200, {"id": job_id, "sha256": record.get("sha256"), "files": record.get("manifest", [])})
                 if action is None and method == "GET":
                     return self.send(200, service.public(self.owner, record))
