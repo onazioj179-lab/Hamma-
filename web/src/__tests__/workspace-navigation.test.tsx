@@ -64,6 +64,30 @@ const button = (name: string) =>
     (item) => item.textContent?.trim() === name,
   )!;
 
+it('preserves the initial tab order and focuses the main content after navigation', async () => {
+  const main = host.querySelector('main');
+  expect(document.activeElement).toBe(document.body);
+  expect(host.querySelector('.skip-link')?.getAttribute('href')).toBe('#workspace-main');
+  await act(async () => button('Overview').click());
+  expect(document.activeElement).toBe(main);
+});
+
+it('opens the workspace file picker immediately from another page', async () => {
+  await act(async () => button('Files & History').click());
+  const pickerSelector = 'input[aria-label="Add files to queue"]';
+  expect(host.querySelector(pickerSelector)).toBeNull();
+  const pickerClick = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(function (this: HTMLInputElement) {
+    expect(this).toBe(host.querySelector(pickerSelector));
+  });
+  const shortcut = new KeyboardEvent('keydown', { key: 'o', ctrlKey: true, bubbles: true, cancelable: true });
+  await act(async () => {
+    document.activeElement?.dispatchEvent(shortcut);
+    expect(pickerClick).toHaveBeenCalledTimes(1);
+  });
+  expect(shortcut.defaultPrevented).toBe(true);
+  expect(button('Workspace').getAttribute('aria-current')).toBe('page');
+});
+
 it('keeps the real result available across navigation without requiring an account', async () => {
   expect(host.textContent).not.toContain('Login');
   await act(async () => button('Files & History').click());
@@ -95,6 +119,8 @@ it('opens the persistent settings panel and honors privacy controls', async () =
   expect(usePreferences.getState().rememberHistory).toBe(false);
   expect(host.textContent).not.toContain('Local performance learning');
   await act(async () => button('About').click());
+  expect(button('Settings').hasAttribute('aria-current')).toBe(false);
+  expect(button('About HAMMA').getAttribute('aria-current')).toBe('page');
   expect(host.textContent).toContain('Onazi Treasure Oj');
   expect(
     host.querySelector('a[href="https://github.com/onazioj179-lab/Hamma-"]'),
