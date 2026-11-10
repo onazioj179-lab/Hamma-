@@ -1,21 +1,31 @@
+import bz2
 import gzip
 import hashlib
 import io
 import json
+import lzma
 from pathlib import Path
 import shutil
 import stat
+import struct
 import subprocess
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 import wave
 import zipfile
 
-from processor.engine import Context, ProcessingError, compress, convert, detect, extract, safe_path
+from processor.engine import Context, ProcessingError, compress, convert, detect, extract, probe, safe_path, verify_media_decode
 
 
 LIMITS = {"expanded": 32 * 1024**2, "files": 5000, "ratio": 1000, "depth": 3, "seconds": 60, "input": 64 * 1024**2, "storage": 256 * 1024**2}
+
+
+def pax_header(**fields):
+    item = tarfile.TarInfo("pax")
+    item.pax_headers = fields
+    return item.tobuf(format=tarfile.PAX_FORMAT)[:-512]
 
 
 class EngineFixture(unittest.TestCase):
@@ -66,12 +76,12 @@ class EngineTests(EngineFixture):
         self.assertEqual(detect(fake), "zip")
 
     def test_unsafe_names_are_rejected(self):
-        for name in ("../escape", "/etc/passwd", "C:/a", "a/../b", "a\\..\\b", "a//b", "a\x00b", "a:stream", "CON", "dir/nul.txt", "file. ", "file\nname"):
+        for name in ("../escape", "/etc/passwd", "C:/a", "a/../b", "a\\..\\b", "a//b", "a\x00b", "a:stream", "CON", "dir/nul.txt", "dir/COM¹.txt", "lpt² .txt", "file. ", "file\nname"):
             with self.subTest(name=name), self.assertRaises(ProcessingError):
                 safe_path(name)
 
     def test_zip_traversal_links_case_collisions_and_parent_conflicts(self):
-        for names, symlink in ((["../escape"], False), (["link"], True), (["A.txt", "a.txt"], False), (["a", "a/b"], False)):
+        for names, symlink in ((["../escape"], False), (["link"], True), (["A.txt", "a.txt"], False), (["a", "a/b"], False), (["A/b", "a"], False)):
             with self.subTest(names=names):
                 source = self.root / "unsafe.zip"
                 with zipfile.ZipFile(source, "w") as archive:
@@ -84,6 +94,29 @@ class EngineTests(EngineFixture):
                 with self.assertRaises(ProcessingError):
                     extract(source, source.name, self.root / "out.zip", self.context())
                 self.assertFalse((self.root.parent / "escape").exists())
+
+    def test_zip_allows_explicit_directory_after_its_child(self):
+        source = self.root / "directory.zip"
+        with zipfile.ZipFile(source, "w") as archive:
+            archive.writestr("folder/file", self.data)
+            archive.writestr("folder/", b"")
+        output = self.root / "out.zip"
+        extract(source, source.name, output, self.context())
+        with zipfile.ZipFile(output) as archive:
+            self.assertEqual(archive.read("folder/file"), self.data)
+            self.assertIn("folder/", archive.namelist())
+
+    def test_zip_rejects_hidden_nul_and_directory_payload(self):
+        source = self.root / "unsafe.zip"
+        with zipfile.ZipFile(source, "w") as archive:
+            archive.writestr("some-name", self.data)
+        source.write_bytes(source.read_bytes().replace(b"some-name", b"some\x00name"))
+        with self.assertRaisesRegex(ProcessingError, "Unsafe filename"):
+            extract(source, source.name, self.root / "out.zip", self.context())
+        with zipfile.ZipFile(source, "w") as archive:
+            archive.writestr("folder/", self.data)
+        with self.assertRaisesRegex(ProcessingError, "directory size"):
+            extract(source, source.name, self.root / "out.zip", self.context())
 
     def test_tar_links_and_devices_rejected(self):
         for kind in (tarfile.SYMTYPE, tarfile.LNKTYPE, tarfile.CHRTYPE, tarfile.FIFOTYPE):
@@ -156,8 +189,82 @@ class EngineTests(EngineFixture):
         with self.assertRaisesRegex(ProcessingError, "metadata"):
             extract(source, source.name, self.root / "out.zip", self.context())
 
+    def test_pax_size_override_controls_preflight_and_extraction_boundaries(self):
+        source = self.root / "pax.tar"
+        output = self.root / "out.zip"
+        item = tarfile.TarInfo("file")
+        item.size = 1024
+        prefix = pax_header(size="1")
+        data = prefix + item.tobuf(format=tarfile.USTAR_FORMAT) + b"X" + bytes(511)
+        source.write_bytes(data + bytes(1024))
+        extract(source, source.name, output, self.context())
+        with zipfile.ZipFile(output) as result:
+            self.assertEqual(result.read("file"), b"X")
+
+        # A walk using only the raw size skips the oversized header entirely.
+        hidden = tarfile.TarInfo("hidden")
+        hidden.type, hidden.size = tarfile.SOLARIS_XHDTYPE, 2 * 1024**2
+        source.write_bytes(data + hidden.tobuf(format=tarfile.USTAR_FORMAT) + bytes(1024))
+        with self.assertRaisesRegex(ProcessingError, "metadata"):
+            extract(source, source.name, output, self.context())
+
+    def test_tar_rejects_sparse_keys_and_chained_local_metadata(self):
+        source = self.root / "pax.tar"
+        output = self.root / "out.zip"
+        item = tarfile.TarInfo("file").tobuf(format=tarfile.USTAR_FORMAT)
+        for headers in (
+            pax_header(**{"GNU.sparse.realsize": "20"}),
+            pax_header(path="file") * 2,
+        ):
+            with self.subTest(headers=headers[:24]):
+                source.write_bytes(headers + item + bytes(1024))
+                with self.assertRaisesRegex(ProcessingError, "sparse|metadata"):
+                    extract(source, source.name, output, self.context())
+
+    def test_compressed_tar_checks_trailer_after_end_marker(self):
+        source = self.root / "damaged.tar.gz"
+        tar = io.BytesIO()
+        with tarfile.open(fileobj=tar, mode="w") as archive:
+            archive.addfile(tarfile.TarInfo("file"))
+        source.write_bytes(gzip.compress(tar.getvalue())[:-4])
+        with self.assertRaises(EOFError):
+            extract(source, source.name, self.root / "out.zip", self.context())
+
+    def test_zero_prefix_distinguishes_streams_from_named_empty_tar(self):
+        payload = bytes(1024)
+        for suffix, encode in (("gz", gzip.compress), ("bz2", bz2.compress), ("xz", lzma.compress)):
+            with self.subTest(suffix=suffix):
+                source = self.root / f"zero.{suffix}"
+                output = self.root / "out.zip"
+                source.write_bytes(encode(payload))
+                extract(source, source.name, output, self.context())
+                with zipfile.ZipFile(output) as result:
+                    self.assertEqual(result.read("zero"), payload)
+                extract(source, f"empty.tar.{suffix}", output, self.context())
+                with zipfile.ZipFile(output) as result:
+                    self.assertEqual(result.namelist(), [])
+
+    def test_tar_requires_complete_end_marker(self):
+        source = self.root / "truncated.tar"
+        source.write_bytes(tarfile.TarInfo("file").tobuf(format=tarfile.USTAR_FORMAT) + bytes(512))
+        with self.assertRaisesRegex(ProcessingError, "end marker"):
+            extract(source, source.name, self.root / "out.zip", self.context())
+
+    def test_long_pax_and_gnu_names_survive_preflight(self):
+        name = "GNU.sparse-" + "a" * 110
+        for fmt in (tarfile.PAX_FORMAT, tarfile.GNU_FORMAT):
+            with self.subTest(fmt=fmt):
+                source = self.root / "long.tar"
+                with tarfile.open(source, "w", format=fmt) as archive:
+                    item = tarfile.TarInfo(name)
+                    item.size = 1
+                    archive.addfile(item, io.BytesIO(b"X"))
+                output = self.root / "out.zip"
+                extract(source, source.name, output, self.context())
+                with zipfile.ZipFile(output) as result:
+                    self.assertEqual(result.read(name), b"X")
+
     def test_zip_directory_allocation_and_output_writes_are_bounded(self):
-        import struct
         source = self.root / "count.zip"
         with zipfile.ZipFile(source, "w") as archive:
             archive.writestr("text", self.data)
@@ -170,6 +277,43 @@ class EngineTests(EngineFixture):
         with self.assertRaisesRegex(ProcessingError, "Output size"):
             compress([{"name": "a", "path": str(self.source)}], self.root / "small.zip", "zip", self.context(expanded=40))
 
+    def test_zip_entry_quota_uses_records_even_when_footer_underreports(self):
+        source = self.root / "count.zip"
+        with zipfile.ZipFile(source, "w") as archive:
+            archive.writestr("first", b"1")
+            archive.writestr("second", b"2")
+        content = bytearray(source.read_bytes())
+        struct.pack_into("<HH", content, len(content) - 22 + 8, 1, 1)
+        source.write_bytes(content)
+        with patch("processor.engine.zipfile.ZipFile", wraps=zipfile.ZipFile) as reader:
+            with self.assertRaisesRegex(ProcessingError, "Too many archive entries"):
+                extract(source, source.name, self.root / "out.zip", self.context(files=1))
+            self.assertEqual(reader.call_count, 1)  # Only the output writer was opened.
+
+    def test_zip64_footer_applies_with_ordinary_classic_fields(self):
+        source = self.root / "zip64.zip"
+        # Force the standard writer to emit ZIP64 metadata for a small fixture.
+        with patch.object(zipfile, "ZIP64_LIMIT", 64):
+            with zipfile.ZipFile(source, "w") as archive:
+                archive.writestr("data", self.data)
+        output = self.root / "out.zip"
+        extract(source, source.name, output, self.context())
+        with zipfile.ZipFile(output) as archive:
+            self.assertEqual(archive.read("data"), self.data)
+
+        content = bytearray(source.read_bytes())
+        record = len(content) - 22 - 20 - 56
+        self.assertEqual(content[record:record + 4], b"PK\x06\x06")
+        struct.pack_into("<QQ", content, record + 24, 5001, 5001)
+        # Classic size/offset fit and must not hide the ZIP64 count.
+        central_size, central_offset = struct.unpack_from("<QQ", content, record + 40)
+        struct.pack_into("<II", content, len(content) - 22 + 12, central_size, central_offset)
+        source.write_bytes(content)
+        with patch("processor.engine.zipfile.ZipFile", wraps=zipfile.ZipFile) as reader:
+            with self.assertRaisesRegex(ProcessingError, "Too many archive entries"):
+                extract(source, source.name, output, self.context())
+            self.assertEqual(reader.call_count, 1)
+
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg not installed")
 class MediaTests(EngineFixture):
@@ -181,6 +325,39 @@ class MediaTests(EngineFixture):
             audio.setframerate(48000)
             audio.writeframes(b"\x01\x00\x02\x00" * 4800)
         return source
+
+    def test_decode_verification_rejects_partial_audio_packet(self):
+        source = self.wav()
+        # The WAV header still reports a valid PCM stream, but its final sample
+        # is incomplete. A successful metadata probe cannot detect this.
+        source.write_bytes(source.read_bytes()[:-1])
+        self.assertEqual(probe(source)["streams"][0]["codec_name"], "pcm_s16le")
+        with self.assertRaisesRegex(ProcessingError, "could not be decoded"):
+            verify_media_decode(source, self.context())
+
+    def test_conversion_rejects_unexpected_output_codec(self):
+        source = self.wav()
+        output = self.root / "out.mp3"
+        def probe_wrong_output_codec(path, **options):
+            result = probe(path, **options)
+            if path == output:
+                result["streams"][0]["codec_name"] = "aac"
+            return result
+        with patch("processor.engine.probe", side_effect=probe_wrong_output_codec):
+            with self.assertRaisesRegex(ProcessingError, "output codec or stream count"):
+                convert(source, output, "mp3", self.context(), quality_mode="lossy")
+
+    def test_remux_verifies_video_and_audio_streams(self):
+        source = self.root / "source.mp4"
+        subprocess.run([
+            shutil.which("ffmpeg"), "-v", "error", "-f", "lavfi",
+            "-i", "color=c=blue:s=32x32:d=0.4", "-i", str(self.wav()),
+            "-c:v", "mpeg4", "-c:a", "aac", str(source),
+        ], check=True, capture_output=True)
+        output = self.root / "out.mkv"
+        manifest = convert(source, output, "mkv", self.context())
+        self.assertEqual(manifest[0]["size"], output.stat().st_size)
+        self.assertEqual([s["codec_name"] for s in probe(output)["streams"]], ["mpeg4", "aac"])
 
     def test_real_wav_and_flac_conversion_preserves_pcm(self):
         source = self.wav()

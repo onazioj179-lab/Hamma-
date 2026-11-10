@@ -151,11 +151,11 @@ export function SettingsPanel({ section, onSectionChange, busy, onHistory }: Pro
         <>
           <section className="surface settings-group">
             <div className="section-heading">
-              <h2>Your files stay with you.</h2>
+              <h2>Where your files are processed</h2>
               <p>
-                The workspace processes files on the computer running HAMMA. It does not
-                send files to third parties or send analytics. Standard archive
-                and media jobs use temporary storage on the host computer. SPK contents stay in the browser processing them.
+                Standard archive and media jobs run on the computer hosting HAMMA.
+                File detection sends up to 512 bytes per selected file to that computer.
+                SPK operations run in this browser. Files are not sent to external AI services.
               </p>
             </div>
             <SettingSwitch
@@ -261,9 +261,10 @@ export function SettingsPanel({ section, onSectionChange, busy, onHistory }: Pro
             <div className="section-heading">
               <h2>How it works</h2>
               <p>
-                SPK runs in your browser; standard jobs run on the host computer. Jobs continue while
-                you move between screens, and results remain available until
-                their expiry. Compression savings depend on the file.
+                Standard jobs continue while the processor service is running, including
+                when you move between screens. Their downloads follow the file retention
+                settings. Temporary SPK downloads remain in the open browser session.
+                Compression can make some files larger; savings depend on the contents.
               </p>
             </div>
             <p className="footnote">Free to use · Open source · MIT license</p>

@@ -5,14 +5,19 @@ from http.server import ThreadingHTTPServer
 import io
 import json
 import os
+import random
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
+import tarfile
 import threading
 import time
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import HTTPCookieProcessor, Request, build_opener
+import wave
 import zipfile
 
 from processor.server import ACTIVE, LocalHTTPServer, Service, Store, handler, run_job
@@ -62,6 +67,36 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(accepted['metadataPolicy'], 'strip')
         self.assert_status(409, lambda: self.job(source, operation='convert', target='mp3', qualityMode='lossy', metadataPolicy='preserve', requestId='d' * 64))
         self.assert_status(400, lambda: self.job(source, operation='convert', target='wav', metadataPolicy='invalid'))
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg not installed")
+    def test_video_audio_targets_extract_short_tracks_to_a_verified_zip(self):
+        source = Path(self.temp.name) / "short-tracks.mkv"
+        subprocess.run([
+            shutil.which("ffmpeg"), "-v", "error",
+            "-f", "lavfi", "-i", "color=s=32x32:d=2",
+            "-f", "lavfi", "-i", "sine=frequency=400:duration=0.2",
+            "-f", "lavfi", "-i", "sine=frequency=800:duration=0.4",
+            "-map", "0:v", "-map", "1:a", "-map", "2:a",
+            "-c:v", "mpeg4", "-c:a", "pcm_s16le", str(source),
+        ], check=True, capture_output=True, timeout=30)
+        inspection = self.call("/inspect", {"entries": [{"head": source.read_bytes()[:512].hex()}]}, "POST")
+        self.assertIn("wav", inspection["entries"][0]["conversions"])
+        upload = self.upload(source.read_bytes(), source.name)
+        completed = self.execute(self.job(upload, operation="convert", target="wav"))
+        self.assertEqual(completed["state"], "completed", completed)
+        self.assertEqual(completed["outputName"], "short-tracks.zip")
+        path = "/jobs/" + completed["id"]
+        report = self.call(path + "/manifest")
+        data = self.call(completed["download"].removeprefix("/api/process"), raw=True)
+        self.assertEqual(hashlib.sha256(data).hexdigest(), report["sha256"])
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            self.assertEqual(archive.namelist(), ["audio-1.wav", "audio-2.wav"])
+            for member, frames in zip(report["files"], (8820, 17640)):
+                payload = archive.read(member["name"])
+                self.assertEqual(hashlib.sha256(payload).hexdigest(), member["sha256"])
+                with wave.open(io.BytesIO(payload)) as audio:
+                    self.assertEqual(audio.getframerate(), 44100)
+                    self.assertEqual(audio.getnframes(), frames)
 
     def upload(self, data=b"test data", name="nested/世界.txt", split=False):
         record = self.call("/uploads", {"name": name, "size": len(data)}, "POST")
@@ -167,6 +202,146 @@ class ServerTests(unittest.TestCase):
         self.assertNotIn("inputs", job)
         self.assertNotIn("outputFile", job)
         self.assertNotIn(str(self.service.store.root), json.dumps(job))
+
+    def test_listener_starts_without_reverse_dns(self):
+        with patch("socket.getfqdn", side_effect=AssertionError("unexpected reverse DNS")):
+            with LocalHTTPServer(("127.0.0.1", 0), handler(self.service)) as listener:
+                self.assertEqual(listener.server_name, "127.0.0.1")
+                self.assertGreater(listener.server_port, 0)
+
+    def test_office_report_detects_package_type_and_rejects_active_xml(self):
+        from processor.documents import CONTENT_TYPES, RELATIONSHIPS
+
+        def document(main, content, declaration=''):
+            package = io.BytesIO()
+            with zipfile.ZipFile(package, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr('_rels/.rels',
+                                 f'{declaration}<Relationships xmlns="{RELATIONSHIPS}">'
+                                 '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+                                 f'Target="{main}"/></Relationships>')
+                archive.writestr('[Content_Types].xml',
+                                 f'<Types xmlns="{CONTENT_TYPES}"><Override PartName="/{main}" '
+                                 f'ContentType="application/vnd.openxmlformats-officedocument.{content}.main+xml"/></Types>')
+                archive.writestr(main, '<document/>')
+                if main == 'xl/workbook.xml':
+                    archive.writestr('xl/worksheets/sheet1.xml', '<worksheet/>')
+                if main == 'ppt/presentation.xml':
+                    archive.writestr('ppt/slides/slide1.xml', '<slide/>')
+            return package.getvalue()
+
+        source = self.upload(document('xl/workbook.xml', 'spreadsheetml.sheet'), 'misnamed.docx')
+        result = self.execute(self.job(source, operation='inspect', target='json'))
+        self.assertEqual(result['state'], 'completed', result)
+        report = json.loads(self.call(result['download'].removeprefix('/api/process'), raw=True))
+        self.assertEqual(report, {'format': 'xlsx', 'scope': 'package-metadata', 'packageEntries': 4,
+                                  'mainPart': 'xl/workbook.xml', 'hasVbaProjectPart': False, 'worksheetParts': 1})
+        for kind, main, content in (
+            ('docx', 'word/document.xml', 'wordprocessingml.document'),
+            ('pptx', 'ppt/presentation.xml', 'presentationml.presentation'),
+        ):
+            with self.subTest(kind=kind):
+                source = self.upload(document(main, content), 'sample.' + kind)
+                result = self.execute(self.job(source, operation='inspect', target='json'))
+                self.assertEqual(result['state'], 'completed', result)
+                report = json.loads(self.call(result['download'].removeprefix('/api/process'), raw=True))
+                self.assertEqual((report['format'], report['mainPart']), (kind, main))
+                if kind == 'pptx':
+                    self.assertEqual(report['slideParts'], 1)
+
+        hostile = '<!DOCTYPE Relationships [<!ENTITY local SYSTEM "file:///private">]>'
+        source = self.upload(document('word/document.xml', 'wordprocessingml.document', hostile), 'hostile.docx')
+        rejected = self.execute(self.job(source, operation='inspect', target='json'))
+        self.assertEqual(rejected['state'], 'failed', rejected)
+        self.assertFalse(rejected['downloadAvailable'])
+
+    def test_auto_zip_profile_stores_incompressible_sample_and_deflates_repeated_data(self):
+        noise = random.Random(2027).randbytes(8192)
+        repeated = b"sample" * 2000
+        first = self.upload(noise, "noise.bin")
+        second = self.upload(repeated, "repeated.txt")
+        body = {"uploads": [first["id"], second["id"]], "operation": "compress", "target": "zip",
+                "zipProfile": "auto", "requestId": "f" * 64}
+        queued = self.call("/jobs", body, "POST")
+        self.assert_status(409, lambda: self.call("/jobs", {**body, "zipProfile": "maximum"}, "POST"))
+        self.assert_status(400, lambda: self.call("/jobs", {**body, "zipProfile": "unknown"}, "POST"))
+        result = self.execute(queued)
+        self.assertEqual(result["state"], "completed", result)
+        data = self.call(result["download"].removeprefix("/api/process"), raw=True)
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            self.assertEqual(archive.getinfo("noise.bin").compress_type, zipfile.ZIP_STORED)
+            self.assertEqual(archive.getinfo("repeated.txt").compress_type, zipfile.ZIP_DEFLATED)
+            self.assertEqual(archive.read("noise.bin"), noise)
+            self.assertEqual(archive.read("repeated.txt"), repeated)
+
+    def test_tar_repack_produces_verified_deflate_zip(self):
+        payload = b"compressible fixture\n" * 100
+        source = io.BytesIO()
+        with tarfile.open(fileobj=source, mode="w:gz") as archive:
+            item = tarfile.TarInfo("folder/file.txt")
+            item.size = len(payload)
+            archive.addfile(item, io.BytesIO(payload))
+        job = self.job(self.upload(source.getvalue(), "sample.tar.gz"), operation="extract", target="zip-deflate")
+        result = self.execute(job)
+        self.assertEqual(result["state"], "completed", result)
+        self.assertEqual(result["outputName"], "sample.tar.repacked.zip")
+        data = self.call(result["download"].removeprefix("/api/process"), raw=True)
+        self.assertEqual(hashlib.sha256(data).hexdigest(), result["sha256"])
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            self.assertEqual(archive.getinfo("folder/file.txt").compress_type, zipfile.ZIP_DEFLATED)
+            self.assertEqual(archive.read("folder/file.txt"), payload)
+
+    def test_selective_zip_extract_binds_selection_to_job_and_verifies_output(self):
+        from processor.projects import DEFAULT_SETTINGS
+
+        self.call("/projects/default", {"settings": DEFAULT_SETTINGS}, "PUT")
+        source = io.BytesIO()
+        with zipfile.ZipFile(source, "w") as archive:
+            archive.writestr("first.txt", b"ignore")
+            archive.writestr("folder/second.txt", b"keep")
+        upload = self.upload(source.getvalue(), "sample.zip")
+        options = {"operation": "extract", "target": "zip", "recoverable": True}
+        queued = self.job(upload, zipIndexes=[1], **options)
+        self.assertEqual(self.job(upload, zipIndexes=[1], **options)["id"], queued["id"])
+        other = self.job(upload, zipIndexes=[0], **options)
+        self.assertNotEqual(other["id"], queued["id"])
+        self.assert_status(400, lambda: self.job(upload, zipIndexes=[True], **options))
+        self.assert_status(400, lambda: self.job(upload, zipIndexes=[1, 1], **options))
+        self.assert_status(400, lambda: self.job(upload, zipIndexes=[1], recursive=True, **options))
+        result = self.execute(queued)
+        self.assertEqual(result["state"], "completed", result)
+        data = self.call(result["download"].removeprefix("/api/process"), raw=True)
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            self.assertEqual(archive.namelist(), ["folder/second.txt"])
+            self.assertEqual(archive.read("folder/second.txt"), b"keep")
+        missing = self.execute(self.job(upload, zipIndexes=[2], **options))
+        self.assertEqual(missing["state"], "failed", missing)
+        self.assertFalse(missing["downloadAvailable"])
+
+    def test_zip_integrity_job_reports_hashes_and_withholds_failed_reports(self):
+        payload = b"integrity fixture"
+        source = io.BytesIO()
+        with zipfile.ZipFile(source, "w") as archive:
+            archive.writestr("file.txt", payload)
+            archive.writestr("deflated.txt", payload, compress_type=zipfile.ZIP_DEFLATED)
+        valid = source.getvalue()
+        job = self.execute(self.job(self.upload(valid, "sample.zip"), operation="verify", target="json"))
+        self.assertEqual(job["state"], "completed", job)
+        self.assertEqual(job["outputName"], "sample.verification.json")
+        report_bytes = self.call(job["download"].removeprefix("/api/process"), raw=True)
+        self.assertEqual(hashlib.sha256(report_bytes).hexdigest(), job["sha256"])
+        report = json.loads(report_bytes)
+        self.assertTrue(report["verified"])
+        self.assertEqual(report["entries"], [
+            {"name": name, "directory": False, "size": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
+            for name in ("file.txt", "deflated.txt")
+        ])
+
+        damaged = valid.replace(payload, b"!" * len(payload), 1)
+        failed = self.execute(self.job(self.upload(damaged, "damaged.zip"), operation="verify", target="json"))
+        self.assertEqual(failed["state"], "failed", failed)
+        self.assertEqual(failed["errorInfo"]["category"], "corrupt_file")
+        self.assertFalse(failed["downloadAvailable"])
+        self.assertFalse(failed.get("download"))
 
     def test_user_isolation_for_jobs_uploads_and_signed_downloads(self):
         source = self.upload()
@@ -330,9 +505,15 @@ class ServerTests(unittest.TestCase):
 
     def test_actual_background_worker_process_completes_and_releases_slot(self):
         job = self.job()
-        self.service.tick()
+        # Admission can correctly defer a job under transient memory pressure.
+        # Exercise the production scheduler loop rather than expecting one tick
+        # to admit work regardless of host resources.
+        with patch('processor.server.available_memory', return_value=0):
+            self.service.tick()
+        self.assertEqual(self.call('/jobs/' + job['id'])['state'], 'queued')
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
+            self.service.tick()
             current = self.call("/jobs/" + job["id"])
             if current["state"] in ("completed", "failed", "interrupted"):
                 break

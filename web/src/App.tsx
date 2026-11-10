@@ -36,7 +36,7 @@ const navigation = [
 
 export default function App() {
   const controller = useCompression();
-  const { workerReady, isProcessing, result, cancel, download, deviceInfo } =
+  const { workerReady, isProcessing, result, cancel, download } =
     controller;
   const recent = useAppStore((state) => state.recentArchives);
   const outputs = useAppStore(state => state.sessionOutputs);
@@ -210,7 +210,7 @@ export default function App() {
             <span
               className={processorStatus === 'ready' ? 'status-dot' : 'status-dot pending'}
             />
-            {isProcessing ? 'Processing' : processorStatus === 'ready' ? 'Connected' : processorStatus === 'offline' ? workerReady ? 'Browser only' : 'Disconnected' : 'Connecting'}
+            {isProcessing ? 'Processing' : processorStatus === 'ready' ? 'Connected' : processorStatus === 'offline' ? 'Disconnected' : 'Connecting'}
           </span>
         </header>
         <main
@@ -234,7 +234,6 @@ export default function App() {
               {view === 'account' && <AccountPanel />}
               {view === 'overview' && (
                 <LocalOverview
-                  device={deviceInfo}
                   onHistory={() => setView('files')}
                 />
               )}

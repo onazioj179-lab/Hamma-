@@ -64,6 +64,7 @@ class Accounts:
         with store.connect() as db:
             db.execute('CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY,username TEXT UNIQUE NOT NULL,owner TEXT UNIQUE NOT NULL,display_name TEXT NOT NULL,salt TEXT NOT NULL,password_hash TEXT NOT NULL,credential_version INTEGER NOT NULL,created REAL NOT NULL,tier TEXT NOT NULL CHECK(tier=\'free\'))')
             db.execute('CREATE TABLE IF NOT EXISTS account_sessions (token_hash TEXT PRIMARY KEY,account_id TEXT NOT NULL,credential_version INTEGER NOT NULL,created REAL NOT NULL,expires REAL NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS oauth_identities (issuer TEXT NOT NULL,subject TEXT NOT NULL,account_id TEXT NOT NULL REFERENCES accounts(id),PRIMARY KEY(issuer,subject))')
             db.execute('CREATE INDEX IF NOT EXISTS account_sessions_expiry ON account_sessions(expires)')
             db.execute('CREATE INDEX IF NOT EXISTS account_sessions_account ON account_sessions(account_id,created)')
 
@@ -81,7 +82,7 @@ class Accounts:
     @staticmethod
     def public(row):
         return {'accountId': row['id'], 'username': row['username'], 'displayName': row['display_name'],
-                'created': row['created'], 'plan': row['tier']}
+                'created': row['created'], 'plan': row['tier'], 'passwordEnabled': row['password_hash'] != '!external'}
 
     def by_owner(self, owner):
         with self.store.connect() as db:
@@ -174,5 +175,28 @@ class Accounts:
             db.execute('DELETE FROM account_sessions WHERE account_id=?', (account['id'],))
             account = {**dict(current), 'salt': salt.hex(), 'password_hash': hashed,
                        'credential_version': current['credential_version'] + 1}
+            token = self._issue(db, account)
+        return account, token
+
+
+    def login_provider(self, issuer, subject, display_name=None):
+        providers = {'https://accounts.google.com': 'Google', 'https://appleid.apple.com': 'Apple'}
+        if issuer not in providers or not isinstance(subject, str) or not 1 <= len(subject) <= 255:
+            raise AccountError(401, 'Provider identity is invalid.')
+        name = display_name if isinstance(display_name, str) else providers[issuer] + ' account'
+        name = ''.join(character for character in name if ord(character) >= 32 and ord(character) != 127).strip()[:80] or providers[issuer] + ' account'
+        with self.store.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            identity = db.execute('SELECT a.* FROM accounts AS a JOIN oauth_identities AS i ON i.account_id=a.id WHERE i.issuer=? AND i.subject=?', (issuer, subject)).fetchone()
+            if identity:
+                account = dict(identity)
+            else:
+                if db.execute('SELECT count(*) FROM accounts').fetchone()[0] >= 10000:
+                    raise AccountError(503, 'Account capacity reached.')
+                account = dict(id=secrets.token_hex(16), username=providers[issuer].lower() + '.' + secrets.token_hex(16),
+                               owner=secrets.token_hex(32), display_name=name, salt=secrets.token_hex(32),
+                               password_hash='!external', credential_version=1, created=time.time(), tier='free')
+                db.execute('INSERT INTO accounts VALUES (?,?,?,?,?,?,?,?,?)', tuple(account.values()))
+                db.execute('INSERT INTO oauth_identities VALUES (?,?,?)', (issuer, subject, account['id']))
             token = self._issue(db, account)
         return account, token

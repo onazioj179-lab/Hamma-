@@ -120,3 +120,15 @@ conversion.
 
 References: [Zstandard streaming API](https://facebook.github.io/zstd/doc/api_manual_latest.html),
 [OSV upstream Git-tag queries](https://google.github.io/osv.dev/post-v1-query/).
+## C ABI v1
+
+The `shante_abi` shared library exposes `shante_abi_version` and
+`shante_v1_process` from `include/shante/abi.h`. The caller provides UTF-8 paths,
+resource limits and result storage. Failures return numeric status codes and
+leave the result zeroed. The same kernel verifies output before publishing.
+Use the subprocess interface for untrusted inputs that need worker isolation.
+
+Install the shared library, import library where applicable, and C header with
+`cmake --install native/build --config Release --component ShanteSDK --prefix dist/shante-sdk`.
+The `native_c_abi` test compiles a C caller and exercises the shared library's
+round-trip, output limit, and no-overwrite contract.

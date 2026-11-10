@@ -68,7 +68,8 @@ public:
         stream_ = _fdopen(fd, create ? "w+b" : "rb");
         if (!stream_) _close(fd);
 #else
-        const int fd = ::open(path.c_str(), (create ? O_RDWR | O_CREAT | O_EXCL : O_RDONLY) | O_NOFOLLOW | O_CLOEXEC, 0600);
+        // Open without waiting on a FIFO before fstat can reject it.
+        const int fd = ::open(path.c_str(), (create ? O_RDWR | O_CREAT | O_EXCL : O_RDONLY | O_NONBLOCK) | O_NOFOLLOW | O_CLOEXEC, 0600);
         if (fd < 0) throw Failure(create ? "exists" : "input", "Cannot open file exclusively");
         struct stat info{};
         if (fstat(fd, &info) || !S_ISREG(info.st_mode)) {
@@ -175,8 +176,13 @@ void validate(const Options& options) {
         throw Failure("arguments", "Invalid resource budget");
     static_assert(sizeof(std::uint64_t) == 8);
 }
+struct DecodedBytes {
+    std::uint64_t input;
+    std::uint64_t output;
+};
+
 template<class Sink>
-std::uint64_t decode(File& input, const Options& options, Budget& budget, Sink sink) {
+DecodedBytes decode(File& input, const Options& options, Budget& budget, Sink sink) {
     std::unique_ptr<ZSTD_DCtx, decltype(&ZSTD_freeDCtx)> context(ZSTD_createDCtx_advanced(budget.memory()), ZSTD_freeDCtx);
     if (!context) throw Failure("memory", "Codec memory budget exhausted");
     codec(ZSTD_DCtx_setParameter(context.get(), ZSTD_d_windowLogMax, 23));
@@ -198,7 +204,7 @@ std::uint64_t decode(File& input, const Options& options, Budget& budget, Sink s
         if (options.progress) options.progress(read, written, false);
     }
     if (!read || remaining != 0) throw Failure("integrity", "Truncated frame");
-    return written;
+    return {read, written};
 }
 }
 
@@ -305,7 +311,7 @@ Result compress(const std::filesystem::path& source, const std::filesystem::path
         if (input.read(expected.data(), size) != size || std::memcmp(data, expected.data(), size))
             throw Failure("integrity", "Round-trip verification failed");
     });
-    if (verified != result.input_bytes || input.read(expected.data(), 1)) throw Failure("integrity", "Input changed during verification");
+    if (verified.output != result.input_bytes || input.read(expected.data(), 1)) throw Failure("integrity", "Input changed during verification");
     check(options); result.verified = true; result.allocator_peak = budget.peak();
     result.allocator_outstanding = budget.used();
     if (result.allocator_outstanding) throw Failure("memory", "Codec allocations remain after verification");
@@ -315,8 +321,9 @@ Result decompress(const std::filesystem::path& source, const std::filesystem::pa
     validate(options); check(options);
     File input(source); Output output(destination); Budget budget(options.memory_limit);
     Result result;
-    result.output_bytes = decode(input, options, budget, [&](const char* data, std::size_t size) { output.file->write(data, size); });
-    result.input_bytes = std::filesystem::file_size(source);
+    const auto decoded = decode(input, options, budget, [&](const char* data, std::size_t size) { output.file->write(data, size); });
+    result.input_bytes = decoded.input;
+    result.output_bytes = decoded.output;
     result.verified = true; result.allocator_peak = budget.peak(); result.allocator_outstanding = budget.used();
     if (result.allocator_outstanding) throw Failure("memory", "Codec allocations remain after decompression");
     check(options); output.publish(); return result;

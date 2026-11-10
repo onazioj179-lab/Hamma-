@@ -24,6 +24,7 @@ import re
 import secrets
 import signal
 import socket
+from socketserver import TCPServer
 import subprocess
 import shutil
 import sqlite3
@@ -33,11 +34,15 @@ import time
 from urllib.parse import parse_qs, urlsplit, quote
 import zipfile
 
-from .engine import ARCHIVES, MEDIA, BLOCK, Context, ProcessingError, archive_formats, compress, convert, detect, extract, file_digest, safe_path
-from .worker_limits import apply_worker_limits
+from .engine import ARCHIVES, MEDIA, BLOCK, ZIP_PROFILES, Context, ProcessingError, archive_formats, compress, convert, detect, extract, file_digest, safe_path, verify_zip
+from .worker_limits import apply_windows_worker_limits, apply_worker_limits
+from .resources import available_memory, worker_capacity
+from .errors import describe_failure
+from .projects import Projects, ProjectError
 from .accounts import Accounts, AccountError, plan as account_plan
 from .catalog import FileCatalog
-from .capabilities import action_registry
+from .capabilities import action_registry, inspect_headers, media_targets, single_file_archives
+from .oauth import OAuth
 
 LOG = logging.getLogger("hamma.processor")
 TERMINAL = ("completed", "failed", "cancelled", "interrupted")
@@ -175,7 +180,7 @@ class Store:
         with self.connect() as db:
             db.execute("BEGIN")
             total = db.execute("SELECT count(*) FROM records WHERE " + condition, parameters).fetchone()[0]
-            projection = "json_remove(data,'$.inputs','$.manifest','$.outputFile','$.filesCleaned') AS data,json_array_length(data,'$.inputs') AS file_count" if summary else "data"
+            projection = "json_remove(data,'$.inputs','$.manifest','$.outputFile','$.filesCleaned','$.errorInfo.fileIds') AS data,json_array_length(data,'$.inputs') AS file_count" if summary else "data"
             rows = db.execute("SELECT " + projection + " FROM records WHERE " + condition + " ORDER BY " + ordering + " LIMIT ? OFFSET ?",
                               [*parameters, min(100, max(1, limit)), min(2**63 - 1, max(0, offset))]).fetchall()
         records = [json.loads(row["data"]) for row in rows]
@@ -215,13 +220,16 @@ class Store:
             for row in rows:
                 yield row["owner"], json.loads(row["data"])
 
-    def queued(self, limit=1, excluded_owners=()):
+    def queued(self, limit=1, excluded_owners=(), fair=False):
         where, parameters = ["kind='job'", "json_extract(data,'$.state')='queued'"], []
         if excluded_owners:
             where.append("owner NOT IN (" + ",".join("?" for _ in excluded_owners) + ")")
             parameters.extend(excluded_owners)
         with self.connect() as db:
-            rows = db.execute("SELECT owner,data FROM records WHERE " + " AND ".join(where) + " ORDER BY created,id,owner LIMIT ?", [*parameters, max(1, min(100, limit))]).fetchall()
+            ordering = "created,id,owner"
+            if fair:
+                ordering = "coalesce((SELECT max(json_extract(previous.data,'$.scheduled')) FROM records AS previous WHERE previous.owner=records.owner AND previous.kind='job' AND coalesce(json_extract(previous.data,'$.projectId'),'default')=coalesce(json_extract(records.data,'$.projectId'),'default')),0),created,id,owner"
+            rows = db.execute("SELECT owner,data FROM records WHERE " + " AND ".join(where) + " ORDER BY " + ordering + " LIMIT ?", [*parameters, max(1, min(100, limit))]).fetchall()
         return [(row[0], json.loads(row[1])) for row in rows]
 
     def reserved_bytes(self, owner=None):
@@ -299,6 +307,8 @@ def run_job(root, owner, job_id, limits, isolated=False):
                               state="processing", started=started, error=None)
         if not current or current.get("state") not in ACTIVE:
             return
+        if isolated and os.name == "nt":
+            apply_windows_worker_limits()
         manifest = []
         for upload in job["inputs"]:
             upload["path"] = str(store.folder(owner, upload["id"]) / "input")
@@ -309,10 +319,16 @@ def run_job(root, owner, job_id, limits, isolated=False):
             if original["size"] != upload["size"] or original["sha256"] != upload["sha256"]:
                 raise ProcessingError("Input integrity check failed")
         if job["operation"] == "compress":
-            manifest = compress(job["inputs"], output, job["target"], ctx)
+            manifest = compress(job["inputs"], output, job["target"], ctx, zip_profile=job.get("zipProfile", "balanced"))
         elif job["operation"] == "extract":
             item = job["inputs"][0]
-            manifest = extract(Path(item["path"]), item["name"], output, ctx, job["recursive"])
+            manifest = extract(Path(item["path"]), item["name"], output, ctx, job["recursive"],
+                               job.get("zipIndexes"), repack=job["target"] == "zip-deflate")
+        elif job["operation"] == "verify":
+            manifest = verify_zip(Path(job["inputs"][0]["path"]), output, ctx)
+        elif job["operation"] == "inspect":
+            from .documents import inspect_office
+            manifest = inspect_office(Path(job["inputs"][0]["path"]), output, ctx)
         else:
             manifest = convert(Path(job["inputs"][0]["path"]), output, job["target"], ctx,
                                job.get('qualityMode', 'lossless'), job.get('metadataPolicy', 'strip'))
@@ -327,7 +343,13 @@ def run_job(root, owner, job_id, limits, isolated=False):
         # A raw Zstandard frame has no filename field. Preserve the complete
         # source basename in its download name so restoration retains its type.
         stem = leaf if job["operation"] == "compress" and job["target"] == "zstd" else leaf.rsplit(".", 1)[0] or "files"
-        output_name = ("extracted" if job["operation"] == "extract" else stem) + "." + extension
+        if job["operation"] == "verify":
+            stem += ".verification"
+        elif job["operation"] == "inspect":
+            stem += ".inspection"
+        if job["operation"] == "extract":
+            stem = stem + ".repacked" if job["target"] == "zip-deflate" else "extracted"
+        output_name = stem + "." + extension
         ctx.check()
         store.patch(owner, "job", job_id, expected_states=ACTIVE, state="completed", processed=job["inputSize"],
                     error=None,
@@ -335,16 +357,13 @@ def run_job(root, owner, job_id, limits, isolated=False):
                     outputFile=output.name, outputName=output_name, finished=time.time(),
                     duration=time.time() - started, downloadAvailable=True)
     except Exception as error:
-        LOG.exception("Job failed: %s", job_id)
-        message = str(error) if isinstance(error, ProcessingError) else "Processing failed"
-        if isinstance(error, (zipfile.BadZipFile, tarfile.TarError, gzip.BadGzipFile, lzma.LZMAError, EOFError)):
-            message = "Corrupted archive"
-        elif isinstance(error, OSError) and error.errno == errno.ENOSPC:
-            message = "Storage full"
-        elif isinstance(error, PermissionError):
-            message = "Missing permissions"
+        message, category, retry = describe_failure(error)
+        LOG.warning("Job failed: %s (%s)", job_id, category)
         state = "cancelled" if (directory / "cancel").exists() else "failed"
-        store.patch(owner, "job", job_id, expected_states=ACTIVE, state=state, error=message, finished=time.time(), duration=time.time() - started, downloadAvailable=False)
+        latest = store.get(owner, 'job', job_id) or job
+        failure = {'category': category, 'retryEligible': retry, 'stage': latest['state'],
+                   'jobId': job_id, 'fileIds': [item['id'] for item in job['inputs']]}
+        store.patch(owner, "job", job_id, expected_states=ACTIVE, state=state, error=message, errorInfo=failure, finished=time.time(), duration=time.time() - started, downloadAvailable=False)
         output.unlink(missing_ok=True)
     finally:
         shutil.rmtree(directory / "expanded", ignore_errors=True)
@@ -379,10 +398,12 @@ class Service:
         self.limits = limits or {"input": 8 * 1024**3, "expanded": 2 * 1024**3, "files": 5000,
                                  "ratio": 1000, "depth": 8, "seconds": 1800, "storage": 20 * 1024**3}
         self.lock = threading.RLock()
+        self.projects = Projects(self.store, self.limits)
         self.running = {}
         self.restart_until = 0
         self.stop = threading.Event()
         self.accounts = Accounts(self.store)
+        self.oauth = OAuth(self.store)
         self.catalog = FileCatalog(self.store)
         self.secret = self.store.root / ".key"
         if not self.secret.exists():
@@ -437,6 +458,8 @@ class Service:
         return result
 
     def cleanup(self):
+        self.oauth.cleanup()
+        self.projects.cleanup()
         now = time.time()
         jobs = self.store.expired_jobs(now)
         for owner, candidate in jobs:
@@ -537,20 +560,24 @@ class Service:
             if time.monotonic() < self.restart_until:
                 return
             attempts = 0
-            while len(self.running) < 2 and attempts < 16:
+            capacity = worker_capacity(available_memory())
+            while len(self.running) < capacity and attempts < 16:
                 attempts += 1
                 owners = {entry[1] for entry in self.running.values()}
                 blocked = {owner for owner in owners if sum(entry[1] == owner for entry in self.running.values()) >= self.owner_plan(owner)['maxConcurrentJobs']}
-                candidates = self.store.queued(excluded_owners=owners)
+                candidates = self.store.queued(excluded_owners=owners, fair=True)
                 if not candidates and owners:
-                    candidates = self.store.queued(excluded_owners=blocked)
+                    candidates = self.store.queued(excluded_owners=blocked, fair=True)
                 if not candidates:
                     break
                 owner, job = candidates[0]
-                if self.reserved() + self.limits["expanded"] > self.limits["storage"]:
-                    self.store.patch(owner, "job", job["id"], state="failed", error="Storage full", downloadAvailable=False)
+                disk_required = self.limits['expanded'] * (len(self.running) + 1) + 64 * 1024**2
+                if self.reserved() + self.limits["expanded"] > self.limits["storage"] or shutil.disk_usage(self.store.root).free < disk_required:
+                    self.store.patch(owner, "job", job["id"], state="failed", error="Storage full", finished=time.time(),
+                                     errorInfo={'category': 'insufficient_storage', 'retryEligible': True, 'stage': 'queued',
+                                                'jobId': job['id'], 'fileIds': [item['id'] for item in job['inputs']]}, downloadAvailable=False)
                     continue
-                self.store.patch(owner, "job", job["id"], state="processing")
+                self.store.patch(owner, "job", job["id"], state="processing", scheduled=time.time())
                 try:
                     process = multiprocessing.get_context("spawn").Process(target=run_job, args=(str(self.store.root), owner, job["id"], self.limits, True))
                     process.start()
@@ -635,7 +662,10 @@ class LocalHTTPServer(ThreadingHTTPServer):
         # Windows SO_REUSEADDR otherwise permits two listeners on one port.
         if os.name == "nt":
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-        super().server_bind()
+        # The listener already has a numeric bind address. HTTPServer's
+        # reverse DNS lookup can block startup even for loopback.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 def handler(service):
@@ -664,15 +694,19 @@ def handler(service):
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Cross-Origin-Resource-Policy", "same-origin")
-            self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; worker-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+            self.send_header('Content-Security-Policy', service.oauth.content_security_policy(self.headers.get('Host', ''), getattr(self.server, 'transport_secure', False)))
+            self.send_header('Cross-Origin-Opener-Policy', 'same-origin-allow-popups')
             if getattr(self, "new_cookie", None):
                 self.send_header("Set-Cookie", self.new_cookie)
             if getattr(self, "account_cookie", None):
                 self.send_header("Set-Cookie", self.account_cookie)
+            if getattr(self, 'oauth_cookie', None):
+                self.send_header('Set-Cookie', self.oauth_cookie)
 
         def identity(self):
             self.new_cookie = None
             self.account_cookie = None
+            self.oauth_cookie = None
             self.account = None
             self.account_token = None
             peer = ipaddress.ip_address(self.client_address[0])
@@ -681,7 +715,7 @@ def handler(service):
                 raise HTTPError(403, "Private network only")
             host = self.headers.get("Host", "")
             parsed = urlsplit("http://" + host)
-            if parsed.hostname not in ("localhost", "127.0.0.1", "::1", *service.lan_hosts):
+            if parsed.hostname not in ("localhost", "127.0.0.1", "::1", *service.lan_hosts, *(tuple([service.oauth.hostname]) if getattr(self.server, "transport_secure", False) and service.oauth.hostname else ())):
                 raise HTTPError(403, "Invalid host")
             origin = self.headers.get("Origin")
             if origin and origin not in ("http://" + host, "https://" + host):
@@ -725,7 +759,8 @@ def handler(service):
         def account_view(self):
             return {'authenticated': self.account is not None,
                     'account': service.accounts.public(self.account) if self.account else None,
-                    'plan': self.plan, 'billingEnabled': False, 'credentialsAllowed': self.credentials_allowed}
+                    'plan': self.plan, 'billingEnabled': False, 'credentialsAllowed': self.credentials_allowed,
+                    'providers': service.oauth.public(self.headers.get('Host', ''), getattr(self.server, 'transport_secure', False))}
 
         def json_body(self):
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
@@ -771,6 +806,41 @@ def handler(service):
                 return self.send(200, {"ready": True, "instance": service.instance_id})
             if path == '/api/process/account/me' and method == 'GET':
                 return self.send(200, self.account_view())
+            provider_route = re.fullmatch(r'/api/process/account/oauth/(google|apple)/(start|complete)', path)
+            if provider_route and method == 'POST':
+                provider, action = provider_route.groups()
+                if self.headers.get('Origin') not in (None, service.oauth.base):
+                    raise HTTPError(403, 'Invalid sign-in origin')
+                if not service.oauth.same_host(self.headers.get('Host', ''), getattr(self.server, 'transport_secure', False)):
+                    raise HTTPError(403, 'Provider sign-in requires its configured HTTPS address.')
+                if self.account:
+                    raise HTTPError(409, 'Sign out before choosing another sign-in method.')
+                service.accounts.admit(self.client_address[0])
+                if int(self.headers.get('Content-Length', '0')) > 32768:
+                    raise HTTPError(413, 'Account request is too large')
+                body = self.json_body()
+                cookie_name = f'__Host-shante_oauth_{self.server.server_port}_{provider}'
+                if action == 'start':
+                    if body != {}:
+                        raise HTTPError(400, 'Invalid sign-in request')
+                    settings, browser = service.oauth.start(provider)
+                    self.oauth_cookie = f'{cookie_name}={browser}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=600'
+                    return self.send(200, settings)
+                if set(body) - {'state', 'credential', 'code', 'error'}:
+                    raise HTTPError(400, 'Invalid sign-in response')
+                jar = cookies.SimpleCookie()
+                try:
+                    jar.load(self.headers.get('Cookie', ''))
+                except cookies.CookieError:
+                    pass
+                browser = jar.get(cookie_name)
+                issuer, subject, name = service.oauth.complete(provider, body, browser.value if browser else '')
+                self.oauth_cookie = f'{cookie_name}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0'
+                account, token = service.accounts.login_provider(issuer, subject, name)
+                self.account = account; self.owner = account['owner']
+                self.plan = account_plan('free', service.limits)
+                self.set_account_cookie(token)
+                return self.send(200, self.account_view())
             if path in ('/api/process/account/register', '/api/process/account/login', '/api/process/account/logout', '/api/process/account/password-change') and method == 'POST':
                 if path.endswith('/logout'):
                     if self.account_token:
@@ -804,9 +874,14 @@ def handler(service):
                     running = len(service.running)
                 return self.send(200, {"version": 1, "processing": "local", "instance": service.instance_id,
                                        "pid": os.getpid(), "revision": PROCESSOR_REVISION, "activeJobs": running})
+            if path == "/api/process/inspect" and method == "POST":
+                try:
+                    return self.send(200, {"entries": inspect_headers(self.json_body().get('entries'))})
+                except ValueError as error:
+                    raise HTTPError(400, str(error)) from error
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
-                return self.send(200, {"archives": archive_formats(), "nativeEngine": capability(), "actionRegistry": action_registry(), "conversions": MEDIA if shutil.which("ffmpeg") and shutil.which("ffprobe") else [],
+                return self.send(200, {"projectRecovery": True, "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "zipSelection": True, "archiveRepack": True, "officeInspection": True, "zipProfiles": list(ZIP_PROFILES), "actionRegistry": action_registry(), "conversions": media_targets(),
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
             if path == "/api/process/settings":
                 if method == "GET":
@@ -851,6 +926,26 @@ def handler(service):
                                 shutil.rmtree(folder)
                             service.store.delete(self.owner, upload["id"])
                 return self.send(200, {"deleted": True})
+            if path == '/api/process/projects' and method == 'GET':
+                return self.send(200, {'projects': service.projects.list(self.owner)})
+            project_route = re.fullmatch(r'/api/process/projects/([a-zA-Z0-9_-]{1,64})(?:/(inputs)(?:/([a-f0-9]{32}))?)?', path)
+            if project_route:
+                project_id, input_route, source_id = project_route.groups()
+                is_inputs = input_route is not None
+                with service.lock:
+                    if not is_inputs and method == 'GET':
+                        return self.send(200, service.projects.get(self.owner, project_id))
+                    if not is_inputs and method == 'PUT':
+                        return self.send(200, service.projects.save(self.owner, project_id, self.json_body()))
+                    if is_inputs and not source_id and method == 'GET':
+                        query = parse_qs(url.query)
+                        return self.send(200, service.projects.inputs(self.owner, project_id, query.get('after', [''])[0], int(query.get('limit', [100])[0])))
+                    if is_inputs and source_id and method == 'PUT':
+                        service.projects.checkpoint(self.owner, project_id, source_id, self.json_body().get('upload'))
+                        return self.send(200, {'saved': True})
+                    if is_inputs and source_id and method == 'DELETE':
+                        service.projects.forget_source(self.owner, project_id, source_id)
+                        return self.send(200, {'removed': True})
             if path == "/api/process/uploads" and method == "POST":
                 body = self.json_body()
                 name = safe_path(body.get("name"), bool(body.get("directory")))
@@ -887,7 +982,8 @@ def handler(service):
                     if method == "DELETE":
                         if service.store.upload_referenced(self.owner, upload_id):
                             raise HTTPError(409, "File in use")
-                        shutil.rmtree(source.parent)
+                        if source.parent.exists():
+                            shutil.rmtree(source.parent)
                         service.store.delete(self.owner, upload_id)
                         return self.send(200, {"deleted": True})
                     if method == "PUT":
@@ -916,11 +1012,27 @@ def handler(service):
                 operation, target = body.get("operation"), body.get("target")
                 if not isinstance(ids, list) or not ids or len(ids) > service.limits["files"] or not all(isinstance(i, str) for i in ids) or len(set(ids)) != len(ids):
                     raise HTTPError(400, "Invalid file selection")
-                if (operation == "compress" and target not in archive_formats() or operation == "extract" and target != "zip" or
-                    operation == "convert" and target not in MEDIA or operation not in ("compress", "extract", "convert")):
+                if (operation == "compress" and target not in archive_formats() or operation == "extract" and target not in ("zip", "zip-deflate") or
+                    operation == "convert" and target not in MEDIA or operation in ("verify", "inspect") and target != "json" or
+                    operation not in ("compress", "extract", "convert", "verify", "inspect")):
                     raise HTTPError(400, "Unsupported operation")
                 if operation != "compress" and len(ids) != 1:
                     raise HTTPError(400, "One input per extraction or conversion job")
+                zip_profile = body.get("zipProfile", "balanced")
+                if "zipProfile" in body and (operation != "compress" or target != "zip" or
+                                              not isinstance(zip_profile, str) or zip_profile not in ZIP_PROFILES):
+                    raise HTTPError(400, "Invalid ZIP compression profile")
+                zip_indexes = body.get("zipIndexes")
+                if "zipIndexes" in body:
+                    if (operation != "extract" or body.get("recursive") or not isinstance(zip_indexes, list)
+                            or not 0 < len(zip_indexes) <= service.limits["files"]
+                            or not all(type(index) is int and 0 <= index < service.limits["files"] for index in zip_indexes)
+                            or len(set(zip_indexes)) != len(zip_indexes)):
+                        raise HTTPError(400, "Invalid ZIP member selection")
+                    zip_indexes = sorted(zip_indexes)
+                project_id = body.get('projectId', 'default')
+                if not isinstance(project_id, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', project_id):
+                    raise HTTPError(400, 'Invalid project identifier')
                 quality_mode = body.get('qualityMode', 'lossless')
                 metadata_policy = body.get('metadataPolicy', 'strip')
                 from .media_policy import validate_conversion_options
@@ -930,14 +1042,28 @@ def handler(service):
                     raise HTTPError(400, str(error)) from error
                 with service.lock:
                     request_id = body.get("requestId")
+                    recoverable = body.get('recoverable', False)
+                    if type(recoverable) is not bool:
+                        raise HTTPError(400, 'Invalid recovery mode')
+                    if recoverable:
+                        service.projects.get(self.owner, project_id)
+                        identity = ['project-recovery-v1', project_id, sorted(ids), operation, target, bool(body.get('recursive')), quality_mode, metadata_policy]
+                        if zip_indexes is not None:
+                            identity.append(zip_indexes)
+                        if zip_profile != "balanced":
+                            identity.append(zip_profile)
+                        request_id = hashlib.sha256(json.dumps(identity, separators=(',', ':')).encode()).hexdigest()
                     if request_id is not None and (not isinstance(request_id, str) or not re.fullmatch(r"[a-f0-9]{64}", request_id)):
                         raise HTTPError(400, "Invalid request identifier")
                     job_id = hashlib.sha256((self.owner + request_id).encode()).hexdigest()[:32] if request_id else secrets.token_hex(16)
                     existing = service.store.get(self.owner, "job", job_id)
                     if existing:
-                        if ([i["id"] for i in existing["inputs"]] != ids or existing["operation"] != operation or existing["target"] != target or existing["recursive"] != bool(body.get("recursive")) or
-                            existing.get('qualityMode', 'lossless') != quality_mode or existing.get('metadataPolicy', 'strip') != metadata_policy):
+                        existing_ids = [i['id'] for i in existing['inputs']]
+                        if ((sorted(existing_ids) != sorted(ids) if recoverable else existing_ids != ids) or existing["operation"] != operation or existing["target"] != target or existing["recursive"] != bool(body.get("recursive")) or
+                            existing.get('projectId', 'default') != project_id or existing.get('qualityMode', 'lossless') != quality_mode or existing.get('metadataPolicy', 'strip') != metadata_policy or existing.get('zipIndexes') != zip_indexes or existing.get('zipProfile', 'balanced') != zip_profile):
                             raise HTTPError(409, "Request identifier already used")
+                        if recoverable:
+                            service.projects.forget_uploads(self.owner, project_id, ids)
                         return self.send(200, service.public(self.owner, existing))
                     if service.store.count(self.owner, states=(*ACTIVE, "paused")) >= self.plan['maxQueuedJobs']:
                         raise HTTPError(429, "Queue limit reached. Wait for jobs to finish or cancel queued jobs." + (" Sign in for a larger queue." if not self.account else ""))
@@ -966,15 +1092,21 @@ def handler(service):
                     now = time.time()
                     settings = service.defaults(self.owner)
                     retention = RETENTION[settings["historyRetention"]]
-                    record = {"id": job_id, "created": now, "name": inputs[0]["name"] if len(inputs) == 1 else f"{len(inputs)} files",
+                    record = {"id": job_id, "projectId": project_id, "created": now, "name": inputs[0]["name"] if len(inputs) == 1 else f"{len(inputs)} files",
                               "operation": operation, "target": target, "inputs": inputs, "recursive": bool(body.get("recursive")),
                               'qualityMode': quality_mode, 'metadataPolicy': metadata_policy,
                               "state": "queued", "inputSize": sum(i["size"] for i in inputs), "outputSize": None,
                               "format": inputs[0]["format"] if len(inputs) == 1 else "batch", "processed": 0, "entries": 0,
                               "fileExpires": now + RETENTION[settings["fileRetention"]], "historyExpires": now + retention if retention else None,
                               "downloadAvailable": False, "error": None}
+                    if zip_indexes is not None:
+                        record["zipIndexes"] = zip_indexes
+                    if zip_profile != "balanced":
+                        record["zipProfile"] = zip_profile
                     service.store.folder(self.owner, record["id"]).mkdir(mode=0o700, parents=True)
                     service.store.put(self.owner, "job", record)
+                    if recoverable:
+                        service.projects.forget_uploads(self.owner, project_id, ids)
                     # Bound guest history independently of file retention.
                     service.store.trim_history(self.owner, limit=self.plan['historyRecords'])
                 LOG.info("Job queued: %s %s", record["id"], operation)
@@ -1044,7 +1176,7 @@ def handler(service):
                             if record["fileExpires"] <= time.time() or any(not (service.store.folder(self.owner, i["id"]) / "input").exists() for i in record["inputs"]):
                                 raise HTTPError(410, "Input files expired")
                             (directory / "cancel").unlink(missing_ok=True)
-                            service.store.patch(self.owner, "job", job_id, state="queued", error=None, processed=0, entries=0, expanded=0, mediaSeconds=0, duration=None, started=None, finished=None, hidden=False)
+                            service.store.patch(self.owner, "job", job_id, state="queued", error=None, errorInfo=None, retryCount=record.get('retryCount', 0) + 1, processed=0, entries=0, expanded=0, mediaSeconds=0, duration=None, started=None, finished=None, hidden=False)
                         else:
                             raise HTTPError(409, "Action unavailable for this job")
                     return self.send(200, service.public(self.owner, service.store.get(self.owner, "job", job_id)))
@@ -1103,7 +1235,7 @@ def handler(service):
         def handle_request(self):
             try:
                 self.route()
-            except (HTTPError, AccountError) as error:
+            except (HTTPError, AccountError, ProjectError) as error:
                 self.send(error.status, {"error": error.message}, error.retry_after)
             except (ValueError, TypeError, KeyError, ProcessingError):
                 self.send(400, {"error": "Invalid request"})
@@ -1156,7 +1288,7 @@ def main():
     server.transport_secure = transport.secure_cookies
     thread = threading.Thread(target=service.loop, daemon=True)
     thread.start()
-    LOG.info("HAMMA available at %s://%s:%s", 'https' if transport.secure_cookies else 'http', args.host, args.port)
+    LOG.info("HAMMA available at %s://%s:%s", 'https' if transport.secure_cookies else 'http', args.host, server.server_port)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
