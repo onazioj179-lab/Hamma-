@@ -360,6 +360,39 @@ class ServerTests(unittest.TestCase):
         self.assertFalse(failed["downloadAvailable"])
         self.assertFalse(failed.get("download"))
 
+    def test_tar_integrity_job_supports_compressed_tar_and_withholds_invalid_reports(self):
+        payload = b"member contents"
+
+        def fixture(mode, name="folder/entry.txt"):
+            data = io.BytesIO()
+            with tarfile.open(fileobj=data, mode=mode) as archive:
+                info = tarfile.TarInfo(name)
+                info.size = len(payload)
+                archive.addfile(info, io.BytesIO(payload))
+            return data.getvalue()
+
+        for extension, mode in (("tar", "w"), ("tar.gz", "w:gz"), ("tar.bz2", "w:bz2"), ("tar.xz", "w:xz")):
+            with self.subTest(format=extension):
+                source = self.upload(fixture(mode), f"example.{extension}")
+                job = self.execute(self.job(source, operation="verify", target="json"))
+                self.assertEqual(job["state"], "completed", job)
+                data = self.call(job["download"].removeprefix("/api/process"), raw=True)
+                self.assertEqual(hashlib.sha256(data).hexdigest(), job["sha256"])
+                report = json.loads(data)
+                self.assertEqual(report, {
+                    "format": extension, "verified": True, "scope": "structure-and-observed-member-digests",
+                    "entries": [{"name": "folder/entry.txt", "directory": False, "size": len(payload),
+                                 "sha256": hashlib.sha256(payload).hexdigest()}],
+                })
+        damaged = bytearray(fixture("w:gz"))
+        damaged[-8] ^= 1
+        for data, name in ((bytes(damaged), "damaged.tar.gz"), (fixture("w", "../escape"), "unsafe.tar")):
+            with self.subTest(name=name):
+                job = self.execute(self.job(self.upload(data, name), operation="verify", target="json"))
+                self.assertEqual(job["state"], "failed", job)
+                self.assertFalse(job["downloadAvailable"])
+                self.assertNotIn("download", job)
+
     def test_user_isolation_for_jobs_uploads_and_signed_downloads(self):
         source = self.upload()
         job = self.execute(self.job(source))

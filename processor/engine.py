@@ -26,6 +26,11 @@ from .media_policy import AUDIO_TARGETS, validate_conversion_options
 
 BLOCK = 1024 * 1024
 ARCHIVES = ("zip", "tar", "tar.gz", "tar.bz2", "tar.xz", "gzip", "bzip2", "xz")
+TAR_CODECS = {
+    "gzip": (gzip.open, (".tar.gz", ".tgz")),
+    "bzip2": (bz2.open, (".tar.bz2", ".tbz", ".tbz2")),
+    "xz": (lzma.open, (".tar.xz", ".txz")),
+}
 MEDIA = (*AUDIO_TARGETS, "mp4", "mkv", "webm", "png", "webp", "jpg")
 ZIP_PROFILES = {"auto": 6, "fastest": 1, "balanced": 6, "maximum": 9}
 
@@ -512,13 +517,69 @@ def verify_zip(source: Path, output: Path, ctx: Context):
                 record = ctx.copy(stream, Sink(), expanding=True, progress=False, expected=item.file_size)
             manifest.append({"name": name, "directory": item.is_dir(), **record})
             ctx.report(entries=ctx.count, expanded=ctx.expanded)
+    return write_archive_report(output, ctx, {"format": "zip", "verified": True, "entries": manifest})
+
+
+def write_archive_report(output: Path, ctx: Context, data: dict):
     ctx.report(state="verifying")
     with BoundedWriter(output, ctx) as report:
-        for chunk in json.JSONEncoder(ensure_ascii=True).iterencode(
-            {"format": "zip", "verified": True, "entries": manifest}
-        ):
+        for chunk in json.JSONEncoder(ensure_ascii=True).iterencode(data):
             report.write(chunk.encode("ascii"))
-    return manifest
+    return data["entries"]
+
+
+def tar_source(path, name, kind):
+    opener, suffixes = TAR_CODECS.get(kind, (None, (".tar",)))
+    if kind == "tar":
+        return True, None
+    if opener or kind == "file" and name.lower().endswith(suffixes):
+        with (opener(path, "rb") if opener else path.open("rb")) as stream:
+            head = stream.read(512)
+        # Empty TAR has no magic. The suffix disambiguates a zero block from
+        # ordinary compressed data starting with zeros.
+        return len(head) == 512 and (head[257:262] == b"ustar"
+                                     or head == bytes(512) and name.lower().endswith(suffixes)), opener
+    return False, None
+
+
+def read_tar_members(path, ctx, opener, consume):
+    validate_tar(path, ctx, opener)
+    with (
+        (opener(path, "rb") if opener else path.open("rb")) as raw,
+        tarfile.open(fileobj=raw, mode="r|") as archive,
+    ):
+        for item in archive:
+            ctx.check()
+            if item.isdir():
+                consume(item.name, None, 0, True)
+            elif item.isfile():
+                with archive.extractfile(item) as stream:
+                    consume(item.name, stream, item.size)
+            else:
+                raise ProcessingError("Unsafe archive link or device")
+
+
+def verify_archive(source: Path, original_name: str, output: Path, ctx: Context):
+    kind = detect(source)
+    if kind == "zip":
+        return verify_zip(source, output, ctx)
+    is_tar, opener = tar_source(source, original_name, kind)
+    if not is_tar:
+        raise ProcessingError("Unsupported archive for integrity verification")
+    manifest = []
+
+    def verify_member(name, stream, size, directory=False):
+        normalized = ctx.register(name, directory)
+        record = {"size": 0} if directory else ctx.copy(
+            stream, Sink(), expanding=True, progress=False, expected=size)
+        manifest.append({"name": normalized, "directory": directory, **record})
+        ctx.report(entries=ctx.count, expanded=ctx.expanded)
+
+    read_tar_members(source, ctx, opener, verify_member)
+    return write_archive_report(output, ctx, {
+        "format": {"gzip": "tar.gz", "bzip2": "tar.bz2", "xz": "tar.xz"}.get(kind, "tar"),
+        "verified": True, "scope": "structure-and-observed-member-digests", "entries": manifest,
+    })
 
 
 def extract(source: Path, original_name: str, output: Path, ctx: Context, recursive=False, zip_indexes=None, *, repack=False):
@@ -573,38 +634,9 @@ def extract(source: Path, original_name: str, output: Path, ctx: Context, recurs
                         with archive.open(item) as stream:
                             add_entry(item.filename, stream, item.file_size, item.is_dir())
             elif kind in ("tar", "gzip", "bzip2", "xz"):
-                # Inspect the bounded decompressed prefix before deciding TAR versus a single stream.
-                opener = {"gzip": gzip.open, "bzip2": bz2.open, "xz": lzma.open}.get(kind)
-                is_tar = kind == "tar"
-                if opener:
-                    with opener(path, "rb") as stream:
-                        head = stream.read(512)
-                    # An empty TAR has no magic. Use the declared archive suffix
-                    # for this ambiguous prefix so ordinary zero data is retained.
-                    tar_suffixes = {
-                        "gzip": (".tar.gz", ".tgz"),
-                        "bzip2": (".tar.bz2", ".tbz", ".tbz2"),
-                        "xz": (".tar.xz", ".txz"),
-                    }
-                    is_tar = len(head) == 512 and (
-                        head[257:262] == b"ustar"
-                        or (head == bytes(512) and name.lower().endswith(tar_suffixes[kind]))
-                    )
+                is_tar, opener = tar_source(path, name, kind)
                 if is_tar:
-                    validate_tar(path, ctx, opener)
-                    with (
-                        (opener(path, "rb") if opener else path.open("rb")) as raw,
-                        tarfile.open(fileobj=raw, mode="r|") as archive,
-                    ):
-                        for item in archive:
-                            ctx.check()
-                            if not (item.isfile() or item.isdir()):
-                                raise ProcessingError("Unsafe archive link or device")
-                            if item.isdir():
-                                add_entry(item.name, None, 0, True)
-                            else:
-                                with archive.extractfile(item) as stream:
-                                    add_entry(item.name, stream, item.size)
+                    read_tar_members(path, ctx, opener, add_entry)
                 else:
                     leaf = re.sub(r"\.(gz|gzip|bz2|xz)$", "", Path(name).name, flags=re.I)
                     if leaf == Path(name).name:

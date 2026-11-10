@@ -34,7 +34,7 @@ import time
 from urllib.parse import parse_qs, urlsplit, quote
 import zipfile
 
-from .engine import ARCHIVES, MEDIA, BLOCK, ZIP_PROFILES, Context, ProcessingError, archive_formats, compress, convert, detect, encode_zip_comment, extract, file_digest, safe_path, verify_zip
+from .engine import ARCHIVES, MEDIA, BLOCK, ZIP_PROFILES, Context, ProcessingError, archive_formats, compress, convert, detect, encode_zip_comment, extract, file_digest, safe_path, verify_archive
 from .worker_limits import apply_windows_worker_limits, apply_worker_limits
 from .resources import available_memory, worker_capacity
 from .errors import describe_failure
@@ -326,7 +326,8 @@ def run_job(root, owner, job_id, limits, isolated=False):
             manifest = extract(Path(item["path"]), item["name"], output, ctx, job["recursive"],
                                job.get("zipIndexes"), repack=job["target"] == "zip-deflate")
         elif job["operation"] == "verify":
-            manifest = verify_zip(Path(job["inputs"][0]["path"]), output, ctx)
+            item = job["inputs"][0]
+            manifest = verify_archive(Path(item["path"]), item["name"], output, ctx)
         elif job["operation"] == "inspect":
             from .documents import inspect_office
             manifest = inspect_office(Path(job["inputs"][0]["path"]), output, ctx)
@@ -882,7 +883,7 @@ def handler(service):
                     raise HTTPError(400, str(error)) from error
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
-                return self.send(200, {"projectRecovery": True, "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "zipSelection": True, "archiveRepack": True, "officeInspection": True, "zipComments": True, "zipProfiles": list(ZIP_PROFILES), "actionRegistry": action_registry(), "conversions": media_targets(),
+                return self.send(200, {"projectRecovery": True, "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "tarVerification": True, "zipSelection": True, "archiveRepack": True, "officeInspection": True, "zipComments": True, "zipProfiles": list(ZIP_PROFILES), "actionRegistry": action_registry(), "conversions": media_targets(),
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
             if path == "/api/process/settings":
                 if method == "GET":
