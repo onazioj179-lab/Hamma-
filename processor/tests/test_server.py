@@ -68,23 +68,6 @@ class ServerTests(unittest.TestCase):
         self.assert_status(409, lambda: self.job(source, operation='convert', target='mp3', qualityMode='lossy', metadataPolicy='preserve', requestId='d' * 64))
         self.assert_status(400, lambda: self.job(source, operation='convert', target='wav', metadataPolicy='invalid'))
 
-    def test_zip_comment_is_validated_bound_to_the_job_and_downloaded(self):
-        upload = self.upload(b"example", "entry.txt")
-        for comment in (None, "x" * 1025, "newline\n", "世界"):
-            self.assert_status(400, lambda: self.job(upload, zipComment=comment))
-        self.assert_status(400, lambda: self.job(upload, target="tar", zipComment="label"))
-        request_id = "c" * 64
-        job = self.job(upload, zipComment="Release notes", requestId=request_id)
-        self.assertEqual(self.job(upload, zipComment="Release notes", requestId=request_id)["id"], job["id"])
-        self.assert_status(409, lambda: self.job(upload, zipComment="Different label", requestId=request_id))
-        completed = self.execute(job)
-        self.assertEqual(completed["state"], "completed", completed)
-        data = self.call(completed["download"].removeprefix("/api/process"), raw=True)
-        self.assertEqual(hashlib.sha256(data).hexdigest(), completed["sha256"])
-        with zipfile.ZipFile(io.BytesIO(data)) as archive:
-            self.assertEqual(archive.comment, b"Release notes")
-            self.assertEqual(archive.read("entry.txt"), b"example")
-
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg not installed")
     def test_video_audio_targets_extract_short_tracks_to_a_verified_zip(self):
         source = Path(self.temp.name) / "short-tracks.mkv"
@@ -270,6 +253,23 @@ class ServerTests(unittest.TestCase):
         rejected = self.execute(self.job(source, operation='inspect', target='json'))
         self.assertEqual(rejected['state'], 'failed', rejected)
         self.assertFalse(rejected['downloadAvailable'])
+
+    def test_zip_comment_is_validated_bound_to_the_job_and_downloaded(self):
+        upload = self.upload(b"example", "entry.txt")
+        for comment in (None, "x" * 1025, "newline\n", "世界"):
+            self.assert_status(400, lambda: self.job(upload, zipComment=comment))
+        self.assert_status(400, lambda: self.job(upload, target="tar", zipComment="label"))
+        request_id = "c" * 64
+        job = self.job(upload, zipComment="Release notes", requestId=request_id)
+        self.assertEqual(self.job(upload, zipComment="Release notes", requestId=request_id)["id"], job["id"])
+        self.assert_status(409, lambda: self.job(upload, zipComment="Different label", requestId=request_id))
+        completed = self.execute(job)
+        self.assertEqual(completed["state"], "completed", completed)
+        data = self.call(completed["download"].removeprefix("/api/process"), raw=True)
+        self.assertEqual(hashlib.sha256(data).hexdigest(), completed["sha256"])
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            self.assertEqual(archive.comment, b"Release notes")
+            self.assertEqual(archive.read("entry.txt"), b"example")
 
     def test_auto_zip_profile_stores_incompressible_sample_and_deflates_repeated_data(self):
         noise = random.Random(2027).randbytes(8192)
