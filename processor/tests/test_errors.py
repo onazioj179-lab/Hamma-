@@ -14,6 +14,8 @@ class FailureDescriptions(unittest.TestCase):
                  (ProcessingError('Unsupported archive'), 'unsupported_format', False),
                  (ProcessingError('Processing time limit reached'), 'processing_timeout', True),
                  (ProcessingError('Unsafe filename'), 'invalid_input', False),
+                 (ProcessingError('Storage full'), 'insufficient_storage', True),
+                 (ProcessingError('Discovery entry quota reached'), 'resource_limit', False),
                  (ProcessingError('Expanded size limit reached'), 'resource_limit', False)]
         for error, category, retry in cases:
             with self.subTest(category=category):

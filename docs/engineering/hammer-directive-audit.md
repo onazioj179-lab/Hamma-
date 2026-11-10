@@ -1,8 +1,7 @@
 # SHANTE 2027 engineering audit
 
-This audit covers the SHANTE release candidate in draft PR #36. It includes the
-reviewed reliability changes and TAR integrity reports from PR #32. The
-repository also contains Rust SPK, WASM and Flutter components.
+This audit covers the SHANTE release candidate on the main integration line.
+The repository also contains Rust SPK, WASM and Flutter components.
 VERIFIED applies to the stated scope. PARTIAL describes an implemented subset.
 MISSING denotes a capability without implementation evidence in this scope.
 BLOCKED denotes acceptance that requires external infrastructure or credentials.
@@ -11,7 +10,7 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 
 | Work | Acceptance |
 | --- | --- |
-| Consolidate the release | Review the stalled-upload fix in PR #34 and operator indexed TAR in PR #35. Run the processor, web, native and portable package checks on the resulting release commit. |
+| Validate the integrated release | The upload and indexed TAR changes passed individual review in PRs #34 and #35. Run the processor, web, native and portable package checks on the resulting release commit. |
 | Scale browser jobs and recovery | Connect browser folder discovery to disk-backed manifests. Verify paged input and output lists, concurrent project fairness, per-file retry, and browser restart recovery with real payloads. |
 | Complete processing coverage | Exercise archive interoperability, encryption, split/join, and broader codecs. Build PDF and Office conversions with isolated parsers. Check decoded bytes, format fidelity and advertised capabilities. |
 | Harden untrusted processing | Enforce per-worker filesystem and network isolation, test the production tenant boundary, and expand advisory, SBOM and fuzz coverage. |
@@ -29,12 +28,12 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 | Split/join and archive comments | PARTIAL | ZIP creation and local inspection support archive comments. Split/join, member comments and other formats remain open. |
 | Native C++20 and ABI | PARTIAL | `native/` implements Zstandard streaming behind a versioned subprocess protocol and a C ABI v1 shared library. The ABI has a compiled C round-trip test. Other codecs and media remain outside the native ABI. |
 | Hardware capabilities and dispatch | PARTIAL | Native CPU flags and resource admission exist. Measure device-specific paths and exercise CPU fallback. GPU, power-aware and NUMA scheduling remain open. |
-| Streaming and large payloads | PARTIAL | Native codec, processor transfers and local indexing are bounded in parts. Exercise real large payloads, cancellation, disk exhaustion, memory pressure and 64-bit offsets end to end. |
+| Streaming and large payloads | PARTIAL | Native Zstandard, resumable transfers and operator-authorized indexed TAR jobs stream data. Exercise real large payloads, memory pressure and 64-bit offsets end to end. Browser input admission remains array-based. |
 | Image, video and audio | PARTIAL | `processor/engine.py`, `media_policy.py` and FFmpeg/ffprobe. Available output encoders and muxers determine the advertised targets. Image and audio conversions check the output codec and stream count. Where a decoded checksum is unavailable, output audio and video streams are decoded through EOF before the worker returns a manifest. Remuxed subtitles are checked for stream count and codec. Hardware encoding, additional formats and broader fidelity validation remain open. |
 | PDF and office documents | PARTIAL | The processor reports bounded DOCX, XLSX and PPTX package metadata. PDF operations, document rendering and conversions remain open. |
 | Mixed-file processing | PARTIAL | The browser can run separate actions by file type and recover grouped choices and completed uploads. File-specific rejections retain the affected inputs for retry. Browser job manifests and broader device and load acceptance remain open. |
 | Scheduler and durable recovery | PARTIAL | `processor/server.py`, `resources.py`, `worker_limits.py`. Windows Job Objects cap committed memory for each worker tree and reap children on worker exit. POSIX limits remain platform-specific. Exercise fairness under sustained load and mid-codec recovery. |
-| History, metadata, retention and indexing | PARTIAL | SQLite in `processor/server.py`, `catalog.py`, and `indexing.py`. Validate migrations, deletion, version history, query plans and end-to-end paged manifests at workload scale. |
+| History, metadata, retention and indexing | PARTIAL | SQLite in `processor/server.py`, `catalog.py`, and `indexing.py`. Indexed TAR jobs have owner-scoped paged manifests and retain discovery checkpoints for retry. Validate migrations, version history and equivalent browser workflows at workload scale. |
 | Authentication, authorization and subscriptions | PARTIAL | `processor/accounts.py`, `oauth.py`, and owner-scoped routes. Validate provider settings, tenant boundaries and plan/entitlement lifecycle. |
 | Storage, uploads, downloads and sharing | PARTIAL | Local storage, resumable transfer and range handlers in `processor/server.py` and `ranges.py`. Verify storage exhaustion and interrupted transfers. Scoped cross-user sharing and encrypted vault acceptance remain open. |
 | Safe preview and parser isolation | PARTIAL | Signature and media probe paths, worker limits and parser whitelists. Add an isolated preview service, strict per-worker controls and external file/network access tests. |
