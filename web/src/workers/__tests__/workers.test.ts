@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { compressChunk } from '../../core/wasm/wrappers';
+import type { MemoryPool } from '../../core/wasm/pool';
 
 // Exercise the worker protocol with a deterministic codec fixture. This suite
 // covers message handling and transfers independently of the WASM build.
@@ -11,8 +11,10 @@ vi.mock('../../core/wasm/loader', () => ({
 vi.mock('../../core/wasm/wrappers', async () => {
   const { deflateSync, inflateSync } = await import('fflate');
   return {
-    compressChunk: vi.fn((_core, _pool, input: Uint8Array) => {
+    compressChunk: vi.fn((_core, pool: MemoryPool, input: Uint8Array) => {
       if (!input.length) throw new Error('Empty fixture input');
+      // The one-byte fixture deliberately leaves a live allocation.
+      if (input.length === 1 && input[0] === 0xa5) pool.alloc(1);
       const data = deflateSync(input);
       return { data, bytesIn: input.length, bytesOut: data.length, ratio: data.length / input.length };
     }),
@@ -110,11 +112,8 @@ describe('compression worker messages', () => {
   it('warns when a codec call leaves a block allocated', async () => {
     const send = await loadWorker('compress');
     await send(init);
-    vi.mocked(compressChunk).mockImplementationOnce(async (_core, pool, input) => {
-      pool.alloc(1);
-      return { data: input.slice(), bytesIn: input.length, bytesOut: input.length, ratio: 1 };
-    });
-    expect(await send(chunk(1, new ArrayBuffer(32)))).toContainEqual(expect.objectContaining({
+    for (let index = 0; index < 99; index++) await send(chunk(index, new ArrayBuffer(32)));
+    expect(await send(chunk(99, Uint8Array.of(0xa5).buffer))).toContainEqual(expect.objectContaining({
       type: 'warning', message: 'Memory leaks detected in worker', stats: expect.objectContaining({ usedBlocks: 1 }),
     }));
   });
