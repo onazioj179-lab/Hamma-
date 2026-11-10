@@ -1,8 +1,7 @@
 # SHANTE 2027 engineering audit
 
-This audit covers the SHANTE release candidate in draft PR #36. It includes the
-reviewed reliability changes and TAR integrity reports from PR #32. The
-repository also contains Rust SPK, WASM and Flutter components.
+This audit covers the SHANTE release candidate on the main integration line.
+The repository also contains Rust SPK, WASM and Flutter components.
 VERIFIED applies to the stated scope. PARTIAL describes an implemented subset.
 MISSING denotes a capability without implementation evidence in this scope.
 BLOCKED denotes acceptance that requires external infrastructure or credentials.
@@ -11,7 +10,7 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 
 | Work | Acceptance |
 | --- | --- |
-| Consolidate the release | Review the stalled-upload fix in PR #34 and operator indexed TAR in PR #35. Run the processor, web, native and portable package checks on the resulting release commit. |
+| Validate the integrated release | The upload and indexed TAR changes passed individual review in PRs #34 and #35. Run the processor, web, native and portable package checks on the resulting release commit. |
 | Scale browser jobs and recovery | Connect browser folder discovery to disk-backed manifests. Verify paged input and output lists, concurrent project fairness, per-file retry, and browser restart recovery with real payloads. |
 | Complete processing coverage | Exercise archive interoperability, encryption, split/join, and broader codecs. Build PDF and Office conversions with isolated parsers. Check decoded bytes, format fidelity and advertised capabilities. |
 | Harden untrusted processing | Enforce per-worker filesystem and network isolation, test the production tenant boundary, and expand advisory, SBOM and fuzz coverage. |
