@@ -1,9 +1,11 @@
 import { jsonRequest, request } from './client';
 
+export interface IdentityProvider { id: string; name: string; available: boolean; message: string }
 export interface AccountSession {
+  providers?: IdentityProvider[];
   authenticated: boolean;
   credentialsAllowed: boolean;
-  account: null | { accountId: string; username: string; displayName: string; created: number; plan: 'free' };
+  account: null | { accountId: string; username: string; displayName: string; created: number; plan: 'free'; passwordEnabled?: boolean };
   plan: { tier: 'guest' | 'free'; historyRecords: number; maxQueuedJobs: number; maxConcurrentJobs: number; maxUploadFiles: number; maxInputBytes: number; maxStorageBytes: number };
   billingEnabled: false;
 }
@@ -17,7 +19,7 @@ channel?.addEventListener('message', event => {
   window.dispatchEvent(new CustomEvent('hamma-owner-changed', { detail: { external: true } }));
 });
 /** Cookies stay HttpOnly; only the processor changes account ownership. */
-export async function changeAccount(action: 'register' | 'login' | 'logout' | 'password-change', fields: Record<string, string>): Promise<AccountSession> {
+export async function changeAccount(action: 'register' | 'login' | 'logout' | 'password-change' | 'oauth/google/complete' | 'oauth/apple/complete', fields: Record<string, string>): Promise<AccountSession> {
   if (changing) throw new Error('An account change is already in progress.');
   const event = new CustomEvent('hamma-owner-changing', { cancelable: true });
   if (!window.dispatchEvent(event)) throw new Error('Finish the current upload or file operation before changing accounts.');

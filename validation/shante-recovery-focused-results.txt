@@ -1,0 +1,29 @@
+test_complete_inputs_restore_with_signatures_and_do_not_copy_bytes (test_project_recovery.ProjectRecoveryRoutes.test_complete_inputs_restore_with_signatures_and_do_not_copy_bytes) ... ok
+test_keyset_recovery_does_not_skip_inputs_after_an_earlier_removal (test_project_recovery.ProjectRecoveryRoutes.test_keyset_recovery_does_not_skip_inputs_after_an_earlier_removal) ... ok
+test_lost_submission_response_reconciles_without_duplicate_job (test_project_recovery.ProjectRecoveryRoutes.test_lost_submission_response_reconciles_without_duplicate_job) ... Request failed
+Traceback (most recent call last):
+  File "C:\Users\onazi\Documents\PALARITY\hamma-universal-workspace\processor\server.py", line 1198, in handle_request
+    self.route()
+    ~~~~~~~~~~^^
+  File "C:\Users\onazi\Documents\PALARITY\hamma-universal-workspace\processor\server.py", line 1070, in route
+    service.projects.forget_uploads(self.owner, project_id, ids)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.13_3.13.3824.0_x64__qbz5n2kfra8p0\Lib\unittest\mock.py", line 1169, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.13_3.13.3824.0_x64__qbz5n2kfra8p0\Lib\unittest\mock.py", line 1173, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.13_3.13.3824.0_x64__qbz5n2kfra8p0\Lib\unittest\mock.py", line 1234, in _execute_mock_call
+    raise effect
+RuntimeError: injected checkpoint interruption
+ok
+test_missing_upload_folder_can_be_forgotten_without_a_storage_error (test_project_recovery.ProjectRecoveryRoutes.test_missing_upload_folder_can_be_forgotten_without_a_storage_error) ... ok
+test_partial_foreign_and_expired_inputs_are_not_recovered (test_project_recovery.ProjectRecoveryRoutes.test_partial_foreign_and_expired_inputs_are_not_recovered) ... ok
+test_recovery_project_and_input_limits_and_forgetting (test_project_recovery.ProjectRecoveryRoutes.test_recovery_project_and_input_limits_and_forgetting) ... ok
+test_settings_are_durable_revision_checked_and_owner_scoped (test_project_recovery.ProjectRecoveryRoutes.test_settings_are_durable_revision_checked_and_owner_scoped) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 18.445s
+
+OK

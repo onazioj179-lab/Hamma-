@@ -58,7 +58,9 @@ class NativeContract(unittest.TestCase):
                     self.assertLessEqual(result['allocatorPeak'], 128 * 1024**2)
                     self.assertEqual(packed.read_bytes()[:4], b'\x28\xb5\x2f\xfd')
                     restored = self.root / f'{index}-{workers}.restored'
-                    self.run_codec('decompress', packed, restored)
+                    result = self.run_codec('decompress', packed, restored)
+                    self.assertEqual(result['inputBytes'], packed.stat().st_size)
+                    self.assertEqual(result['outputBytes'], len(payload))
                     self.assertEqual(restored.read_bytes(), payload)
 
     def test_limits_memory_cancellation_and_no_output_overwrite(self):
@@ -98,6 +100,18 @@ class NativeContract(unittest.TestCase):
         except OSError as error:
             self.skipTest(f'Symlink creation unavailable: {error}')
         self.run_codec('compress', link, self.output, success=False)
+
+    @unittest.skipUnless(hasattr(os, 'mkfifo'), 'POSIX FIFO required')
+    def test_fifo_input_is_rejected_without_waiting_for_a_writer(self):
+        os.mkfifo(self.source)
+        process = subprocess.run(
+            [BINARY, 'compress', str(self.source), str(self.output),
+             '4096', '4096', '134217728', '0', str(self.root / 'cancel')],
+            capture_output=True, text=True, timeout=5,
+        )
+        self.assertEqual(process.returncode, 2)
+        self.assertEqual(json.loads(process.stdout), {'event': 'error', 'code': 'input'})
+        self.assertFalse(self.output.exists())
 
     def test_cancellation_during_streaming_removes_partial_output(self):
         self.source.write_bytes(b'0123456789abcdef' * (1024**2))

@@ -1,5 +1,7 @@
 """Explicit conversion policy shared by HTTP validation and the media engine."""
-LOSSY_TARGETS = frozenset(('mp3', 'aac', 'm4a', 'ogg', 'opus', 'jpg'))
+AUDIO_TARGETS = ('wav', 'flac', 'mp3', 'aac', 'm4a', 'ogg', 'opus')
+H264_TARGET = 'mp4-h264'
+LOSSY_TARGETS = frozenset(('mp3', 'aac', 'm4a', 'ogg', 'opus', 'jpg', H264_TARGET))
 
 
 def validate_conversion_options(target, quality_mode='lossless', metadata_policy='strip'):

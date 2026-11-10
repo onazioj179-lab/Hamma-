@@ -17,8 +17,10 @@ it('counts both engines while excluding extraction expansion from compression sa
   const host = document.createElement('div'); document.body.append(host);
   const root = createRoot(host); const onHistory = vi.fn();
   try {
-    await act(async () => root.render(<LocalOverview device={null} onHistory={onHistory} />));
+    await act(async () => root.render(<LocalOverview onHistory={onHistory} />));
     const metrics = [...host.querySelectorAll('.metric')];
+    expect(host.textContent).not.toContain('Browser engine');
+    expect(host.textContent).not.toContain('processors');
     expect(metrics[0].textContent).toContain('4');
     expect(metrics[0].textContent).toContain('3 completed · 1 active');
     expect(metrics[2].textContent).toContain('500 B');

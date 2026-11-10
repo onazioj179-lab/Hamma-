@@ -191,7 +191,9 @@ class AccountHTTPTests(unittest.TestCase):
             for _ in range(2):
                 self.call('/jobs', {'uploads': [upload['id']], 'operation': 'compress', 'target': 'zip'})
             self.assertEqual(self.service.store.count(owner, visible=True), history_limit)
-            with patch('processor.server.multiprocessing.get_context') as context:
+            # Isolate account quotas from host CPU/memory admission, which has
+            # its own tests and can legitimately allow fewer workers.
+            with patch('processor.server.multiprocessing.get_context') as context, patch('processor.server.worker_capacity', return_value=2):
                 self.service.tick()
                 self.assertEqual(sum(item[1] == owner for item in self.service.running.values()), concurrency)
             # Complete synthetic workers so the next owner is measured independently.

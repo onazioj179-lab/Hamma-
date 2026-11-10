@@ -4,10 +4,8 @@ import { useAppStore } from '../../store/app';
 import { activeJob, type Job } from '../../processing/client';
 import { combineActivity, loadJobs } from '../../processing/activity';
 import { formatFileSize } from '../../utils/fileHelpers';
-import type { DeviceInfo } from '../../hooks/useCompression';
 
-export function LocalOverview({ device, onHistory }: {
-  device: DeviceInfo | null;
+export function LocalOverview({ onHistory }: {
   onHistory: () => void;
 }) {
   const recent = useAppStore(state => state.recentArchives);
@@ -64,7 +62,7 @@ export function LocalOverview({ device, onHistory }: {
           return <div key={operation}><span className={`operation-tag tag-${operation}`}>{operation === 'compress' ? 'Compression' : operation === 'extract' ? 'Extraction' : 'Conversion'}</span><meter aria-label={`${operation} share`} min={0} max={Math.max(1, completed.length)} value={count} /><strong>{count}</strong></div>;
         })}</div>
       </section>
-      <section className="surface settings-group"><div className="section-heading"><h2>Workspace status</h2><p>{status === 'ready' ? 'Processor connected' : status === 'offline' ? 'Processor disconnected' : 'Connecting to processor'}</p></div><dl className="overview-status"><dt>In progress</dt><dd>{active}</dd><dt>Needs attention</dt><dd>{failed}</dd><dt>Browser engine</dt><dd>{device ? `${device.platform} · ${device.cores} processors` : 'Initializing'}</dd></dl><p className="footnote">History belongs to this browser session. Shared links let each person work with their own files.</p></section>
+      <section className="surface settings-group"><div className="section-heading"><h2>Workspace status</h2><p>{status === 'ready' ? 'Processor connected' : status === 'offline' ? 'Processor disconnected' : 'Connecting to processor'}</p></div><dl className="overview-status"><dt>In progress</dt><dd>{active}</dd><dt>Needs attention</dt><dd>{failed}</dd></dl><p className="footnote">Your account or guest session determines which jobs appear here.</p></section>
     </div>
     <section className="surface settings-group"><div className="section-line"><h2>Recent activity</h2><button className="text-button" onClick={onHistory}>See all <ArrowRight size={14} /></button></div>{latest.length ? <div className="overview-recent">{latest.map(job => <button key={job.id} onClick={onHistory}><span className={`operation-tag tag-${job.operation}`}>{job.operation}</span><span><strong>{job.outputName || job.name}</strong><small>{new Date(job.created * 1000).toLocaleString()}</small></span><span className={`file-state state-${job.state}`}>{job.state}</span></button>)}</div> : <p className="footnote">Add files in Workspace to start your first operation.</p>}</section>
     <p className="footnote">Totals cover retained processor jobs, browser records, and visible SPK outputs in this session. Savings count completed compressions only; extraction and conversion do not inflate them.</p>

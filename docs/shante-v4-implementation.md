@@ -1,3 +1,8 @@
+> Historical initial repair report. Current AVIF support is documented in
+> [avif-repair.md](avif-repair.md); later detection and project recovery work is in
+> [universal-projects.md](universal-projects.md). Outstanding items below describe
+> the state at the initial V4 repair, not current acceptance.
+
 # SHANTE V4 investigation and initial repairs
 
 This change is an initial repair, not acceptance of the full V4 specification.
