@@ -26,13 +26,13 @@ from .media_policy import AUDIO_TARGETS, validate_conversion_options
 
 BLOCK = 1024 * 1024
 ARCHIVES = ("zip", "tar", "tar.gz", "tar.bz2", "tar.xz", "gzip", "bzip2", "xz")
+MEDIA = (*AUDIO_TARGETS, "mp4", "mkv", "webm", "png", "webp", "jpg")
+ZIP_PROFILES = {"auto": 6, "fastest": 1, "balanced": 6, "maximum": 9}
 TAR_CODECS = {
     "gzip": (gzip.open, (".tar.gz", ".tgz")),
     "bzip2": (bz2.open, (".tar.bz2", ".tbz", ".tbz2")),
     "xz": (lzma.open, (".tar.xz", ".txz")),
 }
-MEDIA = (*AUDIO_TARGETS, "mp4", "mkv", "webm", "png", "webp", "jpg")
-ZIP_PROFILES = {"auto": 6, "fastest": 1, "balanced": 6, "maximum": 9}
 
 
 def archive_formats():
