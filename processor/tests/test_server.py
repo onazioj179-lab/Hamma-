@@ -615,12 +615,12 @@ class ServerTests(unittest.TestCase):
 
     def test_actual_background_worker_process_completes_and_releases_slot(self):
         job = self.job()
-        # Admission can correctly defer a job under transient memory pressure.
-        # Exercise the production scheduler loop rather than expecting one tick
-        # to admit work regardless of host resources.
+        # Exercise both admission outcomes independently of host memory pressure.
         with patch('processor.server.available_memory', return_value=0):
             self.service.tick()
         self.assertEqual(self.call('/jobs/' + job['id'])['state'], 'queued')
+        with patch('processor.server.available_memory', return_value=2 * 1024**3):
+            self.service.tick()
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             self.service.tick()
