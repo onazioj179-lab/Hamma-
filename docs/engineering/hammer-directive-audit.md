@@ -1,6 +1,8 @@
-# SHANTE 2027 engineering audit
+# HAMMA web application engineering audit
 
-This audit covers the SHANTE release candidate on the main integration line.
+HAMMA is the web application. SHANTE is its internal processing engine.
+Current work covers the browser interface, backend, and processing engine.
+Desktop applications and packaging are deferred.
 The repository also contains Rust SPK, WASM and Flutter components.
 VERIFIED applies to the stated scope. PARTIAL describes an implemented subset.
 MISSING denotes a capability without implementation evidence in this scope.
@@ -10,11 +12,11 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 
 | Work | Acceptance |
 | --- | --- |
-| Validate the integrated release | The upload and indexed TAR changes passed individual review in PRs #34 and #35. Run the processor, web, native and portable package checks on the resulting release commit. |
+| Validate the integrated web release | Integrate PRs #37 and #38 and verify browser workflows, processor behavior, and the production web build on the resulting commit. |
 | Scale browser jobs and recovery | Connect browser folder discovery to disk-backed manifests. Verify paged input and output lists, concurrent project fairness, per-file retry, and browser restart recovery with real payloads. |
 | Complete processing coverage | Exercise archive interoperability, encryption, split/join, and broader codecs. Build PDF and Office conversions with isolated parsers. Check decoded bytes, format fidelity and advertised capabilities. |
 | Harden untrusted processing | Enforce per-worker filesystem and network isolation, test the production tenant boundary, and expand advisory, SBOM and fuzz coverage. |
-| Ship desktop and validate devices | Add a native desktop shell and signed update flow. Test signed installers and physical mobile and foldable interactions. Signing requires platform identities. |
+| Validate browser devices | Test mobile and foldable layouts, touch input, keyboard access, and recovery on physical devices. |
 | Validate production operations | Exercise rollback, migration, retention and monitoring in the target deployment. Distributed acceptance requires authorized compute and object storage. |
 
 | Capability | Status | Implementation and remaining acceptance |

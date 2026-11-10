@@ -1057,16 +1057,17 @@ def handler(service):
             if project_route:
                 project_id, input_route, source_id = project_route.groups()
                 is_inputs = input_route is not None
+                body = self.json_body() if method == 'PUT' else None
                 with service.lock:
                     if not is_inputs and method == 'GET':
                         return self.send(200, service.projects.get(self.owner, project_id))
                     if not is_inputs and method == 'PUT':
-                        return self.send(200, service.projects.save(self.owner, project_id, self.json_body()))
+                        return self.send(200, service.projects.save(self.owner, project_id, body))
                     if is_inputs and not source_id and method == 'GET':
                         query = parse_qs(url.query)
                         return self.send(200, service.projects.inputs(self.owner, project_id, query.get('after', [''])[0], int(query.get('limit', [100])[0])))
                     if is_inputs and source_id and method == 'PUT':
-                        service.projects.checkpoint(self.owner, project_id, source_id, self.json_body().get('upload'))
+                        service.projects.checkpoint(self.owner, project_id, source_id, body.get('upload'))
                         return self.send(200, {'saved': True})
                     if is_inputs and source_id and method == 'DELETE':
                         service.projects.forget_source(self.owner, project_id, source_id)
