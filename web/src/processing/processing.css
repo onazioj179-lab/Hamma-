@@ -29,6 +29,7 @@
 .zip-inspection-list { list-style: none; padding: 0; max-height: 320px; overflow: auto; }
 .zip-inspection-list li { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 8px 0; border-bottom: 1px solid rgb(var(--border)); overflow-wrap: anywhere; }
 .zip-inspection-list small { color: rgb(var(--muted)); }
+.zip-comment-preview { overflow-wrap: anywhere; white-space: pre-wrap; }
 .conversion-select { margin-left: auto; display: flex; gap: 8px; align-items: center; color: rgb(var(--muted)); font-size: 12px; }
 .universal-workspace select { background: rgb(var(--card)); color: rgb(var(--foreground)); border: 1px solid rgb(var(--border)); border-radius: 8px; padding: 8px 10px; min-height: 36px; }
 .processing-options { margin: 18px 0 28px; }

@@ -7,8 +7,14 @@ export interface ZipMember {
   encrypted: boolean;
 }
 
+export interface ZipDirectory {
+  members: ZipMember[];
+  comment: string;
+}
+
 const END_SIZE = 22;
 const MAX_COMMENT = 65535;
+const COMMENT_PREVIEW = 4096;
 const MAX_DIRECTORY = 2 * 1024 * 1024;
 const MAX_ENTRIES = 5000;
 const MEMBER_SIZE = 46;
@@ -57,7 +63,7 @@ function memberSizes(view: DataView, position: number, extra: number, extraSize:
 }
 
 /** Read ZIP metadata only. Member data is never opened or decompressed. */
-export async function inspectZip(file: Blob): Promise<ZipMember[]> {
+export async function inspectZip(file: Blob): Promise<ZipDirectory> {
   const tailStart = Math.max(0, file.size - END_SIZE - MAX_COMMENT - ZIP64_LOCATOR - ZIP64_END);
   const tail = new DataView(await readFileAsArrayBuffer(file.slice(tailStart)));
   let end = tail.byteLength - END_SIZE;
@@ -67,6 +73,11 @@ export async function inspectZip(file: Blob): Promise<ZipMember[]> {
     end--;
   }
   if (end < 0) throw invalid();
+  const commentLength = tail.getUint16(end + 20, true);
+  const commentBytes = new Uint8Array(tail.buffer, end + END_SIZE, Math.min(commentLength, COMMENT_PREVIEW));
+  const comment = Array.from(commentBytes, byte => byte >= 0x20 && byte <= 0x7e
+    ? String.fromCharCode(byte) : '\\x' + byte.toString(16).padStart(2, '0')).join('')
+    + (commentLength > COMMENT_PREVIEW ? '…' : '');
   let count = tail.getUint16(end + 10, true);
   let size = tail.getUint32(end + 12, true);
   let offset = tail.getUint32(end + 16, true);
@@ -121,5 +132,5 @@ export async function inspectZip(file: Blob): Promise<ZipMember[]> {
     members.push({ name, size: unpackedSize, packedSize, encrypted: !!(flags & 1) });
   }
   if (members.length !== count) throw invalid();
-  return members;
+  return { members, comment };
 }
