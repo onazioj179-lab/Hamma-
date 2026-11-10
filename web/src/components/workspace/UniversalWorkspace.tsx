@@ -53,6 +53,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const [savingRetention, setSavingRetention] = useState(false);
   const [target, setTarget] = useState('zip');
   const [zipProfile, setZipProfile] = useState('balanced');
+  const [zipComment, setZipComment] = useState('');
   const [conversion, setConversion] = useState('wav');
   const [qualityMode, setQualityMode] = useState<'lossless' | 'lossy'>('lossless');
   const [metadataPolicy, setMetadataPolicy] = useState<'strip' | 'preserve'>('strip');
@@ -195,7 +196,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       const transferableIds = new Set(transferable.map(source => source.id));
       setSources(transferable); setSelected(previous => new Set([...previous].filter(id => transferableIds.has(id))));
       drafts.current.clear(); setProjectIds(['default']); setProjectId('default'); currentProject.current = 'default';
-      setSourceErrors({}); setTarget('zip'); setZipProfile('balanced'); setConversion('wav'); setQualityMode('lossless'); setMetadataPolicy('strip'); setRecursive(false);
+      setSourceErrors({}); setTarget('zip'); setZipProfile('balanced'); setZipComment(''); setConversion('wav'); setQualityMode('lossless'); setMetadataPolicy('strip'); setRecursive(false);
       abort.current?.abort(); folderController.current?.abort(); setFolderHelp(false);
       refreshController.current?.abort(); refreshFlight.current = null;
       deletionPreviewController.current?.abort();
@@ -292,7 +293,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     drafts.current.set(projectId, { sources, selected, target, conversion, qualityMode, metadataPolicy, recursive, errors: sourceErrors });
     const draft = drafts.current.get(id);
     setSources(draft?.sources || []); setSelected(draft?.selected || new Set());
-    setTarget(draft?.target || 'zip'); setZipProfile('balanced'); setConversion(draft?.conversion || 'wav');
+    setTarget(draft?.target || 'zip'); setZipProfile('balanced'); setZipComment(''); setConversion(draft?.conversion || 'wav');
     setQualityMode(draft?.qualityMode || 'lossless'); setMetadataPolicy(draft?.metadataPolicy || 'strip');
     setRecursive(draft?.recursive || false); setSourceErrors(draft?.errors || {});
     setProjectId(id); setPage(0); setScroll(0); setError(''); setJobSelected(new Set());
@@ -315,6 +316,15 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const singleSource = chosen.length === 1 ? chosen[0] : undefined;
   const zipSource = singleSource && !singleSource.directory && (singleSource.inspection && !singleSource.inspection.error
     ? singleSource.inspection.format === 'zip' : /\.zip$/i.test(singleSource.name)) ? singleSource : null;
+  const signature = singleSource?.inspection?.format;
+  const tarName = singleSource?.name ?? '';
+  const tarSource = singleSource && !singleSource.directory && (signature === 'tar'
+    || (signature === 'file' || !signature) && /\.tar$/i.test(tarName)
+    || (!signature || signature === 'gzip') && /\.(tar\.gz|tgz)$/i.test(tarName)
+    || (!signature || signature === 'bzip2') && /\.(tar\.bz2|tbz2?)$/i.test(tarName)
+    || (!signature || signature === 'xz') && /\.(tar\.xz|txz)$/i.test(tarName));
+  const verificationLabel = zipSource && capability?.zipVerification ? 'Test ZIP integrity'
+    : tarSource && capability?.tarVerification ? 'Test TAR integrity' : '';
   const archiveTargets = resolveArchiveTargets(chosen, capability);
   const browserInputs = chosen.every(source => !!source.file);
   const archiveTarget = target === 'spk' && browserInputs || archiveTargets.includes(target) ? target : archiveTargets[0] || 'zip';
@@ -325,15 +335,20 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     (!singleSource.inspection || singleSource.inspection.error || singleSource.inspection.format === 'zip') &&
     /\.(docx|xlsx|pptx)$/i.test(singleSource.name);
   const conversionTarget = actions.conversions.includes(conversion) ? conversion : actions.conversions[0];
+  const comment = archiveTarget === 'zip' && capability?.zipComments ? zipComment : '';
   const submit = async (operation: 'compress' | 'extract' | 'convert' | 'verify' | 'inspect', options: { zipIndexes?: number[]; repack?: boolean } = {}) => {
     const { zipIndexes, repack } = options;
     if (accountChanging()) return;
     if (submitting.current || recovering || capability?.projectRecovery && !recoveryReady || spkBusy || !chosen.length) return;
     if (operation === 'convert' && !conversionTarget) return;
-    if (operation === 'verify' && (!zipSource || !capability?.zipVerification)) return;
+    if (operation === 'compress' && /[^ -~]/.test(comment)) {
+      setError('ZIP comments accept printable ASCII characters only.');
+      return;
+    }
+    if (operation === 'verify' && !verificationLabel) return;
     if (operation === 'inspect' && !canInspectOffice) return;
     if (repack && !canRepack) return;
-    if (operation === 'convert' && ['mp3', 'aac', 'm4a', 'ogg', 'opus', 'jpg'].includes(conversionTarget) && qualityMode !== 'lossy') {
+    if (operation === 'convert' && ['mp3', 'aac', 'm4a', 'ogg', 'opus', 'jpg', 'mp4-h264'].includes(conversionTarget) && qualityMode !== 'lossy') {
       setError(`${conversionTarget.toUpperCase()} can reduce quality. Choose Allow quality loss before converting.`);
       return;
     }
@@ -402,8 +417,9 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       if (operation === 'compress') {
         const profiles = archiveTarget === 'zip' && capability.zipProfiles?.includes(zipProfile) && zipProfile !== 'balanced'
           ? { zipProfile } : {};
-        const identity = [generation, projectId, inputs.map(i => i.source.id), operation, archiveTarget, ...Object.values(profiles)];
-        await jsonRequest('/jobs', { ...(projectId === 'default' ? {} : { projectId }), uploads: inputs.map(i => i.id), operation, target: archiveTarget, ...profiles, ...(capability.projectRecovery ? { recoverable: true } : { requestId: await requestId(identity) }) }, 'POST', { signal: controller.signal });
+        const identity = [generation, projectId, inputs.map(i => i.source.id), operation, archiveTarget, ...Object.values(profiles), ...(comment ? [['zipComment', comment]] : [])];
+        await jsonRequest('/jobs', { ...(projectId === 'default' ? {} : { projectId }), uploads: inputs.map(i => i.id), operation, target: archiveTarget, ...profiles, ...(comment ? { zipComment: comment } : {}), ...(capability.projectRecovery ? { recoverable: true } : { requestId: await requestId(identity) }) }, 'POST', { signal: controller.signal });
+        if (comment && generation === ownerGeneration.current) setZipComment('');
         inputs.forEach(i => submitted.add(i.source.id));
       }
     } catch (caught) {
@@ -598,13 +614,22 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
         <div className="source-toolbar">{sources.some(source => source.inspection?.error) && <button className="button secondary" disabled={busy || !!spkBusy} onClick={() => setSources(previous => previous.map(source => source.inspection?.error ? { ...source, inspection: undefined } : source))}>Retry detection</button>}<label className="selection-label"><input type="checkbox" checked={selected.size === sources.length} onChange={() => setSelected(selected.size === sources.length ? new Set() : new Set(sources.map(s => s.id)))} />Select all</label><span>{selected.size.toLocaleString()} selected · {formatFileSize(chosen.reduce((sum, source) => sum + source.size, 0))}</span><button className="icon-button" disabled={busy || recovering || spkBusy || !selected.size} aria-label="Remove selected files" onClick={removeSelectedSources}><Trash2 size={16} /></button></div>
         <div className="source-scroll" onScroll={event => setScroll(event.currentTarget.scrollTop)}><div style={{ height: sources.length * 64, position: 'relative' }}>{rendered.map((source, index) => <div className="source-row" key={source.id} style={{ top: (rowStart + index) * 64 }}><input type="checkbox" aria-label={`Select ${source.name}`} checked={selected.has(source.id)} onChange={() => toggleSource(source.id)} /><File size={19} strokeWidth={1.5} /><div><strong title={source.name}>{source.name}</strong><span>{source.directory ? 'Empty folder' : formatFileSize(source.size) + (capability?.inspection ? '  -  ' + (source.inspection?.error || source.inspection?.format || 'Detecting - ') : '')}</span></div>{sourceErrors[source.id] ? <button className="file-state source-error" title={sourceErrors[source.id]} onClick={() => setError(source.name + ': ' + sourceErrors[source.id])}>{sourceErrors[source.id]}</button> : <span className="file-state">Waiting</span>}</div>)}</div></div>
         {new Set(chosen.map(source => source.inspection?.format).filter(Boolean)).size > 1 && <details className="processing-options"><summary>Actions by file type</summary><div className="button-row">{[...new Set(chosen.map(source => source.inspection?.format).filter((format): format is string => !!format))].map(format => <button className="button secondary" key={format} disabled={busy || !!spkBusy} onClick={() => setSelected(new Set(chosen.filter(source => source.inspection?.format === format).map(source => source.id)))}>Select {format.toUpperCase()} ({chosen.filter(source => source.inspection?.format === format).length})</button>)}</div></details>}
-        <div className="processing-actions"><button className="button primary" disabled={busy || recovering || spkBusy || !selected.size || (archiveTarget === 'spk' ? !spkReady || chosen.some(source => source.directory) : !capability || offline)} onClick={() => void submit('compress')}><FileArchive size={16} /> Compress</button>{canExtract && <button className="button secondary" disabled={busy || recovering || spkBusy || !selected.size || chosen.some(s => s.directory) || (chosen.every(source => /\.spk$/i.test(source.name)) ? !spkReady : !capability || offline)} onClick={() => void submit('extract')}><ArrowDownToLine size={16} /> Extract</button>}{actions.conversions.length > 0 && <><button className="button secondary" disabled={busy || recovering || spkBusy || !selected.size || !capability?.conversions.length || offline || chosen.some(s => s.directory)} onClick={() => void submit('convert')}><ArrowRightLeft size={16} /> Convert</button><label className="conversion-select">To<SelectField disabled={busy || recovering || spkBusy} aria-label="Conversion format" value={conversionTarget} onChange={value => setConversion(value)}>{actions.conversions.map(format => <option key={format}>{format}</option>)}</SelectField></label><label className="conversion-select">Quality<SelectField disabled={busy || recovering || spkBusy} aria-label="Conversion quality" value={qualityMode} onChange={value => setQualityMode(value as "lossless" | "lossy")}><option value="lossless">Lossless</option><option value="lossy">Allow quality loss</option></SelectField></label></>}</div>
+        <div className="processing-actions"><button className="button primary" disabled={busy || recovering || spkBusy || !selected.size || (archiveTarget === 'spk' ? !spkReady || chosen.some(source => source.directory) : !capability || offline)} onClick={() => void submit('compress')}><FileArchive size={16} /> Compress</button>{canExtract && <button className="button secondary" disabled={busy || recovering || spkBusy || !selected.size || chosen.some(s => s.directory) || (chosen.every(source => /\.spk$/i.test(source.name)) ? !spkReady : !capability || offline)} onClick={() => void submit('extract')}><ArrowDownToLine size={16} /> Extract</button>}{actions.conversions.length > 0 && <><button className="button secondary" disabled={busy || recovering || spkBusy || !selected.size || !capability?.conversions.length || offline || chosen.some(s => s.directory)} onClick={() => void submit('convert')}><ArrowRightLeft size={16} /> Convert</button><label className="conversion-select">To<SelectField disabled={busy || recovering || spkBusy} aria-label="Conversion format" value={conversionTarget} onChange={value => setConversion(value)}>{actions.conversions.map(format => <option key={format} value={format}>{format === 'mp4-h264' ? 'MP4 (H.264)' : format}</option>)}</SelectField></label><label className="conversion-select">Quality<SelectField disabled={busy || recovering || spkBusy} aria-label="Conversion quality" value={qualityMode} onChange={value => setQualityMode(value as "lossless" | "lossy")}><option value="lossless">Lossless</option><option value="lossy">Allow quality loss</option></SelectField></label></>}</div>
         {archiveTarget === 'zip' && !!capability?.zipProfiles?.length && <div className="zip-inspection">
           <label className="conversion-select">ZIP compression
             <SelectField aria-label="ZIP compression profile" value={zipProfile} onChange={setZipProfile} disabled={busy || recovering || spkBusy}>
               {capability.zipProfiles.map(profile => <option key={profile} value={profile}>{profile[0].toUpperCase() + profile.slice(1)}</option>)}
             </SelectField>
           </label>
+        </div>}
+        {archiveTarget === 'zip' && capability?.zipComments && <div className="zip-inspection">
+          <details>
+            <summary>ZIP comment</summary>
+            <label className="search-field"><input aria-label="ZIP archive comment" placeholder="Optional archive comment"
+              value={zipComment} maxLength={1024} disabled={busy || recovering || spkBusy}
+              onChange={event => setZipComment(event.target.value)} /></label>
+            <p className="footnote">The ZIP stores this comment in plain text. Use up to 1,024 printable ASCII characters.</p>
+          </details>
         </div>}
         {visible && zipSource?.file && <ZipInspection key={projectId + ':' + zipSource.id} file={zipSource.file}
           disabled={busy || recovering || spkBusy || offline}
@@ -618,9 +643,9 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
             onClick={() => void submit('inspect')}><File size={16} /> Inspect Office document</button>
           <p className="footnote">Uploads the document and returns a package metadata report.</p>
         </div>}
-        {zipSource && capability?.zipVerification && <div className="zip-inspection">
-          <button className="button secondary" disabled={busy || recovering || spkBusy || offline} onClick={() => void submit('verify')}><ShieldCheck size={16} /> Test ZIP integrity</button>
-          <p className="footnote">Uploads the ZIP to the processor for a downloadable integrity report.</p>
+        {verificationLabel && <div className="zip-inspection">
+          <button className="button secondary" disabled={busy || recovering || spkBusy || offline} onClick={() => void submit('verify')}><ShieldCheck size={16} /> {verificationLabel}</button>
+          <p className="footnote">Uploads the archive to the processor for a downloadable integrity report.</p>
         </div>}
       </section>}
       {capability?.inspection && sources.length > 0 && <p className="footnote">File detection sends the first 512 bytes to your processor. Processor jobs upload full files. ZIP inspection runs in this browser.</p>}

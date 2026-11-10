@@ -22,12 +22,17 @@ import unicodedata
 import zipfile
 import zlib
 
-from .media_policy import AUDIO_TARGETS, validate_conversion_options
+from .media_policy import AUDIO_TARGETS, H264_TARGET, validate_conversion_options
 
 BLOCK = 1024 * 1024
 ARCHIVES = ("zip", "tar", "tar.gz", "tar.bz2", "tar.xz", "gzip", "bzip2", "xz")
-MEDIA = (*AUDIO_TARGETS, "mp4", "mkv", "webm", "png", "webp", "jpg")
+MEDIA = (*AUDIO_TARGETS, "mp4", "mkv", "webm", "png", "webp", "jpg", H264_TARGET)
 ZIP_PROFILES = {"auto": 6, "fastest": 1, "balanced": 6, "maximum": 9}
+TAR_CODECS = {
+    "gzip": (gzip.open, (".tar.gz", ".tgz")),
+    "bzip2": (bz2.open, (".tar.bz2", ".tbz", ".tbz2")),
+    "xz": (lzma.open, (".tar.xz", ".txz")),
+}
 
 
 def archive_formats():
@@ -367,7 +372,16 @@ def file_digest(path: Path, context: Context):
         return context.copy(stream, Sink(), progress=False)
 
 
-def compress(inputs: list[dict], output: Path, target: str, ctx: Context, *, zip_profile="balanced"):
+def encode_zip_comment(comment):
+    if not isinstance(comment, str) or len(comment) > 1024 or any(not " " <= char <= "~" for char in comment):
+        raise ProcessingError("ZIP comments must be at most 1024 printable ASCII characters")
+    return comment.encode("ascii")
+
+
+def compress(inputs: list[dict], output: Path, target: str, ctx: Context, *, zip_profile="balanced", zip_comment=""):
+    comment = encode_zip_comment(zip_comment)
+    if comment and target != "zip":
+        raise ProcessingError("Archive comments require ZIP")
     manifest = []
     names = [(item, ctx.register(item["name"], item.get("directory", False))) for item in inputs]
     if target == "zstd":
@@ -392,6 +406,7 @@ def compress(inputs: list[dict], output: Path, target: str, ctx: Context, *, zip
             bounded, "w", compression=zipfile.ZIP_DEFLATED,
             compresslevel=ZIP_PROFILES[zip_profile], allowZip64=True,
         ) as archive:
+            archive.comment = comment
             for item, name in names:
                 ctx.check()
                 if item.get("directory"):
@@ -409,7 +424,7 @@ def compress(inputs: list[dict], output: Path, target: str, ctx: Context, *, zip
                             manifest.append({"name": name, **ctx.copy(source, dest)})
         ctx.report(state="verifying")
         with zipfile.ZipFile(output) as archive:
-            if archive.namelist() != [row["name"] for row in manifest]:
+            if archive.comment != comment or archive.namelist() != [row["name"] for row in manifest]:
                 raise ProcessingError("Archive verification failed")
             for row in manifest:
                 if not row.get("directory"):
@@ -502,13 +517,69 @@ def verify_zip(source: Path, output: Path, ctx: Context):
                 record = ctx.copy(stream, Sink(), expanding=True, progress=False, expected=item.file_size)
             manifest.append({"name": name, "directory": item.is_dir(), **record})
             ctx.report(entries=ctx.count, expanded=ctx.expanded)
+    return write_archive_report(output, ctx, {"format": "zip", "verified": True, "entries": manifest})
+
+
+def write_archive_report(output: Path, ctx: Context, data: dict):
     ctx.report(state="verifying")
     with BoundedWriter(output, ctx) as report:
-        for chunk in json.JSONEncoder(ensure_ascii=True).iterencode(
-            {"format": "zip", "verified": True, "entries": manifest}
-        ):
+        for chunk in json.JSONEncoder(ensure_ascii=True).iterencode(data):
             report.write(chunk.encode("ascii"))
-    return manifest
+    return data["entries"]
+
+
+def tar_source(path, name, kind):
+    opener, suffixes = TAR_CODECS.get(kind, (None, (".tar",)))
+    if kind == "tar":
+        return True, None
+    if opener or kind == "file" and name.lower().endswith(suffixes):
+        with (opener(path, "rb") if opener else path.open("rb")) as stream:
+            head = stream.read(512)
+        # Empty TAR has no magic. The suffix disambiguates a zero block from
+        # ordinary compressed data starting with zeros.
+        return len(head) == 512 and (head[257:262] == b"ustar"
+                                     or head == bytes(512) and name.lower().endswith(suffixes)), opener
+    return False, None
+
+
+def read_tar_members(path, ctx, opener, consume):
+    validate_tar(path, ctx, opener)
+    with (
+        (opener(path, "rb") if opener else path.open("rb")) as raw,
+        tarfile.open(fileobj=raw, mode="r|") as archive,
+    ):
+        for item in archive:
+            ctx.check()
+            if item.isdir():
+                consume(item.name, None, 0, True)
+            elif item.isfile():
+                with archive.extractfile(item) as stream:
+                    consume(item.name, stream, item.size)
+            else:
+                raise ProcessingError("Unsafe archive link or device")
+
+
+def verify_archive(source: Path, original_name: str, output: Path, ctx: Context):
+    kind = detect(source)
+    if kind == "zip":
+        return verify_zip(source, output, ctx)
+    is_tar, opener = tar_source(source, original_name, kind)
+    if not is_tar:
+        raise ProcessingError("Unsupported archive for integrity verification")
+    manifest = []
+
+    def verify_member(name, stream, size, directory=False):
+        normalized = ctx.register(name, directory)
+        record = {"size": 0} if directory else ctx.copy(
+            stream, Sink(), expanding=True, progress=False, expected=size)
+        manifest.append({"name": normalized, "directory": directory, **record})
+        ctx.report(entries=ctx.count, expanded=ctx.expanded)
+
+    read_tar_members(source, ctx, opener, verify_member)
+    return write_archive_report(output, ctx, {
+        "format": {"gzip": "tar.gz", "bzip2": "tar.bz2", "xz": "tar.xz"}.get(kind, "tar"),
+        "verified": True, "scope": "structure-and-observed-member-digests", "entries": manifest,
+    })
 
 
 def extract(source: Path, original_name: str, output: Path, ctx: Context, recursive=False, zip_indexes=None, *, repack=False):
@@ -563,38 +634,9 @@ def extract(source: Path, original_name: str, output: Path, ctx: Context, recurs
                         with archive.open(item) as stream:
                             add_entry(item.filename, stream, item.file_size, item.is_dir())
             elif kind in ("tar", "gzip", "bzip2", "xz"):
-                # Inspect the bounded decompressed prefix before deciding TAR versus a single stream.
-                opener = {"gzip": gzip.open, "bzip2": bz2.open, "xz": lzma.open}.get(kind)
-                is_tar = kind == "tar"
-                if opener:
-                    with opener(path, "rb") as stream:
-                        head = stream.read(512)
-                    # An empty TAR has no magic. Use the declared archive suffix
-                    # for this ambiguous prefix so ordinary zero data is retained.
-                    tar_suffixes = {
-                        "gzip": (".tar.gz", ".tgz"),
-                        "bzip2": (".tar.bz2", ".tbz", ".tbz2"),
-                        "xz": (".tar.xz", ".txz"),
-                    }
-                    is_tar = len(head) == 512 and (
-                        head[257:262] == b"ustar"
-                        or (head == bytes(512) and name.lower().endswith(tar_suffixes[kind]))
-                    )
+                is_tar, opener = tar_source(path, name, kind)
                 if is_tar:
-                    validate_tar(path, ctx, opener)
-                    with (
-                        (opener(path, "rb") if opener else path.open("rb")) as raw,
-                        tarfile.open(fileobj=raw, mode="r|") as archive,
-                    ):
-                        for item in archive:
-                            ctx.check()
-                            if not (item.isfile() or item.isdir()):
-                                raise ProcessingError("Unsafe archive link or device")
-                            if item.isdir():
-                                add_entry(item.name, None, 0, True)
-                            else:
-                                with archive.extractfile(item) as stream:
-                                    add_entry(item.name, stream, item.size)
+                    read_tar_members(path, ctx, opener, add_entry)
                 else:
                     leaf = re.sub(r"\.(gz|gzip|bz2|xz)$", "", Path(name).name, flags=re.I)
                     if leaf == Path(name).name:
@@ -657,7 +699,7 @@ def probe(path: Path, count_frames=False):
     args = [shutil.which("ffprobe") or "ffprobe", "-v", "error", "-max_alloc", str(64 * BLOCK), "-protocol_whitelist", "file,pipe", "-format_whitelist", INPUT_FORMATS]
     if count_frames:
         args += ["-count_frames"]
-    args += ["-show_entries", "stream=index,codec_type,codec_name,sample_fmt,sample_rate,channels,bits_per_sample,bits_per_raw_sample,pix_fmt,width,height,duration,nb_frames,nb_read_frames:stream_tags:format=format_name,duration:format_tags", "-of", "json", str(path)]
+    args += ["-show_entries", "stream=index,codec_type,codec_name,sample_fmt,sample_rate,channels,bits_per_sample,bits_per_raw_sample,pix_fmt,width,height,duration,nb_frames,nb_read_frames:stream_disposition=attached_pic:stream_tags:format=format_name,duration:format_tags", "-of", "json", str(path)]
     proc = subprocess.run(args, capture_output=True, timeout=30)
     if proc.returncode or len(proc.stdout) > BLOCK:
         raise ProcessingError("Unsupported media")
@@ -737,9 +779,20 @@ def convert(source: Path, output: Path, target: str, ctx: Context, quality_mode=
     info = probe(source)
     audio = [s for s in info["streams"] if s["codec_type"] == "audio"]
     image = target in ("png", "webp", "jpg")
+    transcode = target == H264_TARGET
+    formats = set(info.get("format", {}).get("format_name", "").split(","))
     outputs = []
+    if transcode:
+        from .capabilities import media_targets
+        if target not in media_targets():
+            raise ProcessingError("H.264 MP4 conversion is unavailable in this FFmpeg build")
+        video = [s for s in info["streams"] if s["codec_type"] == "video" and not s.get("disposition", {}).get("attached_pic")]
+        if not video or not formats.intersection({"mov", "matroska", "webm", "avi", "mpeg", "mpegvideo", "mpegts"}) or detect(source) in ("avif", "avif-sequence", "heic"):
+            raise ProcessingError("Choose a video for H.264 conversion")
+        if any(s["width"] % 2 or s["height"] % 2 for s in video):
+            raise ProcessingError("H.264 MP4 conversion requires even video dimensions")
+        subtitle_count = sum(s["codec_type"] == "subtitle" for s in info["streams"])
     if image:
-        formats = set(info.get("format", {}).get("format_name", "").split(","))
         if not formats.intersection({"image2", "png_pipe", "jpeg_pipe", "webp_pipe", "bmp_pipe", "tiff_pipe", "gif"}) and detect(source) != "avif":
             raise ProcessingError("Choose a still image")
         frames = [s for s in probe(source, count_frames=True)["streams"] if s["codec_type"] == "video"]
@@ -792,6 +845,12 @@ def convert(source: Path, output: Path, target: str, ctx: Context, quality_mode=
                     args += ['-pix_fmt', 'bgra']
             elif target == 'jpg':
                 args += ['-q:v', '2']
+        elif transcode:
+            for stream in video:
+                args += ["-map", f"0:{stream['index']}"]
+            args += ["-map", "0:a?", "-map", "0:s?", "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                     "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-c:s", "mov_text",
+                     "-movflags", "+faststart", "-f", "mp4"]
         else:
             args += ["-map", "0:v?", "-map", "0:a?", "-map", "0:s?", "-c", "copy"]
         args += ["-fs", str(remaining), "-progress", "pipe:1", str(destination)]
@@ -862,8 +921,14 @@ def convert(source: Path, output: Path, target: str, ctx: Context, quality_mode=
         if not track and not image:
             before_streams = [(s['codec_type'], s.get('codec_name')) for s in info['streams'] if s['codec_type'] in ('video', 'audio', 'subtitle')]
             after_streams = [(s['codec_type'], s.get('codec_name')) for s in verified['streams'] if s['codec_type'] in ('video', 'audio', 'subtitle')]
+            if transcode:
+                before_streams = ([("video", "h264")] * len(video) + [("audio", "aac")] * len(audio)
+                                  + [("subtitle", "mov_text")] * subtitle_count)
+                if "mp4" not in verified.get("format", {}).get("format_name", "").split(","):
+                    raise ProcessingError("Conversion output is not an MP4 container")
             if sorted(before_streams, key=lambda row: (row[0], row[1] or '')) != sorted(after_streams, key=lambda row: (row[0], row[1] or '')):
-                raise ProcessingError('Container conversion did not preserve all streams')
+                raise ProcessingError('Video conversion output codec or stream count did not match' if transcode
+                                      else 'Container conversion did not preserve all streams')
         checksum_verified = quality_mode == "lossless" and (image or target in ("wav", "flac"))
         if not checksum_verified and any(stream["codec_type"] in ("audio", "video") for stream in verified["streams"]):
             verify_media_decode(destination, ctx)

@@ -3,10 +3,12 @@ export interface Capability {
   projectRecovery?: boolean;
   inspection?: boolean;
   zipVerification?: boolean;
+  tarVerification?: boolean;
   zipSelection?: boolean;
   archiveRepack?: boolean;
   officeInspection?: boolean;
   zipProfiles?: string[];
+  zipComments?: boolean;
   singleFileArchives?: string[];
   actionRegistry?: { mime: string[]; extensions: string[]; conversions: string[]; extract: boolean }[];
   version: number;

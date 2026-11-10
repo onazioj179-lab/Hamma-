@@ -366,9 +366,7 @@ function getMemoryStats() {
 function checkMemoryHealth(): void {
   if (!memoryPool) return;
 
-  const hasLeaks = memoryPool.checkLeaks();
-  
-  if (hasLeaks) {
+  if (!memoryPool.checkLeaks()) {
     self.postMessage({
       type: 'warning',
       message: 'Memory leaks detected in worker',

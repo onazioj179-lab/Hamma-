@@ -33,12 +33,15 @@ const select = async (files: File[]) => {
 it('opens and searches a ZIP directory without uploading the archive', async () => {
   await render();
   const bytes = new Uint8Array(zipSync({ 'first.txt': new Uint8Array([1]), 'second.txt': new Uint8Array([2]) }));
-  await select([new File([bytes], 'example.zip')]);
+  const comment = new TextEncoder().encode('Release archive');
+  new DataView(bytes.buffer).setUint16(bytes.length - 2, comment.length, true);
+  await select([new File([bytes, comment], 'example.zip')]);
   await act(async () => button('Inspect ZIP').click());
   await vi.waitFor(async () => {
     await act(async () => {});
     expect(host.textContent).toContain('2 of 2 entries');
   });
+  expect(host.querySelector('.zip-comment-preview')?.textContent).toBe('Release archive');
   const search = host.querySelector<HTMLInputElement>('[aria-label="Search ZIP entries"]')!;
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, 'SECOND');
@@ -48,6 +51,27 @@ it('opens and searches a ZIP directory without uploading the archive', async () 
   expect(host.textContent).toContain('second.txt');
   expect(host.textContent).not.toContain('first.txt');
   expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/uploads'))).toBe(false);
+});
+
+it('submits a ZIP comment with the compression request and its identity', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
+    ? { ok: true, json: async () => ({ ...caps, zipComments: true }) } : initial(url));
+  vi.spyOn(processingClient, 'upload').mockResolvedValue('uploaded');
+  const key = vi.spyOn(processingClient, 'requestId').mockResolvedValue('comment-request');
+  const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({});
+  await render();
+  await select([new File(['fixture'], 'entry.txt')]);
+  const input = host.querySelector<HTMLInputElement>('[aria-label="ZIP archive comment"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Release notes');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await act(async () => button('Compress').click());
+  expect(key).toHaveBeenCalledWith(expect.arrayContaining([['zipComment', 'Release notes']]));
+  expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({
+    operation: 'compress', target: 'zip', zipComment: 'Release notes', requestId: 'comment-request',
+  }), 'POST', { signal: expect.any(AbortSignal) });
 });
 
 it('submits the original ZIP index after filtering the directory', async () => {
@@ -105,6 +129,22 @@ it('queues a ZIP integrity report only when the processor advertises verificatio
   expect(upload).toHaveBeenCalledTimes(1);
   expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({
     operation: 'verify', target: 'json', uploads: ['uploaded-zip'], recursive: false,
+  }), 'POST', { signal: expect.any(AbortSignal) });
+});
+
+it('queues compressed TAR integrity checks when supported', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
+    ? { ok: true, json: async () => ({ ...caps, tarVerification: true }) } : initial(url));
+  vi.spyOn(processingClient, 'upload').mockResolvedValue('uploaded-tar');
+  vi.spyOn(processingClient, 'requestId').mockResolvedValue('verify-tar');
+  const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({});
+  await render();
+  await select([new File(['fixture'], 'archive.tar.xz')]);
+  expect(button('Test ZIP integrity')).toBeUndefined();
+  await act(async () => button('Test TAR integrity').click());
+  expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({
+    operation: 'verify', target: 'json', uploads: ['uploaded-tar'], recursive: false,
   }), 'POST', { signal: expect.any(AbortSignal) });
 });
 
@@ -466,6 +506,29 @@ it('queues WAV audio extraction from the video conversion control', async () => 
   await act(async () => button('Convert').click());
   expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({
     operation: 'convert', target: 'wav', qualityMode: 'lossless', uploads: ['uploaded-video'],
+  }), 'POST', { signal: expect.any(AbortSignal) });
+});
+
+it('shows the H.264 preset and blocks submission until lossy conversion is allowed', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  const video = { mime: ['video/x-matroska'], extensions: ['mkv'], conversions: ['mp4-h264'], extract: false };
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
+    ? { ok: true, json: async () => ({ ...caps, actionRegistry: [video], conversions: ['mp4-h264'] }) } : initial(url));
+  const upload = vi.spyOn(processingClient, 'upload').mockResolvedValue('uploaded-video');
+  vi.spyOn(processingClient, 'requestId').mockResolvedValue('h264-request');
+  const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({ id: 'h264-job' });
+  await render();
+  await select([new File(['fixture'], 'source.mkv', { type: 'video/x-matroska' })]);
+  expect(host.querySelector('[aria-label="Conversion format"]')?.textContent).toContain('MP4 (H.264)');
+  await act(async () => button('Convert').click());
+  expect(host.querySelector('[role=alert]')?.textContent).toContain('Choose Allow quality loss');
+  expect(upload).not.toHaveBeenCalled();
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Conversion quality"]')!.click());
+  const lossy = [...document.querySelectorAll<HTMLElement>('[role=option]')].find(item => item.textContent === 'Allow quality loss')!;
+  await act(async () => lossy.click());
+  await act(async () => button('Convert').click());
+  expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({
+    operation: 'convert', target: 'mp4-h264', qualityMode: 'lossy', uploads: ['uploaded-video'],
   }), 'POST', { signal: expect.any(AbortSignal) });
 });
 
