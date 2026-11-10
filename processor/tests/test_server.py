@@ -284,6 +284,23 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(rejected['state'], 'failed', rejected)
         self.assertFalse(rejected['downloadAvailable'])
 
+    def test_zip_comment_is_validated_bound_to_the_job_and_downloaded(self):
+        upload = self.upload(b"example", "entry.txt")
+        for comment in (None, "x" * 1025, "newline\n", "世界"):
+            self.assert_status(400, lambda: self.job(upload, zipComment=comment))
+        self.assert_status(400, lambda: self.job(upload, target="tar", zipComment="label"))
+        request_id = "c" * 64
+        job = self.job(upload, zipComment="Release notes", requestId=request_id)
+        self.assertEqual(self.job(upload, zipComment="Release notes", requestId=request_id)["id"], job["id"])
+        self.assert_status(409, lambda: self.job(upload, zipComment="Different label", requestId=request_id))
+        completed = self.execute(job)
+        self.assertEqual(completed["state"], "completed", completed)
+        data = self.call(completed["download"].removeprefix("/api/process"), raw=True)
+        self.assertEqual(hashlib.sha256(data).hexdigest(), completed["sha256"])
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            self.assertEqual(archive.comment, b"Release notes")
+            self.assertEqual(archive.read("entry.txt"), b"example")
+
     def test_auto_zip_profile_stores_incompressible_sample_and_deflates_repeated_data(self):
         noise = random.Random(2027).randbytes(8192)
         repeated = b"sample" * 2000

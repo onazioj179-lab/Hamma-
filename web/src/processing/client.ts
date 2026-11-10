@@ -7,6 +7,7 @@ export interface Capability {
   archiveRepack?: boolean;
   officeInspection?: boolean;
   zipProfiles?: string[];
+  zipComments?: boolean;
   singleFileArchives?: string[];
   actionRegistry?: { mime: string[]; extensions: string[]; conversions: string[]; extract: boolean }[];
   version: number;

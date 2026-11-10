@@ -34,7 +34,7 @@ import time
 from urllib.parse import parse_qs, urlsplit, quote
 import zipfile
 
-from .engine import ARCHIVES, MEDIA, BLOCK, ZIP_PROFILES, Context, ProcessingError, archive_formats, compress, convert, detect, extract, file_digest, safe_path, verify_zip
+from .engine import ARCHIVES, MEDIA, BLOCK, ZIP_PROFILES, Context, ProcessingError, archive_formats, compress, convert, detect, encode_zip_comment, extract, file_digest, safe_path, verify_zip
 from .worker_limits import apply_windows_worker_limits, apply_worker_limits
 from .resources import available_memory, worker_capacity
 from .errors import describe_failure
@@ -321,7 +321,8 @@ def run_job(root, owner, job_id, limits, isolated=False):
             if original["size"] != upload["size"] or original["sha256"] != upload["sha256"]:
                 raise ProcessingError("Input integrity check failed")
         if job["operation"] == "compress":
-            manifest = compress(job["inputs"], output, job["target"], ctx, zip_profile=job.get("zipProfile", "balanced"))
+            manifest = compress(job["inputs"], output, job["target"], ctx,
+                                zip_profile=job.get("zipProfile", "balanced"), zip_comment=job.get("zipComment", ""))
         elif job["operation"] == "extract":
             item = job["inputs"][0]
             manifest = extract(Path(item["path"]), item["name"], output, ctx, job["recursive"],
@@ -883,7 +884,7 @@ def handler(service):
                     raise HTTPError(400, str(error)) from error
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
-                return self.send(200, {"projectRecovery": True, "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "zipSelection": True, "archiveRepack": True, "officeInspection": True, "zipProfiles": list(ZIP_PROFILES), "actionRegistry": action_registry(), "conversions": media_targets(),
+                return self.send(200, {"projectRecovery": True, "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "zipSelection": True, "archiveRepack": True, "officeInspection": True, "zipComments": True, "zipProfiles": list(ZIP_PROFILES), "actionRegistry": action_registry(), "conversions": media_targets(),
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
             if path == "/api/process/settings":
                 if method == "GET":
@@ -1024,6 +1025,13 @@ def handler(service):
                 if "zipProfile" in body and (operation != "compress" or target != "zip" or
                                               not isinstance(zip_profile, str) or zip_profile not in ZIP_PROFILES):
                     raise HTTPError(400, "Invalid ZIP compression profile")
+                zip_comment = body.get("zipComment", "")
+                if "zipComment" in body and (operation != "compress" or target != "zip"):
+                    raise HTTPError(400, "Archive comments require ZIP compression")
+                try:
+                    encode_zip_comment(zip_comment)
+                except ProcessingError as error:
+                    raise HTTPError(400, str(error)) from error
                 zip_indexes = body.get("zipIndexes")
                 if "zipIndexes" in body:
                     if (operation != "extract" or body.get("recursive") or not isinstance(zip_indexes, list)
@@ -1054,6 +1062,8 @@ def handler(service):
                             identity.append(zip_indexes)
                         if zip_profile != "balanced":
                             identity.append(zip_profile)
+                        if zip_comment:
+                            identity.append(["zipComment", zip_comment])
                         request_id = hashlib.sha256(json.dumps(identity, separators=(',', ':')).encode()).hexdigest()
                     if request_id is not None and (not isinstance(request_id, str) or not re.fullmatch(r"[a-f0-9]{64}", request_id)):
                         raise HTTPError(400, "Invalid request identifier")
@@ -1062,7 +1072,7 @@ def handler(service):
                     if existing:
                         existing_ids = [i['id'] for i in existing['inputs']]
                         if ((sorted(existing_ids) != sorted(ids) if recoverable else existing_ids != ids) or existing["operation"] != operation or existing["target"] != target or existing["recursive"] != bool(body.get("recursive")) or
-                            existing.get('projectId', 'default') != project_id or existing.get('qualityMode', 'lossless') != quality_mode or existing.get('metadataPolicy', 'strip') != metadata_policy or existing.get('zipIndexes') != zip_indexes or existing.get('zipProfile', 'balanced') != zip_profile):
+                            existing.get('projectId', 'default') != project_id or existing.get('qualityMode', 'lossless') != quality_mode or existing.get('metadataPolicy', 'strip') != metadata_policy or existing.get('zipIndexes') != zip_indexes or existing.get('zipProfile', 'balanced') != zip_profile or existing.get('zipComment', '') != zip_comment):
                             raise HTTPError(409, "Request identifier already used")
                         if recoverable:
                             service.projects.forget_uploads(self.owner, project_id, ids)
@@ -1105,6 +1115,8 @@ def handler(service):
                         record["zipIndexes"] = zip_indexes
                     if zip_profile != "balanced":
                         record["zipProfile"] = zip_profile
+                    if zip_comment:
+                        record["zipComment"] = zip_comment
                     service.store.folder(self.owner, record["id"]).mkdir(mode=0o700, parents=True)
                     service.store.put(self.owner, "job", record)
                     if recoverable:

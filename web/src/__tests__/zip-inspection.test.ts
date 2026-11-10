@@ -37,9 +37,9 @@ function zip64Fixture() {
 
 it('reads ZIP64 sizes and footer even when the classic footer has ordinary fields', async () => {
   const { bytes } = zip64Fixture();
-  await expect(inspectZip(new Blob([bytes]))).resolves.toEqual([
+  await expect(inspectZip(new Blob([bytes]))).resolves.toEqual({ comment: '', members: [
     { name: 'folder/世界.txt', size: 5_000_000_000, packedSize: 3, encrypted: false },
-  ]);
+  ] });
 });
 
 it('rejects truncated ZIP64 member fields and oversized ZIP64 directories', async () => {
@@ -58,9 +58,21 @@ it('reads only the bounded tail and central directory and lists UTF-8 metadata',
   const bytes = new Uint8Array(zipSync({ 'folder/世界.txt': new Uint8Array(300_000) }, { level: 0 }));
   const file = new Blob([bytes]);
   const slice = vi.spyOn(file, 'slice');
-  await expect(inspectZip(file)).resolves.toEqual([{ name: 'folder/世界.txt', size: 300_000, packedSize: 300_000, encrypted: false }]);
+  await expect(inspectZip(file)).resolves.toEqual({
+    comment: '', members: [{ name: 'folder/世界.txt', size: 300_000, packedSize: 300_000, encrypted: false }],
+  });
   expect(slice.mock.calls[0][0]).toBeGreaterThan(200_000);
   expect(slice.mock.calls[1][0]).toBeGreaterThan(300_000);
+});
+
+it('shows a bounded archive comment preview with nonprintable bytes escaped', async () => {
+  const bytes = fixture();
+  const comment = new Uint8Array(5000).fill(0x61);
+  comment.set([0xff, 0x00]);
+  new DataView(bytes.buffer).setUint16(bytes.length - 2, comment.length, true);
+  const result = await inspectZip(new Blob([bytes, comment]));
+  expect(result.comment).toBe('\\xff\\x00' + 'a'.repeat(4094) + '…');
+  expect(result.members).toHaveLength(1);
 });
 
 it('rejects forged counts and truncated records', async () => {
