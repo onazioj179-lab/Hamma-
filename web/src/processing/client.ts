@@ -3,6 +3,7 @@ export interface Capability {
   groupedWorkflows?: boolean;
   projectRecovery?: boolean;
   recoverableUploads?: boolean;
+  draftScope?: string;
   inspection?: boolean;
   zipVerification?: boolean;
   tarVerification?: boolean;

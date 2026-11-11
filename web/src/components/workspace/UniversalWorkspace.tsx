@@ -2,7 +2,7 @@ import { inspectSources } from '../../processing/inspection';
 import { allocateSourcePaths } from '../../processing/selection';
 import { ErrorCenter } from './ErrorCenter';
 import { ZipInspection } from './ZipInspection';
-import { ProjectRecovery, defaultProjectSettings } from '../../processing/projects';
+import { ProjectRecovery, defaultProjectSettings, readSelection, saveSelection } from '../../processing/projects';
 import { requiresLossyConsent, resolveActions, resolveArchiveTargets } from '../../processing/actions';
 import { summarizePlan, type ExecutionPlan } from '../../processing/planner';
 import { executeWorkflow } from '../../processing/workflow';
@@ -41,6 +41,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const recoveryController = useRef<AbortController | null>(null);
   const [recovering, setRecovering] = useState(false);
   const [recoveryReady, setRecoveryReady] = useState(false);
+  const [selectionKey, setSelectionKey] = useState('');
   const [recoveryNotice, setRecoveryNotice] = useState('');
   const drafts = useRef(new Map<string, { sources: Source[]; selected: Set<string>; target: string; conversion: string; qualityMode: 'lossless' | 'lossy'; metadataPolicy: 'strip' | 'preserve'; recursive: boolean; groupActions: Record<string, string>; errors: Record<string, string> }>());
   const [sources, setSources] = useState<Source[]>([]);
@@ -124,28 +125,34 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     void task.finally(() => { if (refreshController.current === controller) refreshFlight.current = null; }).catch(() => {});
     return task;
   }, []);
-  const restoreProject = useCallback(async (id: string) => {
+  const restoreProject = useCallback(async (id: string, scope?: string) => {
     const saved = recovery.current.get(id);
-    if (!saved) return;
+    if (!saved && !scope) return;
     recoveryController.current?.abort();
     const controller = new AbortController(); recoveryController.current = controller;
     const generation = ownerGeneration.current;
     setRecovering(true);
-    const settings = saved.settings;
+    const settings = saved?.settings ?? defaultProjectSettings;
     setTarget(settings.target); setConversion(settings.conversion); setQualityMode(settings.qualityMode);
     setMetadataPolicy(settings.metadataPolicy); setRecursive(settings.recursive);
     setGroupActions(settings.groupActions || {});
     try {
-      const result = await recovery.current.sources(id, controller.signal);
+      const result = saved ? await recovery.current.sources(id, controller.signal) : { sources: [], unavailable: 0 };
       if (!mounted.current || controller.signal.aborted || generation !== ownerGeneration.current || currentProject.current !== id) return;
+      const key = scope ? `hamma-selection:${scope}:${id}` : '';
+      const draft = key ? readSelection(key) : { sources: [], selected: [] };
+      const uploadedIds = new Set(result.sources.map(source => source.id));
       setSources(previous => {
         const existing = new Set(previous.map(source => source.id));
         const savedSources = new Map(result.sources.map(source => [source.id, source]));
         const retained = previous.map(source => savedSources.has(source.id) ? { ...savedSources.get(source.id)!, file: source.file } : source);
         const restored = result.sources.filter(source => !existing.has(source.id));
-        return [...allocateSourcePaths(restored, retained), ...restored];
+        const current = [...allocateSourcePaths(restored, retained), ...restored];
+        const pending = draft.sources.filter(source => !existing.has(source.id) && !uploadedIds.has(source.id));
+        return [...current, ...allocateSourcePaths(current, pending)];
       });
-      setSelected(previous => new Set([...previous, ...result.sources.map(source => source.id)]));
+      setSelected(previous => new Set([...previous, ...draft.selected, ...uploadedIds]));
+      setSelectionKey(key);
       const incomplete = result.sources.filter(source => source.resume).length;
       const complete = result.sources.length - incomplete;
       setRecoveryNotice([
@@ -175,7 +182,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
           const projects = await recovery.current.list();
           if (generation !== ownerGeneration.current || accountChanging() || !mounted.current) return;
           setProjectIds(previous => [...new Set([...previous, ...projects.map(project => project.id)])]);
-          await restoreProject(currentProject.current);
+          await restoreProject(currentProject.current, caps.draftScope);
           if (generation === ownerGeneration.current && mounted.current) setRecoveryReady(true);
         } catch (caught) {
           if (generation === ownerGeneration.current) recoveryLoaded.current = false;
@@ -185,6 +192,9 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       await refresh(true);
     } catch { if (mounted.current && generation === ownerGeneration.current && !accountChanging()) { setOffline(true); setLoadingJobs(false); window.dispatchEvent(new CustomEvent('hamma-processor-status', { detail: 'offline' })); } }
   }, [refresh, restoreProject]);
+  useEffect(() => {
+    if (selectionKey && !recovering && !accountChanging()) saveSelection(selectionKey, sources, selected);
+  }, [selectionKey, recovering, sources, selected]);
   useEffect(() => {
     if (!capability?.projectRecovery || !recoveryReady || recovering || busy || accountChanging()) return;
     const controller = new AbortController();
@@ -202,6 +212,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       ownerGeneration.current += 1;
       recoveryController.current?.abort(); recoveryController.current = null; recovery.current = new ProjectRecovery(); recoveryLoaded.current = false;
       setRecoveryReady(false); setRecovering(false); setRecoveryNotice('');
+      setSelectionKey('');
       const transferable = liveSources.current.filter(source => source.file || source.directory);
       const transferableIds = new Set(transferable.map(source => source.id));
       setSources(transferable); setSelected(previous => new Set([...previous].filter(id => transferableIds.has(id))));
@@ -321,7 +332,8 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     setGroupActions(draft?.groupActions || {});
     setProjectId(id); setPage(0); setScroll(0); setError(''); setJobSelected(new Set());
     currentProject.current = id; setRecoveryNotice('');
-    if (capability?.projectRecovery && !draft) void restoreProject(id).catch(caught => setError(caught instanceof Error ? caught.message : 'Project could not be restored.'));
+    setSelectionKey(draft && capability?.draftScope ? `hamma-selection:${capability.draftScope}:${id}` : '');
+    if (capability?.projectRecovery && !draft) void restoreProject(id, capability.draftScope).catch(caught => setError(caught instanceof Error ? caught.message : 'Project could not be restored.'));
   };
   const createProject = async () => {
     if (busy || recovering || spkBusy || projectIds.length >= 20 || accountChanging()) return;
@@ -336,7 +348,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     finally { setBusy(false); }
   };
   const chosen = useMemo(() => sources.filter(source => selected.has(source.id)), [sources, selected]);
-  const missingOriginals = sources.filter(source => source.resume && !source.file).length;
+  const missingOriginals = sources.filter(source => !source.file && !source.directory && (!source.upload || source.resume)).length;
   const singleSource = chosen.length === 1 ? chosen[0] : undefined;
   const zipSource = singleSource && !singleSource.directory && (singleSource.inspection && !singleSource.inspection.error
     ? singleSource.inspection.format === 'zip' : /\.zip$/i.test(singleSource.name)) ? singleSource : null;
@@ -364,8 +376,8 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     const { zipIndexes, repack, planned } = options;
     if (accountChanging()) return;
     if (submitting.current || recovering || capability?.projectRecovery && !recoveryReady || spkBusy || !chosen.length) return;
-    if (chosen.some(source => source.resume && !source.file)) {
-      setError('Select the original files for incomplete uploads, or deselect them before running this action.');
+    if (chosen.some(source => !source.file && !source.directory && (!source.upload || source.resume))) {
+      setError('Select the original files for recovered selections, or deselect them before running this action.');
       return;
     }
     if (operation === 'convert' && !conversionTarget) return;
@@ -424,6 +436,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
           if (source.resume) setUploadStatus({ name: source.name, offset: source.uploaded ?? 0, size: source.size, checking: true });
           const id = await upload(source, controller.signal, offset => { if (generation === ownerGeneration.current) { source.uploaded = offset; setUploadStatus({ name: source.name, offset, size: source.size }); } }, recoverOnUpload ? projectId : undefined);
           if (capability.projectRecovery && !recoverOnUpload) await recovery.current.checkpoint(projectId, source, controller.signal);
+          if (selectionKey) saveSelection(selectionKey, liveSources.current, selected);
           if (!planned && !capability.projectRecovery) sourcesByUpload.set(id, source.id);
           return id;
         },
@@ -631,7 +644,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       <div className="project-toolbar"><label>Project<SelectField aria-label="Current project" value={projectId} disabled={busy || recovering || !!spkBusy || acting || readingFolder} onChange={switchProject}>{projectIds.map((id, index) => <option key={id} value={id}>{id === 'default' ? 'Project 1' : 'Project ' + (index + 1)}</option>)}</SelectField></label><button className="button secondary" disabled={busy || recovering || !!spkBusy || acting || readingFolder || projectIds.length >= 20} onClick={() => void createProject()}>New project</button></div>
       {recovering && <p className="footnote" role="status">Restoring uploaded files…</p>}
       {recoveryNotice && <p className="footnote" role="status">{recoveryNotice} Files stay available until their upload retention expires.</p>}
-      {missingOriginals > 0 && <p className="footnote" role="status">Select the original files to resume {missingOriginals} incomplete {missingOriginals === 1 ? 'upload' : 'uploads'}.</p>}
+      {missingOriginals > 0 && <p className="footnote" role="status">Select the original files to continue {missingOriginals} {missingOriginals === 1 ? 'upload' : 'uploads'}.</p>}
       <div className={`surface universal-drop ${dragging ? 'drag-active' : ''}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); if (busy || recovering || spkBusy) return; void droppedSources(event.dataTransfer, capability?.limits.files).then(add).catch(caught => setError(caught.message)); }}>
         <div className="universal-drop-icon"><FileArchive size={30} strokeWidth={1.2} /></div><h2>Add your files</h2><p>Drop files or folders</p>
         <details className="universal-picker"><summary className="button primary">+ Add Files or Folders</summary><div className="button-row"><button className="button secondary" disabled={busy || recovering || spkBusy} onClick={() => input.current?.click()}><Plus size={16} /> Add Files</button><button className="button secondary" disabled={busy || recovering || spkBusy} onClick={() => void chooseFolder()}><FolderPlus size={16} /> Add Folder</button></div></details>
@@ -648,7 +661,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
               <input type="checkbox" aria-label={`Select ${source.name}`} checked={selected.has(source.id)} onChange={() => toggleSource(source.id)} />
               <File size={19} strokeWidth={1.5} />
               <div><strong title={source.name}>{source.name}</strong><span>{source.directory ? 'Empty folder' : formatFileSize(source.size) + (capability?.inspection ? '  -  ' + (source.inspection?.error || source.inspection?.format || 'Detecting - ') : '')}</span></div>
-              {source.resume && (source.uploaded ?? 0) < source.size
+              {!source.directory && (!source.upload && !source.file || source.resume && (source.uploaded ?? 0) < source.size)
                 ? <label className="file-state source-reselect" title={sourceErrors[source.id] || undefined}>
                   <input type="file" className="sr-only" aria-label={`Select original file for ${source.name}`} disabled={busy || recovering || !!spkBusy} onChange={event => {
                     const file = event.currentTarget.files?.[0];
