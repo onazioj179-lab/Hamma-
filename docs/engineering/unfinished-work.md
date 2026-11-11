@@ -1,30 +1,33 @@
-# Unfinished work — 2026-11-04
+# Unfinished work
 
-Status: PARTIAL. These are release gaps, not completed deliverables.
+Status: partial. This list distinguishes work already on main from the
+remaining release acceptance work.
 
-1. Integrate the durable discovery index into bounded processing admission and
-   streaming job manifests; current job input JSON arrays remain unsuitable for
-   millions of files. Add disk-backed source pages and UI virtualization.
-2. Make job output manifests streamed/pageable; Python archive member lists and
-   browser source arrays need further bounding. Keep resource quotas configurable.
-3. Finish per-file recovery and compatible mixed-format subgroup execution. Verify
-   fair scheduling under sustained concurrent projects and large/interactive jobs.
-4. Extend capability detection to the actual installed codecs; verify every
-   advertised format, password/selective archive path and lossless policy.
-5. Complete previously requested preview, safe duplicate-output reuse, encrypted
-   recovery vault, presets, routes, folder change detection, revision history,
-   SDK and scoped temporary sharing. Existing widgets are not proof of these.
-6. Configure authorized storage connectors, compute nodes and object storage
-   before distributed coordination and cost estimation. No credentials assumed.
-7. Validate standard and custom Linux cgroup layouts in live containers, Windows
-   hard memory/process-tree isolation and pressure behavior. Native codec budgets
-   are not whole-worker memory limits.
-8. Run larger metadata matrices, real large payload integrity/throughput tests,
-   storage exhaustion and sustained memory pressure. No extrapolated TB/PB claims.
-9. Perform sanitizer/static-analysis/fuzz/dependency review, public-hosting threat
-   model, encryption-at-rest design and physical mobile/foldable/accessibility QA.
-10. Produce and validate signed/packaged platform releases after acceptance. A
-    successful local web/native build is not a production release.
-
-No artificial small diagnostic scenario is a product requirement. Existing quota
-values are resource policy, not demonstrated maximum processing capacity.
+1. [Indexed local TAR jobs](local-indexed-jobs.md) already admit and stream
+   local directory indexes. Extend disk-backed inputs and output manifests to
+   the other workflows; browser row virtualization limits rendering, but the
+   selected source metadata is still held in memory.
+2. Finish per-file recovery and compatible mixed-format subgroup execution.
+   The upload recovery and mixed workflow changes are under review in
+   [PR #39](https://github.com/onazioj179-lab/Hamma-/pull/39). Verify fair
+   scheduling under sustained concurrent projects and large/interactive jobs.
+3. Continue validating installed codecs, archive password and selective
+   extraction paths, lossless policy, and hardware fallback. Existing
+   verified formats do not cover the full matrix.
+4. Local ZIP preview and archive comments are implemented. Broader previews,
+   safe duplicate-output reuse, an encrypted recovery vault, persistent
+   presets, routes, folder change detection, revision history, SDK, and
+   scoped temporary sharing remain open.
+5. Select and configure authorized storage connectors, compute nodes, and
+   object storage before validating distributed coordination and cost.
+6. Validate cgroup behavior under live container pressure and Windows hard
+   memory and process-tree isolation. Native codec budgets do not cap the
+   whole worker.
+7. Run real large-payload integrity and throughput tests, storage exhaustion,
+   and sustained pressure. The metadata benchmarks do not establish payload
+   throughput or a maximum supported workload.
+8. Complete security, encryption-at-rest, and public-hosting acceptance and
+   physical mobile, foldable, and accessibility QA. The workspace motion
+   controls honor the user's reduced-motion preference.
+9. Sign and validate packaged platform releases after acceptance. A successful
+   local web or native build does not establish production readiness.

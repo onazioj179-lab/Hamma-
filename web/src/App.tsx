@@ -51,17 +51,17 @@ export default function App() {
   const [announcement, setAnnouncement] = useState('');
   const [jobCount, setJobCount] = useState(0);
   const [processorStatus, setProcessorStatus] = useState('connecting');
-  const [notice, setNotice] = useState('');
+  const [notice, setNotice] = useState<{ message: string; success: boolean } | null>(null);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
     const notify = (event: Event) => {
-      const message = (event as CustomEvent<{message: string}>).detail.message;
-      setAnnouncement(message); setNotice(message);
-      clearTimeout(timer); timer = setTimeout(() => setNotice(''), 8000);
+      const detail = (event as CustomEvent<{ message: string; success: boolean }>).detail;
+      setAnnouncement(detail.message); setNotice(detail);
+      clearTimeout(timer); timer = setTimeout(() => setNotice(null), 8000);
     };
     const count = (event: Event) => setJobCount((event as CustomEvent<number>).detail);
     const connection = (event: Event) => setProcessorStatus((event as CustomEvent<string>).detail);
-    const clearOwner = () => { clearTimeout(timer); setNotice(''); setAnnouncement(''); setJobCount(0); };
+    const clearOwner = () => { clearTimeout(timer); setNotice(null); setAnnouncement(''); setJobCount(0); };
     window.addEventListener('hamma-owner-clearing', clearOwner);
     window.addEventListener('hamma-processor-status', connection);
     window.addEventListener('hamma-job-notice', notify);
@@ -259,7 +259,7 @@ export default function App() {
           </footer>
         </main>
       </div>
-      {notice && <aside className="job-toast" aria-label="Job update"><span>{notice}</span><button className="button secondary" onClick={() => { setView('files'); setNotice(''); }}>View files</button><button className="text-button" aria-label="Dismiss job update" onClick={() => setNotice('')}>Dismiss</button></aside>}
+      {notice && <aside className="job-toast" aria-label="Job update"><span key={notice.message} className={notice.success ? "job-toast-success" : undefined}>{notice.message}</span><button className="button secondary" onClick={() => { setView('files'); setNotice(null); }}>View files</button><button className="text-button" aria-label="Dismiss job update" onClick={() => setNotice(null)}>Dismiss</button></aside>}
       <span className="sr-only" role="status">
         {announcement}
       </span>

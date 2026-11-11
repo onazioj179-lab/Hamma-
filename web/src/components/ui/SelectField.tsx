@@ -3,9 +3,11 @@ import {
   isValidElement,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
+  type CSSProperties,
 } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, ChevronDown } from 'lucide-react';
@@ -41,6 +43,8 @@ export function SelectField({
     top: 0,
     width: 180,
     maxHeight: 280,
+    origin: "50% top",
+    offset: "-6px",
   });
   const search = useRef({ text: '', time: 0 });
   const options = Children.toArray(children)
@@ -66,7 +70,7 @@ export function SelectField({
     setActive(Math.max(0, selected));
     setOpen(true);
   };
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return;
     const place = () => {
       const rect = trigger.current?.getBoundingClientRect();
@@ -80,8 +84,11 @@ export function SelectField({
       const maxHeight = Math.min(280, Math.max(60, upward ? above : below));
       const width = Math.min(Math.max(rect.width, 184), window.innerWidth - 24);
       const height = Math.min(maxHeight, options.length * 36 + 12);
+      const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12));
       setPosition({
-        left: Math.max(12, Math.min(rect.left, window.innerWidth - width - 12)),
+        left,
+        origin: `${Math.max(0, Math.min(width, rect.left + rect.width / 2 - left))}px ${upward ? "bottom" : "top"}`,
+        offset: upward ? "6px" : "-6px",
         top: upward ? rect.top - height - 6 : rect.bottom + 6,
         width,
         maxHeight,
@@ -121,7 +128,7 @@ export function SelectField({
         role="combobox"
         aria-label={name}
         aria-expanded={open}
-        aria-controls={`${uid}-list`}
+        aria-controls={open ? `${uid}-list` : undefined}
         aria-haspopup="listbox"
         aria-activedescendant={open ? `${uid}-${active}` : undefined}
         disabled={disabled}
@@ -200,28 +207,33 @@ export function SelectField({
         <span>{options[selected]?.label || 'Choose an option'}</span>
         <ChevronDown size={14} aria-hidden="true" />
       </button>
-      {open &&
-        createPortal(
+      {createPortal(
           <div
             ref={menu}
             id={`${uid}-list`}
-            role="listbox"
+            role={open ? "listbox" : undefined}
+            aria-hidden={!open || undefined}
+            data-open={open}
             aria-label={name}
             className="select-menu"
-            style={position}
+            style={{
+              left: position.left, top: position.top, width: position.width,
+              maxHeight: position.maxHeight, transformOrigin: position.origin,
+              "--popover-offset": position.offset,
+            } as CSSProperties}
           >
             {options.map((option, index) => (
               <div
                 key={option.value}
                 id={`${uid}-${index}`}
-                role="option"
-                aria-selected={value === option.value}
+                role={open ? "option" : undefined}
+                aria-selected={open ? value === option.value : undefined}
                 aria-disabled={option.disabled || undefined}
                 data-active={active === index}
                 className="select-option"
-                onPointerMove={() => !option.disabled && setActive(index)}
+                onPointerMove={() => open && !option.disabled && setActive(index)}
                 onMouseDown={(event) => event.preventDefault()}
-                onClick={() => choose(index)}
+                onClick={() => open && choose(index)}
               >
                 <span>{option.label}</span>
                 {value === option.value && (
