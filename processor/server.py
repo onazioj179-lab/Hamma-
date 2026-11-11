@@ -88,6 +88,16 @@ class Store:
             db.execute("CREATE TABLE IF NOT EXISTS job_inputs (owner TEXT NOT NULL, job_id TEXT NOT NULL, upload_id TEXT NOT NULL, PRIMARY KEY(owner,job_id,upload_id))")
             db.execute("CREATE TABLE IF NOT EXISTS local_index_sources(owner TEXT NOT NULL,job_id TEXT NOT NULL,root TEXT NOT NULL,PRIMARY KEY(owner,job_id))")
             db.execute("CREATE INDEX IF NOT EXISTS job_inputs_upload ON job_inputs(owner,upload_id,job_id)")
+            db.execute("CREATE TABLE IF NOT EXISTS job_revisions (owner TEXT PRIMARY KEY, token TEXT NOT NULL)")
+            for event, row in (("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")):
+                db.execute(f"""
+                    CREATE TRIGGER IF NOT EXISTS job_revision_{event.lower()}
+                    AFTER {event} ON records WHEN {row}.kind='job'
+                    BEGIN
+                        INSERT INTO job_revisions VALUES ({row}.owner, lower(hex(randomblob(16))))
+                        ON CONFLICT(owner) DO UPDATE SET token=excluded.token;
+                    END
+                """)
             db.execute("CREATE TABLE IF NOT EXISTS store_migrations (name TEXT PRIMARY KEY)")
             if not db.execute("SELECT 1 FROM store_migrations WHERE name='job-inputs-v1'").fetchone():
                 db.execute("INSERT OR IGNORE INTO job_inputs SELECT records.owner,records.id,json_extract(member.value,'$.id') FROM records,json_each(records.data,'$.inputs') AS member WHERE records.kind='job' AND json_type(member.value,'$.id')='text'")
@@ -179,6 +189,11 @@ class Store:
             where.append("coalesce(json_extract(data,'$.hidden'),0)=0")
         with self.connect() as db:
             return db.execute("SELECT count(*) FROM records WHERE " + " AND ".join(where), parameters).fetchone()[0]
+
+    def job_revision(self, owner):
+        with self.connect() as db:
+            row = db.execute("SELECT token FROM job_revisions WHERE owner=?", (owner,)).fetchone()
+        return row["token"] if row else ""
 
     def history_page(self, owner, *, offset=0, limit=50, search="", state="", sort="newest", summary=False, include_hidden_downloads=False):
         where, parameters = ["owner=?", "kind='job'"], [owner]
@@ -1042,7 +1057,7 @@ def handler(service):
                     raise HTTPError(400, str(error)) from error
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
-                return self.send(200, {"groupedWorkflows": True, "projectRecovery": True, "recoverableUploads": True, "draftScope": hashlib.sha256(("hamma-draft:" + self.owner).encode()).hexdigest(), "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "tarVerification": True, "zipSelection": True, "archiveRepack": True, "officeInspection": True, "zipComments": True, "zipProfiles": list(ZIP_PROFILES), "actionRegistry": action_registry(), "conversions": media_targets(),
+                return self.send(200, {"groupedWorkflows": True, "projectRecovery": True, "recoverableUploads": True, "jobRevisions": True, "draftScope": hashlib.sha256(("hamma-draft:" + self.owner).encode()).hexdigest(), "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "tarVerification": True, "zipSelection": True, "archiveRepack": True, "officeInspection": True, "zipComments": True, "zipProfiles": list(ZIP_PROFILES), "actionRegistry": action_registry(), "conversions": media_targets(),
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
             if path == "/api/process/settings":
                 if method == "GET":
@@ -1299,6 +1314,8 @@ def handler(service):
                     service.store.trim_history(self.owner, limit=self.plan['historyRecords'])
                 LOG.info("Job queued: %s %s", record["id"], operation)
                 return self.send(202, service.public(self.owner, record))
+            if path == "/api/process/jobs/revision" and method == "GET":
+                return self.send(200, {"revision": service.store.job_revision(self.owner), "now": time.time()})
             if path == "/api/process/jobs" and method == "GET":
                 query = parse_qs(url.query)
                 offset = max(0, int(query.get("offset", [0])[0]))

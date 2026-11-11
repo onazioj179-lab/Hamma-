@@ -86,6 +86,8 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const knownStates = useRef(new Map<string, string>());
   const [loadingJobs, setLoadingJobs] = useState(true);
 
+  const supportsJobRevisions = useRef(false);
+  const cachedHistory = useRef<{ revision: string; refreshAt: number } | null>(null);
   const refreshController = useRef<AbortController | null>(null);
   const deletionPreviewController = useRef<AbortController | null>(null);
   const refreshFlight = useRef<Promise<void> | null>(null);
@@ -103,8 +105,27 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     const controller = new AbortController(); refreshController.current = controller;
     const task = (async () => {
       try {
+        // Read the revision before paging so a write during the fetch triggers the next poll.
+        const snapshot = supportsJobRevisions.current
+          ? await request<{ revision: string; now: number }>('/jobs/revision', { signal: controller.signal })
+          : null;
+        if (!mounted.current || controller.signal.aborted) return;
+        if (snapshot && !force && cachedHistory.current?.revision === snapshot.revision &&
+            snapshot.now < cachedHistory.current.refreshAt) {
+          setOffline(false);
+          window.dispatchEvent(new CustomEvent('hamma-processor-status', { detail: 'ready' }));
+          return;
+        }
+
         const records = await loadJobs(controller.signal, true);
         if (!mounted.current || controller.signal.aborted) return;
+        if (snapshot) {
+          // Public jobs include download links signed for at most an hour.
+          const refreshAt = records.reduce((earliest, job) => job.downloadAvailable
+            ? Math.min(earliest, job.fileExpires)
+            : earliest, snapshot.now + 3300);
+          cachedHistory.current = { revision: snapshot.revision, refreshAt };
+        }
         const finished = records.filter(job => knownStates.current.has(job.id) && knownStates.current.get(job.id) !== job.state && ['completed', 'failed'].includes(job.state));
         for (const job of finished) window.dispatchEvent(new CustomEvent('hamma-job-notice', { detail: { success: job.state === 'completed', message: `${job.outputName || job.name}: ${job.state === 'completed' ? 'Ready to download' : 'Could not finish. Open history to retry.'}` } }));
         knownStates.current = new Map(records.map(job => [job.id, job.state]));
@@ -172,6 +193,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       const caps = await request<Capability>('/capabilities');
       if (generation !== ownerGeneration.current || accountChanging()) return;
       if (caps.processing !== 'local' || caps.version !== 1) throw new Error('Unavailable');
+      supportsJobRevisions.current = !!caps.jobRevisions;
       setCapability(caps); setOffline(false);
       const settings = await request<Retention>('/settings');
       if (generation !== ownerGeneration.current || accountChanging()) return;
@@ -223,6 +245,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       refreshController.current?.abort(); refreshFlight.current = null;
       deletionPreviewController.current?.abort();
       knownStates.current.clear(); activity.current = false;
+      cachedHistory.current = null; supportsJobRevisions.current = false;
       setJobs([]); setJobSelected(new Set()); setConfirmation(null); setCapability(null); setLoadingJobs(true); setError('');
       setUploadStatus(null);
       window.dispatchEvent(new CustomEvent('hamma-job-count', { detail: 0 }));

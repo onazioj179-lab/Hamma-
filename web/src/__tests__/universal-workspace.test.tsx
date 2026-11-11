@@ -307,6 +307,48 @@ it('shows newly submitted jobs instead of retaining a Completed-only queue filte
   expect(host.querySelector('[aria-label="Sort processing history"]')?.textContent).toBe('Newest first');
 });
 
+it('polls only the revision until history changes or a cached download expires', async () => {
+  vi.useFakeTimers();
+  let revision = 'initial';
+  let now = 10;
+  let downloads = false;
+  fetchMock.mockImplementation(async (url: string) => ({
+    ok: true,
+    json: async () => {
+      if (url.endsWith('/capabilities')) return { ...caps, jobRevisions: true };
+      if (url.endsWith('/settings')) return { fileRetention: '24h', historyRetention: '30d' };
+      if (url.endsWith('/jobs/revision')) return { revision, now };
+      return { total: Number(downloads), jobs: downloads ? [{
+        id: 'external', name: 'another-tab.zip', operation: 'compress', state: 'completed',
+        inputSize: 100, outputSize: 50, processed: 100, created: 1,
+        fileExpires: 40, downloadAvailable: now < 40,
+      }] : [] };
+    },
+  }));
+  const pageRequests = () => fetchMock.mock.calls.filter(([url]) => String(url).includes('/jobs?')).length;
+  const tick = () => act(async () => { await vi.advanceTimersByTimeAsync(10000); });
+  try {
+    await render('history');
+    const initialPages = pageRequests();
+    expect(initialPages).toBeGreaterThan(0);
+    await tick();
+    expect(pageRequests()).toBe(initialPages);
+
+    downloads = true;
+    revision = 'external-update';
+    now = 20;
+    await tick();
+    expect(pageRequests()).toBe(initialPages + 1);
+    expect(host.textContent).toContain('another-tab.zip');
+
+    now = 40;
+    await tick();
+    expect(pageRequests()).toBe(initialPages + 2);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it('announces newly completed jobs once after reconnecting', async () => {
   let state = 'processing';
   fetchMock.mockImplementation(async (url: string) => ({ ok: true, json: async () => url.endsWith('/capabilities') ? caps : url.endsWith('/settings') ? { fileRetention: '24h', historyRetention: '30d' } : { jobs: [{ id: 'job-one', name: 'example.zip', state, operation: 'compress', inputSize: 100, outputSize: null, processed: 20, created: 1, fileExpires: 2, historyExpires: 3, fileCount: 1, format: 'zip', entries: 1, downloadAvailable: false }], total: 1 } }));
