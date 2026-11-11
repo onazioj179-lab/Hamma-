@@ -20,6 +20,7 @@ from .engine import BLOCK, BoundedWriter, ProcessingError, Sink, safe_path
 
 TARGETS = {'tar': '', 'tar.gz': 'gz', 'tar.bz2': 'bz2', 'tar.xz': 'xz'}
 READERS = {'tar': open, 'tar.gz': gzip.open, 'tar.bz2': bz2.open, 'tar.xz': lzma.open}
+TAR_WRITE_BUFFER = 128 * 1024
 
 
 @lru_cache(maxsize=1)
@@ -194,7 +195,13 @@ def compress_index(index, output, target, ctx):
     after = total_input = count = 0
     try:
         manifest.begin()
-        with BoundedWriter(temporary, ctx) as bounded, tarfile.open(fileobj=bounded, mode='w|' + TARGETS[target], format=tarfile.PAX_FORMAT) as archive:
+        # Match payload reads to the engine's bounded I/O block and coalesce
+        # small writes from tarfile before checking and writing the output.
+        with (
+            BoundedWriter(temporary, ctx) as bounded,
+            tarfile.open(fileobj=bounded, mode='w|' + TARGETS[target], format=tarfile.PAX_FORMAT,
+                         bufsize=TAR_WRITE_BUFFER, copybufsize=BLOCK) as archive,
+        ):
             while page := index.page(after=after, limit=256):
                 for entry in page:
                     ctx.check()
