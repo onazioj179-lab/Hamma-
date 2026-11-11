@@ -677,7 +677,9 @@ class ServerTests(unittest.TestCase):
         self.assertFalse(capabilities['nativeEngine']['gpuAcceleration'])
         data = b'Native persistent queue fixture\n' * 500
         job = self.job(self.upload(data, 'original.txt'), target='zstd')
-        self.service.tick()
+        # The admission test covers memory pressure separately.
+        with patch('processor.server.available_memory', return_value=2 * 1024**3):
+            self.service.tick()
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             current = self.call('/jobs/' + job['id'])
