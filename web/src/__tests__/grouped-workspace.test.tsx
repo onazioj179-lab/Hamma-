@@ -64,10 +64,11 @@ it('retains only the rejected image group and preserves its chosen action for re
   expect(host.textContent).toContain('1 selected');
   expect(host.textContent).toContain('Unsupported test image');
   expect(host.querySelector('[aria-label="Action for PNG"]')?.textContent).toContain('Convert to PNG');
+  await act(async () => host.querySelector<HTMLInputElement>('[aria-label="Select image.png"]')!.click());
   rejectImage = false;
-  await act(async () => button('Run grouped workflow').click());
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Retry image.png"]')!.click());
   expect(posted).toHaveLength(4);
-  expect(posted[3].uploads).toEqual(['upload-image.png']);
+  expect(posted[3]).toMatchObject({ uploads: ['upload-image.png'], operation: 'convert', target: 'png' });
 });
 
 it('requires explicit quality-loss permission for a grouped JPEG conversion', async () => {

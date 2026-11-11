@@ -4,7 +4,7 @@ import { ErrorCenter } from './ErrorCenter';
 import { ZipInspection } from './ZipInspection';
 import { ProjectRecovery, defaultProjectSettings, readSelection, saveSelection } from '../../processing/projects';
 import { requiresLossyConsent, resolveActions, resolveArchiveTargets } from '../../processing/actions';
-import { summarizePlan, type ExecutionPlan } from '../../processing/planner';
+import { summarizePlan, type ExecutionPlan, type TaskGroup } from '../../processing/planner';
 import { executeWorkflow } from '../../processing/workflow';
 import { GroupedWorkflow } from './GroupedWorkflow';
 import { useAppStore } from '../../store/app';
@@ -21,6 +21,8 @@ import '../../processing/processing.css';
 
 type Props = { visible: boolean; screen: 'workspace' | 'files' | 'history'; onHistory: () => void; spkResult?: { outputName: string; downloadUrl: string | null; historyId?: string; historyCreated?: number; originalSize?: number; resultSize?: number; operation?: 'compress' | 'extract' } | null; onSpkDownload?: () => void; spkReady?: boolean; spkBusy?: boolean; spkStatus?: ReactNode; onSpkSelect?: (files: File[], restore: boolean) => Promise<boolean> };
 const terminal = (job: Job) => !activeJob(job);
+type SourceFailure = { message: string; retry?: Omit<TaskGroup, 'sources'> };
+
 const label = (state: string) => ({ queued: 'Waiting', paused: 'Paused', processing: 'Processing', verifying: 'Verifying', completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted' }[state] || state);
 const savings = (job: Job) => `${(Math.abs(1 - job.outputSize! / job.inputSize) * 100).toFixed(1)}% ${job.outputSize! <= job.inputSize ? 'smaller' : 'larger'}`;
 
@@ -43,7 +45,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const [recoveryReady, setRecoveryReady] = useState(false);
   const [selectionKey, setSelectionKey] = useState('');
   const [recoveryNotice, setRecoveryNotice] = useState('');
-  const drafts = useRef(new Map<string, { sources: Source[]; selected: Set<string>; target: string; conversion: string; qualityMode: 'lossless' | 'lossy'; metadataPolicy: 'strip' | 'preserve'; recursive: boolean; groupActions: Record<string, string>; errors: Record<string, string> }>());
+  const drafts = useRef(new Map<string, { sources: Source[]; selected: Set<string>; target: string; conversion: string; qualityMode: 'lossless' | 'lossy'; metadataPolicy: 'strip' | 'preserve'; recursive: boolean; groupActions: Record<string, string>; errors: Record<string, SourceFailure> }>());
   const [sources, setSources] = useState<Source[]>([]);
   const liveSources = useRef(sources); liveSources.current = sources;
   const [selected, setSelected] = useState(new Set<string>());
@@ -70,7 +72,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const [groupActions, setGroupActions] = useState<Record<string, string>>({});
   const [retention, setRetention] = useState<Retention>({ historyRetention: '30d', fileRetention: '24h' });
   const [error, setError] = useState('');
-  const [sourceErrors, setSourceErrors] = useState<Record<string, string>>({});
+  const [sourceErrors, setSourceErrors] = useState<Record<string, SourceFailure>>({});
   const [busy, setBusy] = useState(false);
   const [folderHelp, setFolderHelp] = useState(false);
   const [readingFolder, setReadingFolder] = useState(false);
@@ -374,9 +376,10 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const comment = archiveTarget === 'zip' && capability?.zipComments ? zipComment : '';
   const submit = async (operation: 'compress' | 'extract' | 'convert' | 'verify' | 'inspect', options: { zipIndexes?: number[]; repack?: boolean; planned?: ExecutionPlan } = {}) => {
     const { zipIndexes, repack, planned } = options;
+    const inputs = planned ? planned.groups.flatMap(group => group.sources) : chosen;
     if (accountChanging()) return;
-    if (submitting.current || recovering || capability?.projectRecovery && !recoveryReady || spkBusy || !chosen.length) return;
-    if (chosen.some(source => !source.file && !source.directory && (!source.upload || source.resume))) {
+    if (submitting.current || recovering || capability?.projectRecovery && !recoveryReady || spkBusy || !inputs.length) return;
+    if (inputs.some(source => !source.file && !source.directory && (!source.upload || source.resume))) {
       setError('Select the original files for recovered selections, or deselect them before running this action.');
       return;
     }
@@ -461,9 +464,13 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
           submitted.add(source.id);
           setSourceErrors(previous => { const next = { ...previous }; delete next[source.id]; return next; });
         },
-        failed: (source, message) => setSourceErrors(previous => ({ ...previous, [source.id]: message })),
+        failed: (source, message, group) => {
+          const { id, operation, target, qualityMode, metadataPolicy, recursive } = group;
+          const retry = planned && operation !== 'compress' ? { id, operation, target, qualityMode, metadataPolicy, recursive } : undefined;
+          setSourceErrors(previous => ({ ...previous, [source.id]: { message, retry } }));
+        },
       });
-      if (failures) setError(`${failures} files could not be queued. Select an action to retry; details appear beside each file.`);
+      if (failures) setError(`${failures} ${failures === 1 ? 'file could' : 'files could'} not be queued. Review the details beside each file.`);
     } catch (caught) {
       if (generation === ownerGeneration.current) setError(controller.signal.aborted ? 'Upload paused. Select an action to resume.' : caught instanceof Error ? caught.message : 'Could not queue files');
     } finally {
@@ -577,6 +584,19 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       confirmLabel: 'Remove record', onConfirm: () => removeLocalHistory(id),
     });
   };
+  const retrySource = (source: Source, action: Omit<TaskGroup, 'sources'>) => {
+    if (!capability || offline || busy || recovering || spkBusy) return;
+    if (action.operation === 'convert' && requiresLossyConsent(action.target) && qualityMode !== 'lossy') {
+      setError(`${action.target.toUpperCase()} requires Allow quality loss.`);
+      return;
+    }
+    try {
+      const plan = summarizePlan([{ ...action, sources: [source] }], 0, capability);
+      void submit('compress', { planned: plan });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not retry this file.');
+    }
+  };
   const removeSelectedSources = () => {
     const captured = chosen.map(source => ({ ...source }));
     const uploaded = captured.filter(source => source.upload);
@@ -662,7 +682,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
               <File size={19} strokeWidth={1.5} />
               <div><strong title={source.name}>{source.name}</strong><span>{source.directory ? 'Empty folder' : formatFileSize(source.size) + (capability?.inspection ? '  -  ' + (source.inspection?.error || source.inspection?.format || 'Detecting - ') : '')}</span></div>
               {!source.directory && (!source.upload && !source.file || source.resume && (source.uploaded ?? 0) < source.size)
-                ? <label className="file-state source-reselect" title={sourceErrors[source.id] || undefined}>
+                ? <label className="file-state source-reselect" title={sourceErrors[source.id]?.message}>
                   <input type="file" className="sr-only" aria-label={`Select original file for ${source.name}`} disabled={busy || recovering || !!spkBusy} onChange={event => {
                     const file = event.currentTarget.files?.[0];
                     event.currentTarget.value = '';
@@ -670,7 +690,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
                   }} />
                   {source.file ? 'Change file' : 'Select original'}
                 </label>
-                : sourceErrors[source.id] ? <button className="file-state source-error" title={sourceErrors[source.id]} onClick={() => setError(source.name + ': ' + sourceErrors[source.id])}>{sourceErrors[source.id]}</button>
+                : sourceErrors[source.id] ? <span className="source-failure"><button className="file-state source-error" title={sourceErrors[source.id].message} onClick={() => setError(source.name + ': ' + sourceErrors[source.id].message)}>{sourceErrors[source.id].message}</button>{sourceErrors[source.id].retry && <button className="text-button" aria-label={`Retry ${source.name}`} disabled={busy || recovering || !!spkBusy || offline} onClick={() => retrySource(source, sourceErrors[source.id].retry!)}>Retry file</button>}</span>
                 : <span className="file-state">Waiting</span>}
             </div>)}
           </div>
