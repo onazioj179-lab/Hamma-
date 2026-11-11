@@ -111,7 +111,6 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
         setLoadingJobs(false); setOffline(false); setJobs(records);
         setProjectIds(previous => [...new Set([...previous, ...records.map(job => job.projectId || 'default')])]);
         window.dispatchEvent(new CustomEvent('hamma-job-count', { detail: records.filter(job => !job.hidden).length }));
-        window.dispatchEvent(new CustomEvent('hamma-jobs-updated', { detail: records }));
         window.dispatchEvent(new CustomEvent('hamma-processor-status', { detail: 'ready' }));
         activity.current = records.some(activeJob);
       } catch (caught) {
@@ -226,7 +225,6 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       setJobs([]); setJobSelected(new Set()); setConfirmation(null); setCapability(null); setLoadingJobs(true); setError('');
       setUploadStatus(null);
       window.dispatchEvent(new CustomEvent('hamma-job-count', { detail: 0 }));
-      window.dispatchEvent(new CustomEvent('hamma-jobs-updated', { detail: [] }));
     };
     const changed = () => {
       setSources(previous => previous.map(source => ({ ...source, upload: undefined, uploaded: undefined, resume: undefined })));
