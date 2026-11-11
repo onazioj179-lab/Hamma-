@@ -64,6 +64,8 @@
 .job-details summary { font-size: 10px; }
 .job-details dl { display: grid; grid-template-columns: 90px 1fr; font-size: 11px; color: rgb(var(--muted)); gap: 6px; overflow-wrap: anywhere; }
 .job-details dd { margin: 0; }
+.verified-files ul { margin: 8px 0; padding-inline-start: 18px; font-size: 12px; overflow-wrap: anywhere; }
+.verified-files [role="status"] { font-size: 12px; }
 .job-measurement { display: flex; gap: 12px; align-items: center; margin: 12px 0 0 64px; font-size: 11px; color: rgb(var(--muted)); }
 .job-measurement progress { flex: 1; max-width: 320px; height: 4px; accent-color: rgb(var(--accent)); }
 .job-error { margin: 10px 0 0 64px; font-size: 12px; }
