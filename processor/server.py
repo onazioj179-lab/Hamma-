@@ -888,10 +888,20 @@ def handler(service):
                 raise HTTPError(404, "File unavailable")
             return record, service.store.folder(self.owner, upload_id) / "input"
 
-        def check_upload_chunk(self, upload_id, offset, length):
+        def available_upload(self, upload_id):
             record, source = self.upload_source(upload_id)
             if record["expires"] <= time.time() or not source.is_file():
                 raise HTTPError(410, "Upload expired or unavailable")
+            return record, source
+
+        def check_upload_writer(self, record):
+            expected = record.get("writerHash")
+            if expected and not secrets.compare_digest(expected, hashlib.sha256(self.headers.get("Upload-Writer", "").encode()).hexdigest()):
+                raise HTTPError(423, "This upload was resumed in another tab. Reopen the project to continue.")
+
+        def check_upload_chunk(self, upload_id, offset, length):
+            record, source = self.available_upload(upload_id)
+            self.check_upload_writer(record)
             if record.get("sha256"):
                 raise HTTPError(409, "Upload already finalized")
             if offset != source.stat().st_size:
@@ -1091,7 +1101,8 @@ def handler(service):
                         result = service.projects.save(self.owner, project_id, body)
                     elif is_inputs and not source_id and method == 'GET':
                         query = parse_qs(url.query)
-                        result = service.projects.inputs(self.owner, project_id, query.get('after', [''])[0], int(query.get('limit', [100])[0]))
+                        result = service.projects.inputs(self.owner, project_id, query.get('after', [''])[0],
+                                                        int(query.get('limit', [100])[0]), query.get('includeIncomplete') == ['1'])
                     elif is_inputs and source_id and method == 'PUT':
                         service.projects.checkpoint(self.owner, project_id, source_id, body.get('upload'))
                         result = {'saved': True}
@@ -1113,7 +1124,42 @@ def handler(service):
                     record = service.projects.prepare_upload(self.owner, *project_input, name, size, directory) if project_input is not None else None
                     if record is None:
                         record = self.create_upload(name, size, directory, project_input)
-                return self.send(201, record)
+                return self.send(201, {key: value for key, value in record.items() if key != "writerHash"})
+            prefix_route = re.fullmatch(r"/api/process/uploads/([a-f0-9]{32})/prefix", path)
+            if prefix_route and method in ("GET", "POST"):
+                query = parse_qs(url.query)
+                start = int(query.get("start", [-1])[0])
+                length = int(query.get("length", [-1])[0])
+                if start < 0 or not 1 <= length <= 4 * BLOCK:
+                    raise HTTPError(416, "Requested bytes are outside the saved upload")
+                candidate = None
+                if method == "POST":
+                    if int(self.headers.get("Content-Length", "-1")) != length:
+                        raise HTTPError(400, "Invalid upload verification length")
+                    data = self.rfile.read(length)
+                    if len(data) != length:
+                        raise HTTPError(400, "Upload verification interrupted")
+                    candidate = hashlib.sha256(data).hexdigest()
+                with service.lock:
+                    _, source = self.available_upload(prefix_route[1])
+                    if start + length > source.stat().st_size:
+                        raise HTTPError(416, "Requested bytes are outside the saved upload")
+                    with source.open("rb") as stream:
+                        stream.seek(start)
+                        digest = hashlib.sha256(stream.read(length)).hexdigest()
+                return self.send(200, {"sha256": digest} if candidate is None else {"matches": secrets.compare_digest(digest, candidate)})
+            resume_route = re.fullmatch(r"/api/process/uploads/([a-f0-9]{32})/resume", path)
+            if resume_route and method == "POST":
+                body = self.json_body()
+                offset, writer = body.get("offset"), body.get("writer")
+                if type(offset) is not int or not isinstance(writer, str) or not re.fullmatch(r"[a-f0-9]{32}", writer):
+                    raise HTTPError(400, "Invalid upload resume request")
+                with service.lock:
+                    record, source = self.available_upload(resume_route[1])
+                    if not 0 <= offset < record["size"] or source.stat().st_size != offset:
+                        raise HTTPError(409, "Saved upload changed. Retry with the original file.")
+                    service.store.patch(self.owner, "upload", record["id"], writerHash=hashlib.sha256(writer.encode()).hexdigest())
+                return self.send(200, {"offset": offset})
             match = re.fullmatch(r"/api/process/uploads/([a-f0-9]{32})", path)
             if match:
                 upload_id = match[1]
@@ -1124,7 +1170,10 @@ def handler(service):
                     if method == "GET":
                         if record["expires"] <= time.time() or not source.is_file():
                             raise HTTPError(410, "Upload expired or unavailable")
-                        result = {**record, "offset": source.stat().st_size}
+                        if self.headers.get("Upload-Writer"):
+                            self.check_upload_writer(record)
+                        result = {key: value for key, value in record.items() if key != "writerHash"}
+                        result.update(offset=source.stat().st_size, claimed="writerHash" in record)
                     if method == "DELETE":
                         if service.store.upload_referenced(self.owner, upload_id):
                             raise HTTPError(409, "File in use")
@@ -1223,7 +1272,7 @@ def handler(service):
                             ctx = Context(source.parent, service.limits)
                             record.update(file_digest(source, ctx), format=detect(source))
                             service.store.put(self.owner, "upload", record)
-                        inputs.append(record)
+                        inputs.append({key: value for key, value in record.items() if key != "writerHash"})
                     if operation != "compress" and inputs[0].get("directory"):
                         raise HTTPError(400, "Choose a file")
                     now = time.time()

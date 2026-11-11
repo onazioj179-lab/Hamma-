@@ -1,7 +1,7 @@
 """Owner-scoped settings and references to project uploads.
 
-Inputs retain their upload expiry. This store neither copies file contents nor
-extends retention, and it never treats a partial upload as recoverable.
+Inputs retain their upload expiry. Partial uploads require the original file
+before the browser can continue.
 """
 import json
 import re
@@ -131,7 +131,7 @@ class Projects:
                 raise ProjectError(409, 'This upload is already saved in the project')
             db.execute('INSERT OR IGNORE INTO project_inputs VALUES (?,?,?,?,?)', (owner, project_id, source_id, upload_id, time.time()))
 
-    def inputs(self, owner, project_id, after='', limit=100):
+    def inputs(self, owner, project_id, after='', limit=100, include_incomplete=False):
         self.get(owner, project_id)
         if not isinstance(after, str) or after and not re.fullmatch(r'[a-f0-9]{32}', after):
             raise ProjectError(400, 'Invalid recovery cursor')
@@ -146,13 +146,14 @@ class Projects:
                 unavailable += 1
                 continue
             path = self.store.folder(owner, upload['id']) / 'input'
-            if not path.is_file() or path.stat().st_size != upload['size']:
+            offset = path.stat().st_size if path.is_file() else -1
+            if offset < 0 or offset > upload['size'] or (offset < upload['size'] and not include_incomplete):
                 unavailable += 1
                 continue
             with path.open('rb') as stream:
                 headers.append({'head': stream.read(512).hex()})
             sources.append({'id': row[0], 'name': upload['name'], 'size': upload['size'], 'directory': upload['directory'],
-                            'upload': upload['id'], 'uploaded': upload['size'], 'expires': upload['expires']})
+                            'upload': upload['id'], 'uploaded': offset, 'expires': upload['expires']})
         inspections = []
         for start in range(0, len(headers), 32):
             inspections.extend(inspect_headers(headers[start:start + 32]))

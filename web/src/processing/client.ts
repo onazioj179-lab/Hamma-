@@ -30,7 +30,7 @@ export interface Job {
   fileExpires: number; historyExpires: number | null; fileCount: number; format: string;
   expanded?: number; mediaSeconds?: number; track?: number; tracks?: number;
 }
-export interface Source { inspection?: Inspection; id: string; file: File | null; name: string; size: number; directory: boolean; upload?: string; uploaded?: number }
+export interface Source { inspection?: Inspection; id: string; file: File | null; name: string; size: number; directory: boolean; upload?: string; uploaded?: number; resume?: boolean }
 export interface Retention { historyRetention: string; fileRetention: string }
 export const activeJob = (job: Job) => ['queued', 'processing', 'verifying', 'paused'].includes(job.state);
 
@@ -85,6 +85,26 @@ export async function requestId(parts: unknown[]): Promise<string> {
   return requestKeys.get(key)!;
 }
 
+const uploadChunkSize = 4 * 1024 * 1024;
+
+async function verifySavedPrefix(path: string, file: File, offset: number, signal: AbortSignal) {
+  for (let start = 0; start < offset; start += uploadChunkSize) {
+    signal.throwIfAborted();
+    const chunk = file.slice(start, Math.min(start + uploadChunkSize, offset));
+    const prefix = `${path}/prefix?start=${start}&length=${chunk.size}`;
+    let matches: boolean;
+    if (crypto.subtle) {
+      const digest = await crypto.subtle.digest('SHA-256', await chunk.arrayBuffer());
+      const sha256 = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+      matches = (await request<{ sha256: string }>(prefix, { signal })).sha256 === sha256;
+    } else {
+      // Plain HTTP on a private network can verify a bounded chunk through the processor.
+      matches = (await request<{ matches: boolean }>(prefix, { method: 'POST', signal, body: chunk })).matches === true;
+    }
+    if (!matches) throw new Error('The selected file differs from the saved upload. Select the original file.');
+  }
+}
+
 /** Chunk retries reconcile the server's committed offset before sending more bytes. */
 export async function upload(source: Source, signal: AbortSignal, update: (offset: number) => void, projectId?: string): Promise<string> {
   signal.throwIfAborted();
@@ -95,28 +115,43 @@ export async function upload(source: Source, signal: AbortSignal, update: (offse
     source.upload = record.id;
   };
   if (!source.upload) await create();
-  let offset: number;
-  try { offset = (await request<{ offset: number }>('/uploads/' + source.upload, { signal })).offset; }
-  catch (error) {
-    if (!(error instanceof ProcessorError) || ![404, 410].includes(error.status)) throw error;
-    await create();
-    offset = (await request<{ offset: number }>('/uploads/' + source.upload, { signal })).offset;
-  }
-  const id = source.upload!;
+  let writer: string | undefined;
+  const writerHeaders = (): Record<string, string> => writer ? { 'Upload-Writer': writer } : {};
   const validOffset = (value: number) => {
     if (!Number.isSafeInteger(value) || value < 0 || value > source.size) throw new Error('The processor returned an invalid upload position.');
     return value;
   };
-  offset = validOffset(offset);
+  const position = async () => {
+    const state = await request<{ offset: number; claimed?: boolean }>('/uploads/' + source.upload, { signal, headers: writerHeaders() });
+    if (state.claimed && !writer && !source.resume) throw new Error('This upload was resumed in another tab. Reopen the project to continue.');
+    return validOffset(state.offset);
+  };
+  let offset: number;
+  try { offset = await position(); }
+  catch (error) {
+    if (!(error instanceof ProcessorError) || ![404, 410].includes(error.status)) throw error;
+    await create();
+    offset = await position();
+  }
+  const id = source.upload!;
+  if (source.resume) {
+    if (!source.file) throw new Error('Select the original file to resume this upload.');
+    const path = '/uploads/' + id;
+    await verifySavedPrefix(path, source.file, offset, signal);
+    if (offset < source.size) {
+      writer = randomId();
+      await jsonRequest(path + '/resume', { offset, writer }, 'POST', { signal });
+    }
+  }
   update(offset);
   let failures = 0;
   while (offset < source.size) {
     signal.throwIfAborted();
     if (!source.file) throw new Error('This recovered upload is incomplete. Select the original file again.');
     try {
-      const next = Math.min(source.size, offset + 4 * 1024 * 1024);
+      const next = Math.min(source.size, offset + uploadChunkSize);
       const result = await request<{ offset: number }>('/uploads/' + id, {
-        method: 'PUT', signal, headers: { 'Upload-Offset': String(offset) }, body: source.file!.slice(offset, next),
+        method: 'PUT', signal, headers: { 'Upload-Offset': String(offset), ...writerHeaders() }, body: source.file!.slice(offset, next),
       });
       if (result.offset <= offset) throw new Error('The upload made no progress. Retry the operation.');
       offset = validOffset(result.offset);
@@ -131,7 +166,7 @@ export async function upload(source: Source, signal: AbortSignal, update: (offse
         if (signal.aborted) cancel();
         else signal.addEventListener('abort', cancel, { once: true });
       });
-      offset = validOffset((await request<{ offset: number }>('/uploads/' + id, { signal })).offset);
+      offset = await position();
       update(offset);
     }
   }

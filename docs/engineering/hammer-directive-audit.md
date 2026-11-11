@@ -16,7 +16,7 @@ Use this table to track current HAMMA web work in priority order.
 | Work | Acceptance |
 | --- | --- |
 | Validate the integrated web release | PR #39 combines PRs #37 and #38. Review its web build, browser workflow and processor checks before merging. |
-| Finish browser recovery | Completed uploads survive a refresh even when the final upload response is lost. Restore incomplete uploads and unuploaded selections after a tab closes, then verify with interrupted multi-file jobs and real payloads. |
+| Finish browser recovery | Completed uploads survive a lost final response. Incomplete uploads resume after the original files are reselected and checked against saved bytes. Preserve selections that have never started uploading and verify recovery with interrupted multi-file jobs. |
 | Scale browser jobs | Connect browser folder discovery to disk-backed manifests. Verify paged input and output lists, concurrent project fairness, and per-file retry under sustained load. |
 | Complete processing coverage | Exercise archive interoperability, encryption, split/join, and broader codecs. Build PDF and Office conversions with isolated parsers. Check decoded bytes, format fidelity and advertised capabilities. |
 | Harden untrusted processing | Enforce per-worker filesystem and network isolation, test the production tenant boundary, and expand advisory, SBOM and fuzz coverage. |

@@ -22,6 +22,9 @@
 .source-row strong { font-weight: 500; font-size: 13px; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; display: block; }
 .source-row div span { font-size: 11px; color: rgb(var(--muted)); display: block; margin-top: 4px; }
 .file-state { font-size: 11px; color: rgb(var(--muted)); white-space: nowrap; }
+.source-reselect { cursor: pointer; text-decoration: underline; }
+.source-reselect:focus-within { outline: 2px solid currentColor; outline-offset: 3px; }
+.source-reselect:has(input:disabled) { cursor: default; opacity: .6; }
 .processing-actions { display: flex; gap: 8px; padding: 16px 18px; align-items: center; flex-wrap: wrap; }
 .zip-inspection { padding: 0 18px 16px; }
 .zip-inspection .search-field { max-width: 360px; }

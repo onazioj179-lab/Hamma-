@@ -29,7 +29,7 @@ beforeEach(() => {
       saved = { id: 'default', revision: (saved?.revision || 0) + 1, created: 1, updated: 1, settings: body.settings };
       return ok(saved);
     }
-    if (url.includes('/projects/default/inputs?')) return ok({ sources: checkpoint ? [{ ...checkpoint, uploaded: checkpoint.size, inspection: { format: 'file', conversions: [], extract: false } }] : [], total: checkpoint ? 1 : 0, scanned: checkpoint ? 1 : 0, unavailable: 0, nextCursor: null });
+    if (url.includes('/projects/default/inputs?')) return ok({ sources: checkpoint ? [{ ...checkpoint, uploaded: offset, inspection: { format: 'file', conversions: [], extract: false } }] : [], total: checkpoint ? 1 : 0, scanned: checkpoint ? 1 : 0, unavailable: 0, nextCursor: null });
     if (/\/projects\/default\/inputs\/[a-f0-9]{32}$/.test(url) && init?.method === 'PUT') {
       expect(caps.recoverableUploads).toBe(false);
       checkpoint = { id: url.split('/').pop()!, upload: body.upload, name: 'resume.txt', size: 3, directory: false };
@@ -100,9 +100,62 @@ it('clears recovered server inputs when the account changes', async () => {
   expect(host.querySelector('[aria-label="Selected files"]')).toBeNull();
 });
 
+it.each([false, true])('verifies saved bytes before resuming (SubtleCrypto=%s)', async localHash => {
+  saved = { id: 'default', revision: 1, created: 1, updated: 1, settings: defaultProjectSettings };
+  checkpoint = { id: 'a'.repeat(32), upload: uploadId, name: 'resume.txt', size: 3, directory: false };
+  caps.recoverableUploads = true;
+  offset = 1; rejectJob = false;
+  if (!localHash) vi.stubGlobal('crypto', { getRandomValues: crypto.getRandomValues.bind(crypto) });
+  const initial = vi.mocked(fetch).getMockImplementation()!;
+  let matches = false;
+  let writer = '';
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (String(url).includes('/prefix?')) {
+      expect(String(url)).toContain('start=0&length=1');
+      expect(init?.method ?? 'GET').toBe(localHash ? 'GET' : 'POST');
+      if (!localHash) return ok({ matches }) as Response;
+      return ok({ sha256: matches ? 'ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb' : 'different' }) as Response;
+    }
+    if (String(url).endsWith('/resume')) {
+      const body = JSON.parse(String(init?.body));
+      expect(body.offset).toBe(1);
+      writer = body.writer;
+      return ok({ offset }) as Response;
+    }
+    if (String(url).endsWith('/uploads/' + uploadId) && init?.method === 'PUT') {
+      expect(new Headers(init.headers).get('Upload-Writer')).toBe(writer);
+      expect(new Headers(init.headers).get('Upload-Offset')).toBe('1');
+      expect((init.body as Blob).size).toBe(2);
+    }
+    return initial(url, init);
+  });
+  await render();
+  expect(host.textContent).toContain('resume 1 incomplete upload');
+  await act(async () => compress().click());
+  expect(jobAttempts).toBe(0);
+  const picker = host.querySelector<HTMLInputElement>('[aria-label="Select original file for resume.txt"]')!;
+  const file = new File(['abc'], 'resume.txt');
+  const slice = file.slice.bind(file);
+  if (localHash) vi.spyOn(file, 'slice').mockImplementation((start, end) => {
+    const chunk = slice(start, end);
+    return Object.assign(chunk, { arrayBuffer: async () => new Uint8Array([97]).buffer });
+  });
+  Object.defineProperty(picker, 'files', { value: [file], configurable: true });
+  await act(async () => picker.dispatchEvent(new Event('change', { bubbles: true })));
+  await act(async () => compress().click());
+  expect(host.textContent).toContain('differs from the saved upload');
+  expect(chunkWrites).toBe(0);
+  matches = true;
+  await act(async () => compress().click());
+  expect(writer).toMatch(/^[a-f0-9]{32}$/);
+  expect(jobAttempts).toBe(1);
+  expect(chunkWrites).toBe(1);
+});
+
 it('lets the user remove a recovered entry whose upload has already expired', async () => {
   saved = { id: 'default', revision: 1, created: 1, updated: 1, settings: defaultProjectSettings };
   checkpoint = { id: 'a'.repeat(32), upload: uploadId, name: 'expired.txt', size: 3, directory: false };
+  offset = 3;
   const initial = vi.mocked(fetch).getMockImplementation()!;
   vi.mocked(fetch).mockImplementation(async (url, init) => String(url).endsWith('/uploads/' + uploadId) && init?.method === 'DELETE'
     ? { ok: false, status: 404, json: async () => ({ error: 'File unavailable' }) } as Response

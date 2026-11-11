@@ -35,8 +35,11 @@ so a completed upload survives a lost final response or immediate page close.
 Choices are checked again against the current capabilities. A saved unsupported
 choice must be changed before running.
 Configured choices remain available even when just one failed group is left.
-Incomplete uploads and unuploaded local selections still need their original
-files after closing the page.
+For an incomplete upload, choose **Select original** on the recovered file row,
+then run the action again. HAMMA checks the original file against the saved
+bytes and appends the remaining data. On plain HTTP connections where the browser
+cannot hash files, HAMMA sends the saved portion for comparison without writing
+it again. Add any files that never started uploading again from their originals.
 
 ## Planner and executor boundaries
 
