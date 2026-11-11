@@ -1,6 +1,7 @@
 export interface Inspection { format: string; conversions: string[]; extract: boolean; error?: string }
 export interface Capability {
   groupedWorkflows?: boolean;
+  projectZipProfiles?: boolean;
   projectRecovery?: boolean;
   recoverableUploads?: boolean;
   inspection?: boolean;

@@ -1,6 +1,7 @@
 import { jsonRequest, ProcessorError, request, type Source } from './client';
 
 export interface ProjectSettings {
+  zipProfile?: string;
   groupActions?: Record<string, string>;
   target: string; conversion: string; qualityMode: 'lossless' | 'lossy';
   metadataPolicy: 'strip' | 'preserve'; recursive: boolean;
@@ -9,6 +10,7 @@ export interface SavedProject { id: string; created: number; updated: number; re
 export const defaultProjectSettings: ProjectSettings = { target: 'zip', conversion: 'wav', qualityMode: 'lossless', metadataPolicy: 'strip', recursive: false };
 const sameSettings = (left: ProjectSettings, right: ProjectSettings) =>
   (Object.keys(defaultProjectSettings) as (keyof ProjectSettings)[]).every(key => left[key] === right[key]) &&
+  (left.zipProfile === undefined || left.zipProfile === (right.zipProfile ?? 'balanced')) &&
   JSON.stringify(Object.entries(left.groupActions || {}).sort()) === JSON.stringify(Object.entries(right.groupActions || {}).sort());
 
 /** One instance per owner. No file bytes, cookies or credentials in browser storage. */
@@ -33,7 +35,7 @@ export class ProjectRecovery {
   private async saveNow(id: string, settings: ProjectSettings, signal?: AbortSignal): Promise<SavedProject> {
     signal?.throwIfAborted();
     const previous = this.records.get(id);
-    if (previous && sameSettings(previous.settings, settings)) return previous;
+    if (previous && sameSettings(settings, previous.settings)) return previous;
     try {
       const record = await jsonRequest<SavedProject>('/projects/' + id, { settings, revision: previous?.revision || 0 }, 'PUT', { signal });
       this.records.set(id, record);
@@ -43,7 +45,7 @@ export class ProjectRecovery {
       if (error instanceof ProcessorError && error.status === 409) {
         const current = await request<SavedProject>('/projects/' + id, { signal });
         this.records.set(id, current);
-        if (sameSettings(current.settings, settings)) return current;
+        if (sameSettings(settings, current.settings)) return current;
       }
       throw error;
     }
