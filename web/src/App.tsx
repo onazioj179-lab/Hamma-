@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import {
   ArrowUpRight,
   ChevronRight,
@@ -46,6 +47,7 @@ export default function App() {
   useEffect(() => { if (privacyChoice === 'learning') setPrivacyChoice('essential'); }, [privacyChoice, setPrivacyChoice]);
   const [section, setSection] = useState<SettingsSection>('general');
   const mainRef = useRef<HTMLElement>(null);
+  const previousView = useRef(view);
   const [announcement, setAnnouncement] = useState('');
   const [jobCount, setJobCount] = useState(0);
   const [processorStatus, setProcessorStatus] = useState('connecting');
@@ -73,6 +75,8 @@ export default function App() {
     setView('settings');
   };
   useEffect(() => {
+    if (previousView.current === view) return;
+    previousView.current = view;
     mainRef.current?.focus({ preventScroll: true });
     window.scrollTo(0, 0);
   }, [view]);
@@ -97,7 +101,7 @@ export default function App() {
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
-      if (target?.isContentEditable || target?.closest('input,textarea,select'))
+      if (event.defaultPrevented || target?.isContentEditable || target?.closest?.('input,textarea,select'))
         return;
       if (
         (event.ctrlKey || event.metaKey) &&
@@ -105,8 +109,9 @@ export default function App() {
         !isProcessing
       ) {
         event.preventDefault();
-        setView('process');
-        document.querySelector<HTMLInputElement>('input[aria-label="Add files to queue"]')?.click();
+        // Mount the picker while the keyboard event still carries user activation.
+        if (view !== 'process') flushSync(() => setView('process'));
+        mainRef.current?.querySelector<HTMLInputElement>('input[aria-label="Add files to queue"]')?.click();
       }
       if (event.key === 'Escape' && isProcessing) {
         event.preventDefault();
@@ -123,7 +128,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [view, workerReady, isProcessing, result, cancel, download]);
+  }, [view, isProcessing, result, cancel, download]);
 
   const selectedTitle =
     view === 'settings'
@@ -180,7 +185,7 @@ export default function App() {
           <button
             className={`sidebar-utility ${view === 'settings' && section !== 'about' ? 'selected' : ''}`}
             onClick={() => openSettings('general')}
-            aria-current={view === 'settings' ? 'page' : undefined}
+            aria-current={view === 'settings' && section !== 'about' ? 'page' : undefined}
           >
             <Settings2 size={17} />
             <span>Settings</span>
@@ -188,6 +193,7 @@ export default function App() {
           <button
             className={`sidebar-utility ${view === 'settings' && section === 'about' ? 'selected' : ''}`}
             onClick={() => openSettings('about')}
+            aria-current={view === 'settings' && section === 'about' ? 'page' : undefined}
           >
             <HelpCircle size={17} />
             <span>About HAMMA</span>
