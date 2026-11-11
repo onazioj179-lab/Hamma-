@@ -27,6 +27,10 @@ class Projects:
         self.store, self.limits = store, limits
         with store.connect() as db:
             db.execute('CREATE TABLE IF NOT EXISTS project_inputs (owner TEXT NOT NULL, project_id TEXT NOT NULL, source_id TEXT NOT NULL, upload_id TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY(owner,project_id,source_id))')
+            db.execute('''CREATE TABLE IF NOT EXISTS project_selections (
+                owner TEXT NOT NULL, project_id TEXT NOT NULL, source_id TEXT NOT NULL,
+                name TEXT NOT NULL, size INTEGER NOT NULL, directory INTEGER NOT NULL,
+                PRIMARY KEY(owner, project_id, source_id))''')
             db.execute('CREATE INDEX IF NOT EXISTS project_inputs_upload ON project_inputs(owner,upload_id)')
 
     @staticmethod
@@ -84,6 +88,22 @@ class Projects:
             raise ProjectError(404, 'Project unavailable')
         return record
 
+    def remember_selections(self, owner, project_id, sources):
+        self.get(owner, project_id)
+        with self.store.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            db.executemany("""INSERT OR IGNORE INTO project_selections
+                SELECT ?,?,?,?,?,? WHERE NOT EXISTS (
+                    SELECT 1 FROM project_inputs WHERE owner=? AND project_id=? AND source_id=?)""",
+                [(owner, project_id, source_id, name, size, directory, owner, project_id, source_id)
+                 for source_id, name, size, directory in sources])
+            count = db.execute("""SELECT
+                (SELECT count(*) FROM project_selections WHERE owner=? AND project_id=?) +
+                (SELECT count(*) FROM project_inputs WHERE owner=? AND project_id=?)""",
+                (owner, project_id, owner, project_id)).fetchone()[0]
+            if count > self.limits['files']:
+                raise ProjectError(413, 'Project file limit reached')
+
     def prepare_upload(self, owner, project_id, source_id, name, size, directory):
         """Under the service lock, reconcile a lost reservation response."""
         self.get(owner, project_id)
@@ -95,6 +115,14 @@ class Projects:
             if not existing:
                 count = db.execute('SELECT count(*) FROM project_inputs WHERE owner=? AND project_id=?',
                                    (owner, project_id)).fetchone()[0]
+                pending = db.execute('SELECT name,size,directory FROM project_selections WHERE owner=? AND project_id=? AND source_id=?',
+                                     (owner, project_id, source_id)).fetchone()
+                if pending:
+                    if tuple(pending) != (name, size, directory):
+                        raise ProjectError(409, 'Recovery input identifier already used')
+                    return None
+                count += db.execute('SELECT count(*) FROM project_selections WHERE owner=? AND project_id=?',
+                                    (owner, project_id)).fetchone()[0]
                 if count >= self.limits['files']:
                     raise ProjectError(413, 'Project file limit reached')
                 return None
@@ -129,18 +157,32 @@ class Projects:
             alias = db.execute('SELECT source_id FROM project_inputs WHERE owner=? AND project_id=? AND upload_id=?', (owner, project_id, upload_id)).fetchone()
             if alias and alias[0] != source_id:
                 raise ProjectError(409, 'This upload is already saved in the project')
+            db.execute('DELETE FROM project_selections WHERE owner=? AND project_id=? AND source_id=?', (owner, project_id, source_id))
             db.execute('INSERT OR IGNORE INTO project_inputs VALUES (?,?,?,?,?)', (owner, project_id, source_id, upload_id, time.time()))
 
-    def inputs(self, owner, project_id, after='', limit=100, include_incomplete=False):
+    def inputs(self, owner, project_id, after='', limit=100, include_incomplete=False, include_selections=False):
         self.get(owner, project_id)
         if not isinstance(after, str) or after and not re.fullmatch(r'[a-f0-9]{32}', after):
             raise ProjectError(400, 'Invalid recovery cursor')
         limit = min(100, max(1, limit))
         with self.store.connect() as db:
-            total = db.execute('SELECT count(*) FROM project_inputs WHERE owner=? AND project_id=?', (owner, project_id)).fetchone()[0]
-            rows = db.execute("SELECT p.source_id,u.data FROM project_inputs p LEFT JOIN records u ON u.owner=p.owner AND u.kind='upload' AND u.id=p.upload_id WHERE p.owner=? AND p.project_id=? AND p.source_id>? ORDER BY p.source_id LIMIT ?", (owner, project_id, after, limit)).fetchall()
-        sources, headers, unavailable = [], [], 0
+            params = (owner, project_id, after)
+            total = db.execute('SELECT count(*) FROM project_inputs WHERE owner=? AND project_id=?', params[:2]).fetchone()[0]
+            query = """SELECT p.source_id,u.data,NULL AS name,NULL AS size,NULL AS directory
+                FROM project_inputs p LEFT JOIN records u ON u.owner=p.owner AND u.kind='upload' AND u.id=p.upload_id
+                WHERE p.owner=? AND p.project_id=? AND p.source_id>?"""
+            if include_selections:
+                total += db.execute('SELECT count(*) FROM project_selections WHERE owner=? AND project_id=?', params[:2]).fetchone()[0]
+                query += """ UNION ALL SELECT source_id,NULL,name,size,directory FROM project_selections
+                    WHERE owner=? AND project_id=? AND source_id>?"""
+                params += params
+            rows = db.execute(query + ' ORDER BY source_id LIMIT ?', (*params, limit)).fetchall()
+        sources, inspected_sources, headers, unavailable = [], [], [], 0
         for row in rows:
+            if row['name'] is not None:
+                sources.append({'id': row['source_id'], 'name': row['name'], 'size': row['size'],
+                                'directory': bool(row['directory']), 'pending': True})
+                continue
             upload = json.loads(row[1]) if row[1] else None
             if not upload or upload['expires'] <= time.time():
                 unavailable += 1
@@ -154,10 +196,11 @@ class Projects:
                 headers.append({'head': stream.read(512).hex()})
             sources.append({'id': row[0], 'name': upload['name'], 'size': upload['size'], 'directory': upload['directory'],
                             'upload': upload['id'], 'uploaded': offset, 'expires': upload['expires']})
+            inspected_sources.append(sources[-1])
         inspections = []
         for start in range(0, len(headers), 32):
             inspections.extend(inspect_headers(headers[start:start + 32]))
-        for source, inspection in zip(sources, inspections):
+        for source, inspection in zip(inspected_sources, inspections):
             source['inspection'] = inspection
         return {'sources': sources, 'total': total, 'scanned': len(rows), 'unavailable': unavailable,
                 'nextCursor': rows[-1][0] if len(rows) == limit else None}
@@ -171,7 +214,9 @@ class Projects:
         self.get(owner, project_id)
         with self.store.connect() as db:
             db.execute('DELETE FROM project_inputs WHERE owner=? AND project_id=? AND source_id=?', (owner, project_id, source_id))
+            db.execute('DELETE FROM project_selections WHERE owner=? AND project_id=? AND source_id=?', (owner, project_id, source_id))
 
     def cleanup(self):
         with self.store.connect() as db:
+            db.execute("DELETE FROM project_selections WHERE NOT EXISTS (SELECT 1 FROM records WHERE owner=project_selections.owner AND kind='project' AND id=project_selections.project_id)")
             db.execute("DELETE FROM project_inputs WHERE NOT EXISTS (SELECT 1 FROM records u WHERE u.owner=project_inputs.owner AND u.kind='upload' AND u.id=project_inputs.upload_id AND json_extract(u.data,'$.expires')>?)", (time.time(),))

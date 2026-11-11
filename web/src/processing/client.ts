@@ -3,6 +3,7 @@ export interface Capability {
   groupedWorkflows?: boolean;
   projectRecovery?: boolean;
   recoverableUploads?: boolean;
+  projectSelections?: boolean;
   inspection?: boolean;
   zipVerification?: boolean;
   tarVerification?: boolean;
@@ -30,7 +31,7 @@ export interface Job {
   fileExpires: number; historyExpires: number | null; fileCount: number; format: string;
   expanded?: number; mediaSeconds?: number; track?: number; tracks?: number;
 }
-export interface Source { inspection?: Inspection; id: string; file: File | null; name: string; size: number; directory: boolean; upload?: string; uploaded?: number; resume?: boolean }
+export interface Source { inspection?: Inspection; id: string; file: File | null; name: string; size: number; directory: boolean; upload?: string; uploaded?: number; resume?: boolean; pending?: boolean }
 export interface Retention { historyRetention: string; fileRetention: string }
 export const activeJob = (job: Job) => ['queued', 'processing', 'verifying', 'paused'].includes(job.state);
 
