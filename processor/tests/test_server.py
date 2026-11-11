@@ -199,6 +199,29 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(caught.exception.headers["Retry-After"], "1")
         self.assertEqual(json.loads(caught.exception.read()), {"error": "Processor is busy"})
 
+    def test_live_history_refresh_is_owner_scoped_and_invalidates_on_completion_and_hiding(self):
+        queued = self.job()
+        owner = self.service.store.list()[0][0]
+        status = self.call("/jobs/live")
+        self.assertIsNone(status["jobs"])
+        poll = "/jobs/live?revision=" + status["revision"]
+        self.service.store.patch(owner, "job", queued["id"], state="processing", processed=3)
+        live = self.call(poll)
+        self.assertEqual(live["revision"], status["revision"])
+        self.assertEqual([(job["id"], job["processed"]) for job in live["jobs"]], [(queued["id"], 3)])
+        self.assertNotIn("inputs", live["jobs"][0])
+        other = build_opener(HTTPCookieProcessor(CookieJar()))
+        self.assertIsNone(self.call(poll, client=other)["jobs"])
+        self.execute(queued)
+        completed = self.call(poll)
+        self.assertNotEqual(completed["revision"], status["revision"])
+        self.assertIsNone(completed["jobs"])
+        poll = "/jobs/live?revision=" + completed["revision"]
+        self.assertEqual(self.call(poll)["jobs"], [])
+        self.service.store.trim_history(owner, 0)
+        self.assertIsNone(self.call(poll)["jobs"])
+        self.assertTrue(self.call("/jobs?includeHiddenDownloads=1")["jobs"][0]["downloadAvailable"])
+
     def test_connection_slots_leave_capacity_for_another_peer(self):
         primary, other = ("127.0.0.1", 1234), ("127.0.0.2", 1234)
         with patch.object(ThreadingMixIn, "process_request") as start, patch.object(self.server, "shutdown_request") as reject:

@@ -51,6 +51,9 @@ LOG = logging.getLogger("hamma.processor")
 TERMINAL = ("completed", "failed", "cancelled", "interrupted")
 
 ACTIVE = ("queued", "processing", "verifying")
+LIVE_STATES = (*ACTIVE, "paused")
+JOB_SUMMARY = ("json_remove(data,'$.inputs','$.manifest','$.outputFile','$.filesCleaned','$.errorInfo.fileIds') AS data,"
+               "coalesce(json_extract(data,'$.fileCount'),json_array_length(data,'$.inputs')) AS file_count")
 PROCESSOR_REVISION = ":".join(hashlib.sha256(path.read_bytes()).hexdigest() for path in
                               sorted(Path(__file__).parent.glob("*.py"), key=lambda path: path.name))
 RETENTION = {"24h": 86400, "7d": 604800, "30d": 2592000, "never": None}
@@ -94,6 +97,23 @@ class Store:
             db.execute("CREATE TABLE IF NOT EXISTS local_index_sources(owner TEXT NOT NULL,job_id TEXT NOT NULL,root TEXT NOT NULL,PRIMARY KEY(owner,job_id))")
             db.execute("CREATE INDEX IF NOT EXISTS job_inputs_upload ON job_inputs(owner,upload_id,job_id)")
             db.execute("CREATE TABLE IF NOT EXISTS store_migrations (name TEXT PRIMARY KEY)")
+            db.execute("CREATE TABLE IF NOT EXISTS job_history_revisions (owner TEXT PRIMARY KEY, revision INTEGER NOT NULL)")
+            # Live progress is fetched separately. A terminal change must invalidate
+            # history even when it came from another request or worker process.
+            live_states = ",".join(repr(state) for state in LIVE_STATES)
+            for event, row, condition in (
+                ("INSERT", "NEW", ""),
+                ("DELETE", "OLD", ""),
+                ("UPDATE", "NEW", " AND NOT (" + " AND ".join(
+                    f"coalesce(json_extract({version}.data,'$.state'),'') IN ({live_states})"
+                    for version in ("OLD", "NEW")) + ")"),
+            ):
+                db.execute(f"""CREATE TRIGGER IF NOT EXISTS job_history_{event.lower()}
+                    AFTER {event} ON records WHEN {row}.kind='job'{condition}
+                    BEGIN
+                        INSERT INTO job_history_revisions VALUES ({row}.owner,1)
+                        ON CONFLICT(owner) DO UPDATE SET revision=revision+1;
+                    END""")
             if not db.execute("SELECT 1 FROM store_migrations WHERE name='job-inputs-v1'").fetchone():
                 db.execute("INSERT OR IGNORE INTO job_inputs SELECT records.owner,records.id,json_extract(member.value,'$.id') FROM records,json_each(records.data,'$.inputs') AS member WHERE records.kind='job' AND json_type(member.value,'$.id')='text'")
                 db.execute("INSERT INTO store_migrations VALUES ('job-inputs-v1')")
@@ -203,7 +223,7 @@ class Store:
         with self.connect() as db:
             db.execute("BEGIN")
             total = db.execute("SELECT count(*) FROM records WHERE " + condition, parameters).fetchone()[0]
-            projection = "json_remove(data,'$.inputs','$.manifest','$.outputFile','$.filesCleaned','$.errorInfo.fileIds') AS data,coalesce(json_extract(data,'$.fileCount'),json_array_length(data,'$.inputs')) AS file_count" if summary else "data"
+            projection = JOB_SUMMARY if summary else "data"
             rows = db.execute("SELECT " + projection + " FROM records WHERE " + condition + " ORDER BY " + ordering + " LIMIT ? OFFSET ?",
                               [*parameters, min(100, max(1, limit)), min(2**63 - 1, max(0, offset))]).fetchall()
         records = [json.loads(row["data"]) for row in rows]
@@ -211,6 +231,21 @@ class Store:
             for record, row in zip(records, rows):
                 record["fileCount"] = row["file_count"] or 0
         return total, records
+
+    def live_jobs(self, owner, now):
+        with self.connect() as db:
+            db.execute("BEGIN")
+            revision = db.execute("SELECT revision FROM job_history_revisions WHERE owner=?", (owner,)).fetchone()
+            placeholders = ",".join("?" for _ in LIVE_STATES)
+            rows = db.execute(f"""SELECT {JOB_SUMMARY} FROM records
+                WHERE owner=? AND kind='job' AND json_extract(data,'$.state') IN ({placeholders})
+                AND (coalesce(json_extract(data,'$.hidden'),0)=0
+                     OR (json_extract(data,'$.downloadAvailable')=1 AND json_extract(data,'$.fileExpires')>?))
+                LIMIT 201""", (owner, *LIVE_STATES, now)).fetchall()
+        # Normal account admission caps the live queue at 200. Fall back to the
+        # paged endpoint if an older database contains more.
+        jobs = [dict(json.loads(row["data"]), fileCount=row["file_count"] or 0) for row in rows] if len(rows) <= 200 else None
+        return revision[0] if revision else 0, jobs
 
     def trim_history(self, owner, limit=500):
         with self.connect() as db:
@@ -1107,7 +1142,7 @@ def handler(service):
                     raise HTTPError(400, str(error)) from error
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
-                return self.send(200, {"groupedWorkflows": True, "projectRecovery": True, "recoverableUploads": True, "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "tarVerification": True, "zipSelection": True, "archiveRepack": True, "officeInspection": True, "zipComments": True, "zipProfiles": list(ZIP_PROFILES), "actionRegistry": action_registry(), "conversions": media_targets(),
+                return self.send(200, {"liveJobPolling": True, "groupedWorkflows": True, "projectRecovery": True, "recoverableUploads": True, "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "tarVerification": True, "zipSelection": True, "archiveRepack": True, "officeInspection": True, "zipComments": True, "zipProfiles": list(ZIP_PROFILES), "actionRegistry": action_registry(), "conversions": media_targets(),
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
             if path == "/api/process/settings":
                 if method == "GET":
@@ -1364,6 +1399,13 @@ def handler(service):
                     service.store.trim_history(self.owner, limit=self.plan['historyRecords'])
                 LOG.info("Job queued: %s %s", record["id"], operation)
                 return self.send(202, service.public(self.owner, record))
+            if path == "/api/process/jobs/live" and method == "GET":
+                now = time.time()
+                revision, jobs = service.store.live_jobs(self.owner, now)
+                token = service.sign(f"jobs:{service.instance_id}:{self.owner}:{revision}")
+                known = parse_qs(url.query).get("revision", [""])[0]
+                live = [service.public(self.owner, job) for job in jobs] if jobs is not None and token == known else None
+                return self.send(200, {"revision": token, "now": now, "jobs": live})
             if path == "/api/process/jobs" and method == "GET":
                 query = parse_qs(url.query)
                 offset = max(0, int(query.get("offset", [0])[0]))

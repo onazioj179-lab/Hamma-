@@ -326,6 +326,29 @@ it('announces newly completed jobs once after reconnecting', async () => {
   } finally { window.removeEventListener('hamma-job-notice', notice); }
 });
 
+it('polls live progress without reloading retained history', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  const row = { id: 'live-job', name: 'example.zip', state: 'processing', operation: 'compress',
+    inputSize: 100, outputSize: null, processed: 0, created: 1, fileExpires: 500, fileCount: 1, format: 'zip', downloadAvailable: false };
+  fetchMock.mockImplementation(async (url: string) => {
+    if (url.endsWith('/capabilities')) return { ok: true, json: async () => ({ ...caps, liveJobPolling: true }) };
+    if (url.includes('/jobs/live')) return { ok: true, json: async () => ({
+      revision: 'fixture', now: 100, jobs: url.includes('revision=fixture') ? [{ ...row, processed: 60 }] : null,
+    }) };
+    if (url.includes('/jobs?')) return { ok: true, json: async () => ({ jobs: [row], total: 1 }) };
+    return initial(url);
+  });
+  vi.useFakeTimers();
+  try {
+    await render();
+    expect(host.querySelector('progress')?.value).toBe(0);
+    fetchMock.mockClear();
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(host.querySelector('progress')?.value).toBe(60);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(['/api/process/jobs/live?revision=fixture']);
+  } finally { vi.useRealTimers(); }
+});
+
 it('uses the shared file picker for SPK and keeps the current result on its original history row', async () => {
   const { useAppStore } = await import('../store/app');
   const entry = { id: 'record-one', fileName: 'note.txt', date: 1000, type: 'compress' as const, mode: 'auto' as const, originalSize: 4, compressedSize: 2, ratio: .5 };

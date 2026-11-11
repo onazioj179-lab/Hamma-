@@ -7,7 +7,7 @@ import { summarizePlan, type ExecutionPlan } from '../../processing/planner';
 import { executeWorkflow } from '../../processing/workflow';
 import { GroupedWorkflow } from './GroupedWorkflow';
 import { useAppStore } from '../../store/app';
-import { combineActivity, filterActivity, loadJobs, type ActivityJob } from '../../processing/activity';
+import { combineActivity, filterActivity, loadJobs, refreshJobHistory, type ActivityJob, type JobHistorySnapshot } from '../../processing/activity';
 import { SelectField } from '../ui/SelectField';
 import { ConfirmAction, type ConfirmationRequest } from '../ui/ConfirmAction';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -84,6 +84,8 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const activity = useRef(false);
   const refreshFailures = useRef(0);
   const refreshAfter = useRef(0);
+  const liveJobPolling = useRef(false);
+  const jobHistory = useRef<JobHistorySnapshot | null>(null);
   const knownStates = useRef(new Map<string, string>());
   const [loadingJobs, setLoadingJobs] = useState(true);
 
@@ -104,19 +106,24 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     const controller = new AbortController(); refreshController.current = controller;
     const task = (async () => {
       try {
-        const records = await loadJobs(controller.signal, true);
+        const previous = jobHistory.current;
+        const snapshot = liveJobPolling.current ? await refreshJobHistory(force ? null : previous, controller.signal) : null;
+        const records = snapshot?.records ?? await loadJobs(controller.signal, true);
         if (!mounted.current || controller.signal.aborted) return;
+        jobHistory.current = snapshot;
         refreshFailures.current = 0;
         refreshAfter.current = 0;
+        setLoadingJobs(false); setOffline(false);
+        window.dispatchEvent(new CustomEvent('hamma-processor-status', { detail: 'ready' }));
+        if (snapshot && snapshot === previous) return;
         const finished = records.filter(job => knownStates.current.has(job.id) && knownStates.current.get(job.id) !== 'completed' && job.state === 'completed');
         for (const job of finished) window.dispatchEvent(new CustomEvent('hamma-job-notice', { detail: { success: true, message: `${job.outputName || job.name}: Ready to download` } }));
         knownStates.current = new Map(records.map(job => [job.id, job.state]));
-        setLoadingJobs(false); setOffline(false); setJobs(records);
+        setJobs(records);
         setProjectIds(previous => [...new Set([...previous, ...records.map(job => job.projectId || 'default')])]);
         window.dispatchEvent(new CustomEvent('hamma-job-count', { detail: records.filter(job => !job.hidden).length }));
         window.dispatchEvent(new CustomEvent('hamma-jobs-updated', { detail: records }));
-        window.dispatchEvent(new CustomEvent('hamma-processor-status', { detail: 'ready' }));
-        activity.current = records.some(activeJob);
+        activity.current = records.some(job => activeJob(job) && job.state !== 'paused');
       } catch (caught) {
         if (controller.signal.aborted || !mounted.current) return;
         const retryAfter = caught instanceof ProcessorError ? caught.retryAfterSeconds : undefined;
@@ -176,6 +183,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       const caps = await request<Capability>('/capabilities');
       if (generation !== ownerGeneration.current || accountChanging()) return;
       if (caps.processing !== 'local' || caps.version !== 1) throw new Error('Unavailable');
+      liveJobPolling.current = caps.liveJobPolling === true;
       setCapability(caps); setOffline(false);
       const settings = await request<Retention>('/settings');
       if (generation !== ownerGeneration.current || accountChanging()) return;
@@ -222,7 +230,8 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       abort.current?.abort(); folderController.current?.abort(); setFolderHelp(false);
       refreshController.current?.abort(); refreshFlight.current = null;
       deletionPreviewController.current?.abort();
-      knownStates.current.clear(); activity.current = false; refreshFailures.current = 0; refreshAfter.current = 0;
+      knownStates.current.clear(); jobHistory.current = null; liveJobPolling.current = false;
+      activity.current = false; refreshFailures.current = 0; refreshAfter.current = 0;
       setJobs([]); setJobSelected(new Set()); setConfirmation(null); setCapability(null); setLoadingJobs(true); setError('');
       setUploadStatus(null);
       window.dispatchEvent(new CustomEvent('hamma-job-count', { detail: 0 }));
@@ -258,7 +267,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
         timer = setTimeout(poll, Math.min(2 ** 31 - 1, Math.max(interval, refreshAfter.current - Date.now())));
       }
     };
-    void poll();
+    timer = setTimeout(poll, 1000);
     return () => { disposed = true; clearTimeout(timer); };
   }, [capability, refresh]);
 
