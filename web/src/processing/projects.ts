@@ -7,6 +7,29 @@ export interface ProjectSettings {
 }
 export interface SavedProject { id: string; created: number; updated: number; revision: number; settings: ProjectSettings }
 export const defaultProjectSettings: ProjectSettings = { target: 'zip', conversion: 'wav', qualityMode: 'lossless', metadataPolicy: 'strip', recursive: false };
+
+export function readSelection(key: string): { sources: Source[]; selected: string[] } {
+  try {
+    const draft = JSON.parse(localStorage.getItem(key) || 'null');
+    if (draft && draft.expires > Date.now() && Array.isArray(draft.sources) && Array.isArray(draft.selected)) {
+      return { sources: draft.sources.slice(0, 5000).map((source: Source) => ({ ...source, file: null })), selected: draft.selected.slice(0, 5000) };
+    }
+    localStorage.removeItem(key);
+  } catch { /* Browser storage may be unavailable. */ }
+  return { sources: [], selected: [] };
+}
+
+export function saveSelection(key: string, sources: Source[], selected: Set<string>) {
+  try {
+    const pending = sources.filter(source => !source.upload);
+    if (!pending.length) { localStorage.removeItem(key); return; }
+    localStorage.setItem(key, JSON.stringify({
+      expires: Date.now() + 86400000,
+      sources: pending.map(({ id, name, size, directory }) => ({ id, name, size, directory })),
+      selected: pending.filter(source => selected.has(source.id)).map(source => source.id),
+    }));
+  } catch { /* Browser storage may be unavailable or full. */ }
+}
 const sameSettings = (left: ProjectSettings, right: ProjectSettings) =>
   (Object.keys(defaultProjectSettings) as (keyof ProjectSettings)[]).every(key => left[key] === right[key]) &&
   JSON.stringify(Object.entries(left.groupActions || {}).sort()) === JSON.stringify(Object.entries(right.groupActions || {}).sort());
