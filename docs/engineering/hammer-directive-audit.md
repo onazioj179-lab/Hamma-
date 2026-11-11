@@ -10,18 +10,14 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 
 ## HAMMA web backlog
 
-The older engineering status documents record earlier validation snapshots.
-Use this table to track current HAMMA web work in priority order.
+1. **Preserve selections before upload.** Restore the selection list after reopening the project, prompt for original files as needed, and test recovery across mixed batches with unstarted, interrupted, and completed uploads.
+2. **Scale browser jobs.** Connect folder discovery to disk-backed manifests. Test paged inputs and outputs, fairness across projects, and per-file retry under sustained load.
+3. **Validate physical devices.** Test mobile and foldable layouts, folder picking, touch, keyboard access, reduced motion, and recovery on real devices.
+4. **Isolate processing workers.** Enforce filesystem and network isolation, verify tenant boundaries, and expand dependency advisories, SBOM coverage, and fuzz tests.
+5. **Expand format support.** Verify archive interoperability and add encryption, split and join, broader codec coverage, and isolated PDF and Office conversions. Check decoded bytes, format fidelity, and advertised capabilities.
+6. **Validate production operations.** Test rollback, migration, retention, and monitoring in the target environment. Distributed testing requires authorized compute and object storage.
 
-| Work | Acceptance |
-| --- | --- |
-| Validate the integrated web release | PR #39 combines PRs #37 and #38. Review its web build, browser workflow and processor checks before merging. |
-| Finish browser recovery | Completed uploads survive a lost final response. Incomplete uploads resume after the original files are reselected and checked against saved bytes. Preserve selections that have never started uploading and verify recovery with interrupted multi-file jobs. |
-| Scale browser jobs | Connect browser folder discovery to disk-backed manifests. Verify paged input and output lists, concurrent project fairness, and per-file retry under sustained load. |
-| Complete processing coverage | Exercise archive interoperability, encryption, split/join, and broader codecs. Build PDF and Office conversions with isolated parsers. Check decoded bytes, format fidelity and advertised capabilities. |
-| Harden untrusted processing | Enforce per-worker filesystem and network isolation, test the production tenant boundary, and expand advisory, SBOM and fuzz coverage. |
-| Validate browser devices | Test mobile and foldable layouts, touch input, keyboard access, and recovery on physical devices. |
-| Validate production operations | Exercise rollback, migration, retention and monitoring in the target deployment. Distributed acceptance requires authorized compute and object storage. |
+## Capability audit
 
 | Capability | Status | Implementation and remaining acceptance |
 | --- | --- | --- |
