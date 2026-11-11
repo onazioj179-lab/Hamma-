@@ -10,6 +10,7 @@ import { MotionConfig } from 'framer-motion';
 import './index.css';
 import './workspace.css';
 import './processing/controls.css';
+import './motion.css';
 
 // ============================================================================
 // ERROR BOUNDARY - Prevents app crashes from propagating
