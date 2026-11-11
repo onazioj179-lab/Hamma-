@@ -313,6 +313,11 @@ it('announces newly completed jobs once after reconnecting', async () => {
   const notice = vi.fn(); window.addEventListener('hamma-job-notice', notice);
   try {
     await render(); expect(notice).not.toHaveBeenCalled();
+    state = 'failed';
+    await act(async () => window.dispatchEvent(new Event('online')));
+    expect(host.querySelector('.state-failed')?.textContent).toBe('Failed');
+    expect(host.querySelector('[aria-label="Processing errors"]')).toBeNull();
+    expect(notice).not.toHaveBeenCalled();
     state = 'completed';
     await act(async () => window.dispatchEvent(new Event('online')));
     expect(notice).toHaveBeenCalledTimes(1);

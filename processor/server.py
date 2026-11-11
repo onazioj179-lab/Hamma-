@@ -6,6 +6,7 @@ requires an authenticated gateway and stronger per-worker OS sandboxing.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import errno
 from contextlib import contextmanager
 import hashlib
@@ -53,6 +54,8 @@ ACTIVE = ("queued", "processing", "verifying")
 PROCESSOR_REVISION = ":".join(hashlib.sha256(path.read_bytes()).hexdigest() for path in
                               sorted(Path(__file__).parent.glob("*.py"), key=lambda path: path.name))
 RETENTION = {"24h": 86400, "7d": 604800, "30d": 2592000, "never": None}
+JOB_PROGRESS_RESET = dict(processed=0, entries=0, expanded=0, mediaSeconds=0, track=None, tracks=None,
+                          phase=None, duration=None, started=None, finished=None, error=None, errorInfo=None)
 
 
 class Store:
@@ -78,6 +81,8 @@ class Store:
             db.execute("CREATE INDEX IF NOT EXISTS records_visible ON records(owner,kind,coalesce(json_extract(data,'$.hidden'),0),created DESC)")
             db.execute("CREATE INDEX IF NOT EXISTS records_state ON records(kind,json_extract(data,'$.state'),created,id,owner)")
             db.execute("CREATE INDEX IF NOT EXISTS records_owner_state ON records(owner,kind,json_extract(data,'$.state'))")
+            db.execute("CREATE INDEX IF NOT EXISTS job_owner_scheduled ON records(owner,json_extract(data,'$.scheduled')) WHERE kind='job'")
+            db.execute("CREATE INDEX IF NOT EXISTS job_project_scheduled ON records(owner,coalesce(json_extract(data,'$.projectId'),'default'),json_extract(data,'$.scheduled')) WHERE kind='job'")
             db.execute("CREATE INDEX IF NOT EXISTS records_upload_bytes ON records(kind,json_extract(data,'$.size'))")
             db.execute("CREATE INDEX IF NOT EXISTS records_output_bytes ON records(kind,json_extract(data,'$.downloadAvailable'),json_extract(data,'$.outputSize'))")
             db.execute("CREATE INDEX IF NOT EXISTS records_index_bytes ON records(kind,json_extract(data,'$.indexBytes'))")
@@ -238,7 +243,7 @@ class Store:
             for row in rows:
                 yield row["owner"], json.loads(row["data"])
 
-    def queued(self, limit=1, excluded_owners=(), fair=False):
+    def queued(self, limit=1, excluded_owners=(), fair=False, busy_owners=()):
         where, parameters = ["kind='job'", "json_extract(data,'$.state')='queued'"], []
         if excluded_owners:
             where.append("owner NOT IN (" + ",".join("?" for _ in excluded_owners) + ")")
@@ -246,7 +251,12 @@ class Store:
         with self.connect() as db:
             ordering = "created,id,owner"
             if fair:
-                ordering = "coalesce((SELECT max(json_extract(previous.data,'$.scheduled')) FROM records AS previous WHERE previous.owner=records.owner AND previous.kind='job' AND coalesce(json_extract(previous.data,'$.projectId'),'default')=coalesce(json_extract(records.data,'$.projectId'),'default')),0),created,id,owner"
+                scheduled = "SELECT max(json_extract(previous.data,'$.scheduled')) FROM records AS previous WHERE previous.owner=records.owner AND previous.kind='job'"
+                project = "coalesce(json_extract(previous.data,'$.projectId'),'default')=coalesce(json_extract(records.data,'$.projectId'),'default')"
+                ordering = f"coalesce(({scheduled}),0),coalesce(({scheduled} AND {project}),0),{ordering}"
+                if busy_owners:
+                    ordering = f"owner IN ({','.join('?' for _ in busy_owners)}),{ordering}"
+                    parameters.extend(busy_owners)
             rows = db.execute("SELECT owner,data FROM records WHERE " + " AND ".join(where) + " ORDER BY " + ordering + " LIMIT ?", [*parameters, max(1, min(100, limit))]).fetchall()
         return [(row[0], json.loads(row[1])) for row in rows]
 
@@ -466,6 +476,8 @@ class Service:
                 stream.write(secrets.token_bytes(32))
         self.key = self.secret.read_bytes()
         self.rates = {}
+        self.rate_lock = threading.Lock()
+        self.rate_window = None
         self.requests_per_minute = int(os.environ.get("HAMMA_REQUESTS_PER_MINUTE", "2000"))
         if not 1 <= self.requests_per_minute <= 1000000:
             raise ValueError("HAMMA_REQUESTS_PER_MINUTE must be between 1 and 1000000")
@@ -476,14 +488,24 @@ class Service:
         # A crash must never leave an old success or a fictitious running job.
         for owner, record in self.store.iter_records(states=("processing", "verifying", "failed", "cancelled", "interrupted")):
             if record["state"] in ("processing", "verifying"):
-                self.store.patch(owner, "job", record["id"], state="interrupted", error="Processing interrupted", finished=time.time(), downloadAvailable=False)
-                self.clean_work(owner, record["id"])
-            elif record["state"] in ("failed", "cancelled", "interrupted"):
-                # A crash can occur after the terminal state was saved but before cleanup.
-                self.clean_work(owner, record["id"])
+                self.interrupt_job(owner, record, "Processing interrupted")
+            # A crash can occur after the terminal state was saved but before cleanup.
+            self.discard_partial_work(owner, record["id"])
 
     def sign(self, value):
         return hmac.new(self.key, value.encode(), hashlib.sha256).hexdigest()
+
+    def admit_request(self, peer):
+        with self.rate_lock:
+            now = time.monotonic()
+            window = int(now // 60)
+            if self.rate_window != window:
+                self.rates.clear()
+                self.rate_window = window
+            used = self.rates.get(peer, 0)
+            if used >= self.requests_per_minute:
+                raise HTTPError(429, "Too many requests", 60 - int(now % 60))
+            self.rates[peer] = used + 1
 
     def defaults(self, owner):
         pref = self.store.get(owner, "settings", "settings")
@@ -583,12 +605,15 @@ class Service:
     def terminate(self, job_id):
         entry = self.running.get(job_id)
         if not entry:
-            return
+            return False
         process = entry[0]
         if process.is_alive():
             if os.name == "nt":
                 # Terminate the generated worker's process tree, including FFmpeg.
-                subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, timeout=10)
+                try:
+                    subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, timeout=10)
+                except subprocess.TimeoutExpired:
+                    LOG.warning("Worker tree termination timed out: %s", job_id)
             else:
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
@@ -598,9 +623,7 @@ class Service:
             if process.is_alive():
                 process.kill()
                 process.join(3)
-        record = self.store.get(entry[1], "job", job_id)
-        if not process.is_alive() and record and record["state"] != "completed":
-            self.clean_work(entry[1], job_id)
+        return not process.is_alive()
 
     def clean_work(self, owner, job_id):
         directory = self.store.folder(owner, job_id)
@@ -614,9 +637,20 @@ class Service:
             else:
                 path.unlink(missing_ok=True)
 
+    def discard_partial_work(self, owner, job_id):
+        try:
+            self.clean_work(owner, job_id)
+        except OSError:
+            LOG.exception("Could not clean job files: %s", job_id)
+            return False
+        return True
+
     def delete_files(self, owner, record):
-        self.terminate(record["id"])
-        self.running.pop(record["id"], None)
+        job_id = record["id"]
+        if job_id in self.running:
+            if not self.terminate(job_id):
+                raise OSError("Worker is still stopping")
+            self.running.pop(job_id)[0].close()
         directory = self.store.folder(owner, record["id"])
         if directory.exists():
             shutil.rmtree(directory, ignore_errors=False)
@@ -629,30 +663,47 @@ class Service:
                     shutil.rmtree(folder)
                 self.store.delete(owner, upload["id"])
 
+    def interrupt_job(self, owner, record, message, category="worker_interrupted"):
+        self.store.patch(owner, "job", record["id"], expected_states=ACTIVE,
+                         state="interrupted", error=message, finished=time.time(), downloadAvailable=False,
+                         errorInfo={"category": category, "retryEligible": True, "stage": record["state"],
+                                    "jobId": record["id"]})
+
     def tick(self):
         with self.lock:
             for job_id, (process, owner, started) in list(self.running.items()):
-                if process.is_alive() and time.monotonic() - started > self.limits["seconds"] + 10:
+                expired = time.monotonic() - started > self.limits["seconds"] + 10
+                if process.is_alive() and expired:
                     self.terminate(job_id)
                 if not process.is_alive():
                     process.join()
                     record = self.store.get(owner, "job", job_id)
+                    cleaned = not record or record["state"] == "completed" or self.discard_partial_work(owner, job_id)
                     if record and record["state"] in ACTIVE:
-                        self.store.patch(owner, "job", job_id, state="interrupted", error="Worker interrupted", finished=time.time(), downloadAvailable=False)
-                    if record and record["state"] != "completed":
-                        self.clean_work(owner, job_id)
+                        # Standard archive compression has no child codecs that
+                        # could still be writing after the worker exits.
+                        if expired:
+                            self.interrupt_job(owner, record, "Processing time limit reached", "processing_timeout")
+                        elif (cleaned and not record.get("crashRetries") and record.get("operation") == "compress"
+                                and record.get("target") in ARCHIVES and record.get("inputMode") != "directory-index"
+                                and record.get("fileExpires", 0) > time.time()
+                                and not (self.store.folder(owner, job_id) / "cancel").exists()):
+                            LOG.warning("Restarting interrupted job %s (worker exit %s)", job_id, process.exitcode)
+                            self.store.patch(owner, "job", job_id, expected_states=ACTIVE, state="queued",
+                                             crashRetries=1, downloadAvailable=False, **JOB_PROGRESS_RESET)
+                        else:
+                            self.interrupt_job(owner, record, "Worker interrupted")
                     del self.running[job_id]
+                    process.close()
             if time.monotonic() < self.restart_until:
                 return
             attempts = 0
             capacity = worker_capacity(available_memory())
             while len(self.running) < capacity and attempts < 16:
                 attempts += 1
-                owners = {entry[1] for entry in self.running.values()}
-                blocked = {owner for owner in owners if sum(entry[1] == owner for entry in self.running.values()) >= self.owner_plan(owner)['maxConcurrentJobs']}
-                candidates = self.store.queued(excluded_owners=owners, fair=True)
-                if not candidates and owners:
-                    candidates = self.store.queued(excluded_owners=blocked, fair=True)
+                owners = Counter(entry[1] for entry in self.running.values())
+                blocked = {owner for owner, count in owners.items() if count >= self.owner_plan(owner)['maxConcurrentJobs']}
+                candidates = self.store.queued(excluded_owners=blocked, busy_owners=owners.keys() - blocked, fair=True)
                 if not candidates:
                     break
                 owner, job = candidates[0]
@@ -662,14 +713,14 @@ class Service:
                                      errorInfo={'category': 'insufficient_storage', 'retryEligible': True, 'stage': 'queued',
                                                 'jobId': job['id'], 'fileIds': [item['id'] for item in job['inputs']]}, downloadAvailable=False)
                     continue
-                self.store.patch(owner, "job", job["id"], state="processing", scheduled=time.time())
+                job = self.store.patch(owner, "job", job["id"], state="processing", scheduled=time.time())
                 try:
                     process = multiprocessing.get_context("spawn").Process(target=run_job, args=(str(self.store.root), owner, job["id"], self.limits, True))
                     process.start()
                 except Exception:
                     LOG.exception("Worker could not start: %s", job["id"])
-                    self.store.patch(owner, "job", job["id"], state="interrupted", error="Worker could not start; retry the job", finished=time.time(), downloadAvailable=False)
-                    self.clean_work(owner, job["id"])
+                    self.interrupt_job(owner, job, "Worker could not start; retry the job")
+                    self.discard_partial_work(owner, job["id"])
                     continue
                 self.running[job["id"]] = (process, owner, time.monotonic())
 
@@ -686,8 +737,13 @@ class Service:
     def close(self):
         self.stop.set()
         with self.lock:
-            for job_id in list(self.running):
-                self.terminate(job_id)
+            for job_id, (process, owner, _) in list(self.running.items()):
+                if self.terminate(job_id):
+                    record = self.store.get(owner, "job", job_id)
+                    if record and record["state"] != "completed":
+                        self.discard_partial_work(owner, job_id)
+                    del self.running[job_id]
+                    process.close()
             if not self.instance_lock.closed:
                 self.instance_lock.seek(0)
                 if os.name == "nt":
@@ -712,25 +768,39 @@ class LocalHTTPServer(ThreadingHTTPServer):
 
     def __init__(self, *args, **kwargs):
         self.request_slots = threading.BoundedSemaphore(64)
+        self.peer_slots = Counter()
+        self.peer_lock = threading.Lock()
         super().__init__(*args, **kwargs)
+
+    def release_slot(self, peer):
+        with self.peer_lock:
+            self.peer_slots[peer] -= 1
+            if not self.peer_slots[peer]:
+                del self.peer_slots[peer]
+            self.request_slots.release()
 
     def process_request(self, request, client_address):
         # Bound slow uploads and stalled TLS handshakes before creating threads.
         # A TLS overload cannot safely receive a plaintext HTTP error response.
-        if not self.request_slots.acquire(blocking=False):
+        peer = client_address[0]
+        with self.peer_lock:
+            admitted = self.peer_slots[peer] < 16 and self.request_slots.acquire(blocking=False)
+            if admitted:
+                self.peer_slots[peer] += 1
+        if not admitted:
             self.shutdown_request(request)
             return
         try:
             super().process_request(request, client_address)
         except BaseException:
-            self.request_slots.release()
+            self.release_slot(peer)
             raise
 
     def process_request_thread(self, request, client_address):
         try:
             super().process_request_thread(request, client_address)
         finally:
-            self.request_slots.release()
+            self.release_slot(client_address[0])
 
     def get_request(self):
         connection, address = super().get_request()
@@ -788,12 +858,7 @@ def handler(service):
             if getattr(self, 'oauth_cookie', None):
                 self.send_header('Set-Cookie', self.oauth_cookie)
 
-        def identity(self):
-            self.new_cookie = None
-            self.account_cookie = None
-            self.oauth_cookie = None
-            self.account = None
-            self.account_token = None
+        def validate_origin(self):
             peer = ipaddress.ip_address(self.client_address[0])
             self.credentials_allowed = peer.is_loopback or getattr(self.server, 'transport_secure', False)
             if service.lan_hosts and not (peer.is_private or peer.is_loopback):
@@ -807,6 +872,13 @@ def handler(service):
                 raise HTTPError(403, "Invalid origin")
             if self.headers.get("Sec-Fetch-Site") == "cross-site":
                 raise HTTPError(403, "Invalid origin")
+
+        def identity(self):
+            self.new_cookie = None
+            self.account_cookie = None
+            self.oauth_cookie = None
+            self.account = None
+            self.account_token = None
             jar = cookies.SimpleCookie()
             try:
                 jar.load(self.headers.get("Cookie", ""))
@@ -938,21 +1010,14 @@ def handler(service):
 
         def route(self):
             self.connection.settimeout(30)
-            self.identity()
+            self.validate_origin()
             url = urlsplit(self.path)
             path, method = url.path, self.command
-            if path.startswith("/api/process"):
-                with service.lock:
-                    now = time.time()
-                    minute = int(now // 60)
-                    service.rates = {address: entry for address, entry in service.rates.items() if entry[1] == minute}
-                    key = self.client_address[0]
-                    used, window = service.rates.get(key, (0, minute))
-                    service.rates[key] = ((used if minute == window else 0) + 1, minute)
-                    if service.rates[key][0] > service.requests_per_minute:
-                        raise HTTPError(429, "Too many requests", max(1, 60 - int(now % 60)))
+            if path == "/api/process" or path.startswith("/api/process/"):
+                service.admit_request(self.client_address[0])
                 if method in ("POST", "PUT", "DELETE") and self.headers.get("X-Hamma-Request") != "1":
                     raise HTTPError(403, "Request authorization required")
+            self.identity()
             if path == "/api/process/prepare-restart" and method == "POST":
                 if not ipaddress.ip_address(self.client_address[0]).is_loopback:
                     raise HTTPError(403, "Restart preparation is local only")
@@ -1356,9 +1421,14 @@ def handler(service):
                         record = service.store.get(self.owner, "job", job_id)
                         if action == "cancel" and record["state"] in (*ACTIVE, "paused"):
                             (directory / "cancel").touch()
-                            service.store.patch(self.owner, "job", job_id, state="cancelled", error="Cancelled", finished=time.time())
-                            service.terminate(job_id)
-                            service.running.pop(job_id, None)
+                            cancelled = service.store.patch(self.owner, "job", job_id, expected_states=(*ACTIVE, "paused"),
+                                                            state="cancelled", error="Cancelled", finished=time.time())
+                            if cancelled["state"] != "cancelled":
+                                (directory / "cancel").unlink(missing_ok=True)
+                                raise HTTPError(409, "Action unavailable for this job")
+                            if service.terminate(job_id):
+                                service.running.pop(job_id)[0].close()
+                                service.discard_partial_work(self.owner, job_id)
                         elif action == "pause" and record["state"] == "queued":
                             service.store.patch(self.owner, "job", job_id, state="paused")
                         elif action == "resume" and record["state"] == "paused":
@@ -1372,8 +1442,10 @@ def handler(service):
                                 raise HTTPError(429, 'Processor queue full')
                             if record["fileExpires"] <= time.time() or any(not (service.store.folder(self.owner, i["id"]) / "input").exists() for i in record["inputs"]):
                                 raise HTTPError(410, "Input files expired")
+                            service.clean_work(self.owner, job_id)
                             (directory / "cancel").unlink(missing_ok=True)
-                            service.store.patch(self.owner, "job", job_id, state="queued", error=None, errorInfo=None, retryCount=record.get('retryCount', 0) + 1, processed=0, entries=0, expanded=0, mediaSeconds=0, duration=None, started=None, finished=None, hidden=False)
+                            service.store.patch(self.owner, "job", job_id, state="queued", retryCount=record.get('retryCount', 0) + 1,
+                                                crashRetries=0, hidden=False, **JOB_PROGRESS_RESET)
                         else:
                             raise HTTPError(409, "Action unavailable for this job")
                     return self.send(200, service.public(self.owner, service.store.get(self.owner, "job", job_id)))
@@ -1429,21 +1501,42 @@ def handler(service):
                     self.wfile.write(chunk)
                     remaining -= len(chunk)
 
+        def end_headers(self):
+            self.response_started = True
+            super().end_headers()
+
+        def send_failure(self, status, message, retry_after=None):
+            if getattr(self, "response_started", False):
+                self.close_connection = True
+                return
+            try:
+                self.send(status, {"error": message}, retry_after)
+            except (ConnectionError, TimeoutError):
+                self.close_connection = True
+
         def handle_request(self):
             try:
                 self.route()
             except (HTTPError, AccountError, ProjectError) as error:
-                self.send(error.status, {"error": error.message}, error.retry_after)
+                self.send_failure(error.status, error.message, error.retry_after)
             except (ValueError, TypeError, KeyError, ProcessingError):
-                self.send(400, {"error": "Invalid request"})
-            except (BrokenPipeError, ConnectionResetError, TimeoutError):
-                pass
+                self.send_failure(400, "Invalid request")
+            except (ConnectionError, TimeoutError):
+                self.close_connection = True
+            except sqlite3.OperationalError as error:
+                code = getattr(error, "sqlite_errorcode", 0) & 0xff
+                if code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                    self.send_failure(503, "Processor is busy", retry_after=1)
+                else:
+                    LOG.exception("Database operation failed")
+                    status = 507 if code == sqlite3.SQLITE_FULL else 500
+                    self.send_failure(status, "Storage full" if status == 507 else "Request failed")
             except OSError:
                 LOG.exception("Storage operation failed")
-                self.send(507, {"error": "Storage unavailable"})
+                self.send_failure(507, "Storage unavailable")
             except Exception:
                 LOG.exception("Request failed")
-                self.send(500, {"error": "Request failed"})
+                self.send_failure(500, "Request failed")
 
         do_GET = do_POST = do_PUT = do_DELETE = do_HEAD = handle_request
 

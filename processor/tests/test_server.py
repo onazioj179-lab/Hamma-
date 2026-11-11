@@ -1,9 +1,10 @@
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
-from http.client import HTTPConnection
+from http.client import HTTPConnection, IncompleteRead
 from http.cookiejar import CookieJar
 from http.server import ThreadingHTTPServer
+from socketserver import ThreadingMixIn
 import io
 import json
 import os
@@ -17,7 +18,7 @@ import tarfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 import wave
@@ -178,13 +179,61 @@ class ServerTests(unittest.TestCase):
 
     def test_rate_limit_returns_retry_after_and_discards_expired_windows(self):
         self.service.requests_per_minute = 1
-        self.service.rates["expired-client"] = (2000, int(time.time() // 60) - 1)
+        self.service.rate_window = int(time.monotonic() // 60) - 1
+        self.service.rates["expired-client"] = 2000
         self.call("/health")
         with self.assertRaises(HTTPError) as raised:
             self.call("/health")
         self.assertEqual(raised.exception.code, 429)
         self.assertTrue(1 <= int(raised.exception.headers["Retry-After"]) <= 60)
         self.assertNotIn("expired-client", self.service.rates)
+
+    def test_sqlite_busy_returns_retryable_error(self):
+        import sqlite3
+        error = sqlite3.OperationalError("private database detail")
+        error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+        with patch.object(self.service.store, "history_page", side_effect=error):
+            with self.assertRaises(HTTPError) as caught:
+                self.call("/jobs")
+        self.assertEqual(caught.exception.code, 503)
+        self.assertEqual(caught.exception.headers["Retry-After"], "1")
+        self.assertEqual(json.loads(caught.exception.read()), {"error": "Processor is busy"})
+
+    def test_connection_slots_leave_capacity_for_another_peer(self):
+        primary, other = ("127.0.0.1", 1234), ("127.0.0.2", 1234)
+        with patch.object(ThreadingMixIn, "process_request") as start, patch.object(self.server, "shutdown_request") as reject:
+            for _ in range(16):
+                self.server.process_request(Mock(), primary)
+            overflow = Mock()
+            self.server.process_request(overflow, primary)
+            self.server.process_request(Mock(), other)
+            self.assertEqual(start.call_count, 17)
+            reject.assert_called_once_with(overflow)
+            self.server.release_slot(primary[0])
+            self.server.process_request(Mock(), primary)
+            self.assertEqual(start.call_count, 18)
+            for peer, count in self.server.peer_slots.copy().items():
+                for _ in range(count):
+                    self.server.release_slot(peer)
+            self.assertFalse(self.server.peer_slots)
+
+    def test_stream_failure_closes_response_without_appending_json(self):
+        def broken_stream(request):
+            request.send_response(200)
+            request.send_header("Content-Length", "100")
+            request.end_headers()
+            request.wfile.write(b"partial")
+            raise OSError("Disk read failed")
+
+        with (patch.object(self.server.RequestHandlerClass, "route", autospec=True, side_effect=broken_stream),
+              self.assertLogs("hamma.processor", level="ERROR"),
+              closing(HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)) as client):
+            client.request("GET", "/")
+            response = client.getresponse()
+            self.assertEqual(response.status, 200)
+            with self.assertRaises(IncompleteRead) as caught:
+                response.read()
+            self.assertEqual(caught.exception.partial, b"partial")
 
     def test_expired_or_missing_uploads_report_gone_before_cleanup(self):
         source = self.upload(b"original")
@@ -584,7 +633,9 @@ class ServerTests(unittest.TestCase):
 
     def test_worker_start_failure_does_not_strand_jobs_or_stop_queue(self):
         jobs = [self.job(), self.job()]
-        with self.assertLogs("hamma.processor", level="ERROR"), patch("processor.server.multiprocessing.get_context") as spawn:
+        with (self.assertLogs("hamma.processor", level="ERROR"),
+              patch("processor.server.available_memory", return_value=None),
+              patch("processor.server.multiprocessing.get_context") as spawn):
             spawn.return_value.Process.return_value.start.side_effect = OSError("private host detail")
             self.service.tick()
         self.assertEqual(spawn.call_count, 2)
@@ -601,6 +652,51 @@ class ServerTests(unittest.TestCase):
         self.assertIsNone(retried["finished"])
         self.assertIsNone(retried["started"])
         self.assertEqual(self.execute(retried)["state"], "completed")
+
+    def test_archive_worker_crash_requeues_once_and_removes_partial_output(self):
+        job = self.job()
+        owner = self.service.store.list()[0][0]
+        output = self.service.store.folder(owner, job["id"]) / "output.zip"
+        for attempt, expected in enumerate(("queued", "interrupted")):
+            with self.subTest(attempt=attempt):
+                self.service.store.patch(owner, "job", job["id"], state="verifying", processed=5)
+                output.write_bytes(b"partial")
+                process = Mock(exitcode=1)
+                process.is_alive.return_value = False
+                self.service.running[job["id"]] = (process, owner, time.monotonic())
+                with patch("processor.server.worker_capacity", return_value=0):
+                    self.service.tick()
+                current = self.call("/jobs/" + job["id"])
+                self.assertEqual(current["state"], expected)
+                self.assertEqual(current["crashRetries"], 1)
+                self.assertFalse(current["downloadAvailable"])
+                self.assertFalse(output.exists())
+                process.close.assert_called_once()
+                if attempt == 0:
+                    self.assertEqual(current["processed"], 0)
+                    self.assertIsNone(current["error"])
+                else:
+                    self.assertEqual(current["errorInfo"]["category"], "worker_interrupted")
+        retried = self.call("/jobs/" + job["id"] + "/retry", method="POST")
+        self.assertEqual(self.execute(retried)["state"], "completed")
+
+    def test_late_cancellation_preserves_completed_output(self):
+        job = self.job()
+        owner = self.service.store.list()[0][0]
+        marker = self.service.store.folder(owner, job["id"]) / "cancel"
+        original = Path.touch
+
+        def complete_before_cancel(path, *args, **kwargs):
+            if path == marker:
+                run_job(self.temp.name, owner, job["id"], LIMITS)
+            return original(path, *args, **kwargs)
+
+        with patch.object(Path, "touch", autospec=True, side_effect=complete_before_cancel):
+            self.assert_status(409, lambda: self.call("/jobs/" + job["id"] + "/cancel", method="POST"))
+        current = self.call("/jobs/" + job["id"])
+        self.assertEqual(current["state"], "completed")
+        data = self.call(current["download"].removeprefix("/api/process"), raw=True)
+        self.assertEqual(hashlib.sha256(data).hexdigest(), current["sha256"])
 
     def test_restart_cleans_incomplete_outputs_and_preserves_completed_and_queued_jobs(self):
         completed = self.execute(self.job())

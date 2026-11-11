@@ -75,6 +75,14 @@ class StoreQueries(unittest.TestCase):
         for private in ('inputs', 'manifest', 'outputFile', 'filesCleaned'):
             self.assertNotIn(private, rows[0])
 
+    def test_fair_queue_rotates_owners_before_projects_and_prefers_idle_owners(self):
+        self.put(1, self.other, scheduled=1)
+        self.put(2, scheduled=2)
+        self.put(3, state='queued', projectId='new')
+        other_job = self.put(4, self.other, state='queued')
+        self.assertEqual(self.store.queued(fair=True)[0][1]['id'], other_job['id'])
+        self.assertEqual(self.store.queued(fair=True, busy_owners={self.other})[0][0], self.owner)
+
     def test_hidden_downloads_are_opt_in_owner_scoped_and_expire_independently(self):
         self.put(1, hidden=True)
         self.put(2, hidden=True, fileExpires=0)
