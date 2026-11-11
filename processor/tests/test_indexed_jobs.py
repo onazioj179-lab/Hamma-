@@ -42,7 +42,7 @@ class IndexedArchiveTests(unittest.TestCase):
 
     def test_all_tar_formats_verify_real_bytes_unicode_and_empty_directories(self):
         (self.source / 'empty').mkdir()
-        data = 'SHANTE 世界\n'.encode() * 2000
+        data = 'SHANTE 世界\n'.encode() * 90_000
         (self.source / '世界.txt').write_bytes(data)
         index = self.index()
         for target in ('tar', 'tar.gz', 'tar.bz2', 'tar.xz'):
