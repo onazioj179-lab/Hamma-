@@ -43,3 +43,17 @@ it('stops a broken cursor response instead of issuing an unbounded request loop'
   await expect(new ProjectRecovery().sources('default')).rejects.toThrow('no progress');
   expect(fetch).toHaveBeenCalledTimes(2);
 });
+
+it('persists grouped choices and compares them independently of key insertion order', async () => {
+  const fetch = vi.fn(async (_url: string, init: RequestInit) => {
+    const body = JSON.parse(init.body as string);
+    return response({ id: 'default', revision: body.revision + 1, settings: body.settings });
+  });
+  vi.stubGlobal('fetch', fetch);
+  const recovery = new ProjectRecovery();
+  await recovery.save('default', { ...defaultProjectSettings, groupActions: { png: 'convert:png', zip: 'extract:zip' } });
+  await recovery.save('default', { ...defaultProjectSettings, groupActions: { zip: 'extract:zip', png: 'convert:png' } });
+  expect(fetch).toHaveBeenCalledTimes(1);
+  await recovery.save('default', { ...defaultProjectSettings, groupActions: { png: 'convert:jpg' } });
+  expect(JSON.parse(fetch.mock.calls[1][1].body as string).revision).toBe(1);
+});

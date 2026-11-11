@@ -1,22 +1,23 @@
-# SHANTE 2027 engineering audit
+# HAMMA web application engineering audit
 
-This audit covers the SHANTE release candidate in draft PR #36. It includes the
-reviewed reliability changes and TAR integrity reports from PR #32. The
-repository also contains Rust SPK, WASM and Flutter components.
+HAMMA is the web application. SHANTE is its internal processing engine.
+Current work covers the browser interface, backend, and processing engine.
+Desktop applications and packaging are deferred.
+The repository also contains Rust SPK, WASM and Flutter components.
 VERIFIED applies to the stated scope. PARTIAL describes an implemented subset.
 MISSING denotes a capability without implementation evidence in this scope.
 BLOCKED denotes acceptance that requires external infrastructure or credentials.
 
-## Remaining release work
+## HAMMA web backlog
 
-| Work | Acceptance |
-| --- | --- |
-| Consolidate the release | Review the stalled-upload fix in PR #34 and operator indexed TAR in PR #35. Run the processor, web, native and portable package checks on the resulting release commit. |
-| Scale browser jobs and recovery | Connect browser folder discovery to disk-backed manifests. Verify paged input and output lists, concurrent project fairness, per-file retry, and browser restart recovery with real payloads. |
-| Complete processing coverage | Exercise archive interoperability, encryption, split/join, and broader codecs. Build PDF and Office conversions with isolated parsers. Check decoded bytes, format fidelity and advertised capabilities. |
-| Harden untrusted processing | Enforce per-worker filesystem and network isolation, test the production tenant boundary, and expand advisory, SBOM and fuzz coverage. |
-| Ship desktop and validate devices | Add a native desktop shell and signed update flow. Test signed installers and physical mobile and foldable interactions. Signing requires platform identities. |
-| Validate production operations | Exercise rollback, migration, retention and monitoring in the target deployment. Distributed acceptance requires authorized compute and object storage. |
+1. **Preserve selections before upload.** Restore the selection list after reopening the project, prompt for original files as needed, and test recovery across mixed batches with unstarted, interrupted, and completed uploads.
+2. **Scale browser jobs.** Connect folder discovery to disk-backed manifests. Test paged inputs and outputs, fairness across projects, and per-file retry under sustained load.
+3. **Validate physical devices.** Test mobile and foldable layouts, folder picking, touch, keyboard access, reduced motion, and recovery on real devices.
+4. **Isolate processing workers.** Enforce filesystem and network isolation, verify tenant boundaries, and expand dependency advisories, SBOM coverage, and fuzz tests.
+5. **Expand format support.** Verify archive interoperability and add encryption, split and join, broader codec coverage, and isolated PDF and Office conversions. Check decoded bytes, format fidelity, and advertised capabilities.
+6. **Validate production operations.** Test rollback, migration, retention, and monitoring in the target environment. Distributed testing requires authorized compute and object storage.
+
+## Capability audit
 
 | Capability | Status | Implementation and remaining acceptance |
 | --- | --- | --- |
@@ -29,22 +30,21 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 | Split/join and archive comments | PARTIAL | ZIP creation and local inspection support archive comments. Split/join, member comments and other formats remain open. |
 | Native C++20 and ABI | PARTIAL | `native/` implements Zstandard streaming behind a versioned subprocess protocol and a C ABI v1 shared library. The ABI has a compiled C round-trip test. Other codecs and media remain outside the native ABI. |
 | Hardware capabilities and dispatch | PARTIAL | Native CPU flags and resource admission exist. Measure device-specific paths and exercise CPU fallback. GPU, power-aware and NUMA scheduling remain open. |
-| Streaming and large payloads | PARTIAL | Native codec, processor transfers and local indexing are bounded in parts. Exercise real large payloads, cancellation, disk exhaustion, memory pressure and 64-bit offsets end to end. |
+| Streaming and large payloads | PARTIAL | Native Zstandard, resumable transfers and operator-authorized indexed TAR jobs stream data. Exercise real large payloads, memory pressure and 64-bit offsets end to end. Browser input admission remains array-based. |
 | Image, video and audio | PARTIAL | `processor/engine.py`, `media_policy.py` and FFmpeg/ffprobe. Available output encoders and muxers determine the advertised targets. Image and audio conversions check the output codec and stream count. Where a decoded checksum is unavailable, output audio and video streams are decoded through EOF before the worker returns a manifest. Remuxed subtitles are checked for stream count and codec. Hardware encoding, additional formats and broader fidelity validation remain open. |
 | PDF and office documents | PARTIAL | The processor reports bounded DOCX, XLSX and PPTX package metadata. PDF operations, document rendering and conversions remain open. |
-| Mixed-file processing | PARTIAL | `processor/projects.py` and web recovery. Verify subgroup planning and per-file resume together on the integration branch. |
+| Mixed-file processing | PARTIAL | The browser can run separate actions by file type and recover grouped choices and completed uploads. File-specific rejections retain the affected inputs for retry. Browser job manifests and broader device and load acceptance remain open. |
 | Scheduler and durable recovery | PARTIAL | `processor/server.py`, `resources.py`, `worker_limits.py`. Windows Job Objects cap committed memory for each worker tree and reap children on worker exit. POSIX limits remain platform-specific. Exercise fairness under sustained load and mid-codec recovery. |
-| History, metadata, retention and indexing | PARTIAL | SQLite in `processor/server.py`, `catalog.py`, and `indexing.py`. Validate migrations, deletion, version history, query plans and end-to-end paged manifests at workload scale. |
+| History, metadata, retention and indexing | PARTIAL | SQLite in `processor/server.py`, `catalog.py`, and `indexing.py`. Indexed TAR jobs have owner-scoped paged manifests and retain discovery checkpoints for retry. Validate migrations, version history and equivalent browser workflows at workload scale. |
 | Authentication, authorization and subscriptions | PARTIAL | `processor/accounts.py`, `oauth.py`, and owner-scoped routes. Validate provider settings, tenant boundaries and plan/entitlement lifecycle. |
 | Storage, uploads, downloads and sharing | PARTIAL | Local storage, resumable transfer and range handlers in `processor/server.py` and `ranges.py`. Verify storage exhaustion and interrupted transfers. Scoped cross-user sharing and encrypted vault acceptance remain open. |
 | Safe preview and parser isolation | PARTIAL | Signature and media probe paths, worker limits and parser whitelists. Add an isolated preview service, strict per-worker controls and external file/network access tests. |
 | Dependency and security engineering | PARTIAL | Pinned Zstandard source, workflow checks and audit scripts. Expand SBOM and advisory coverage across Python, Rust, native and FFmpeg, and continue fuzzing and threat-model validation. |
 | APIs and MCP | PARTIAL | Python processor HTTP API and Rust compatibility API. No MCP integration established in this scope. Add versioned contracts and authorization tests before exposing tools. |
-| Desktop and mobile packaging | PARTIAL | The portable workspace bundles the built web UI, local processor and native CLI. A native desktop shell, signed update verification, notarization and physical-device support remain open. |
 | Runtime and build performance | PARTIAL | CMake/Ninja presets and local benchmark scripts. Record reproducible workload, memory and clean/incremental build measurements before selecting optimizations. |
 | Benchmarks against reference tools | PARTIAL | A seeded ZIP comparison measures time through verification and output size against bsdtar or 7-Zip. Broader workload, resource and media measurements remain open. |
 | Distributed jobs and object storage | BLOCKED | Single-node processor acceptance is separate. Multi-node validation requires an authorized deployment and object storage. Durable ownership, recovery and tenant isolation are open design work. |
-| CI, release and production monitoring | PARTIAL | `.github/workflows/` and `scripts/package-shante.py`. Full platform signing requires signing identities. Validate rollback, migration, monitoring and privacy in the intended environment. |
+| CI, release and production monitoring | PARTIAL | `.github/workflows/` checks the HAMMA web build and SHANTE processor. Validate rollback, migration, monitoring and privacy in the intended environment. |
 
 ## ZIP acceptance for this change
 
@@ -117,18 +117,6 @@ It converts audio to AAC and supported text subtitles to MP4 timed text.
 Unsupported subtitles fail conversion. The job checks output stream counts,
 codecs and duration where available, then decodes audio and video through EOF.
 The regular MP4 choice still uses stream copy.
-
-## Portable workspace acceptance
-
-- Build the web and native components, then run
-  `python scripts/package-shante.py --workspace`. The package stages licenses
-  and checksums and starts a temporary loopback server to test the browser
-  entry point and native and archive capabilities.
-- Extract the ZIP and run `python run-workspace.py` with Python 3.11 or newer.
-  Open `http://127.0.0.1:5010`. Use `--data` for a separate private job store.
-  Media conversion requires FFmpeg and FFprobe on PATH.
-- Packaging sets a stable strip timestamp. CI compares two archives from the
-  same built inputs. This check does not compare clean builds across toolchains.
 
 ## Comparative ZIP measurement
 

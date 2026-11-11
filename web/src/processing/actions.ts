@@ -1,5 +1,7 @@
 import type { Capability, Source } from './client';
 
+export const requiresLossyConsent = (target: string) => ['mp3', 'aac', 'm4a', 'ogg', 'opus', 'jpg', 'mp4-h264'].includes(target);
+
 /** Registry hints never replace the worker's signature/codec validation. */
 export function resolveActions(sources: Source[], capability: Capability | null) {
   const rows = sources.map(source => source.directory ? undefined : source.inspection || (capability?.inspection ? undefined : capability?.actionRegistry?.find(row =>

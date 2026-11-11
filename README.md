@@ -1,10 +1,9 @@
-# SHANTE — local HAMMA workspace
+# HAMMA
 
 **Make space. Keep everything.**
 
-A free local workspace to compress, extract, convert, and download files.
-Created by **Onazi Treasure OJ**. The current local UI retains its HAMMA name;
-SHANTE CORE is the integrated native engine. This is not a launched subscription service.
+A free web app to compress, extract, convert, and download files locally.
+Created by **Onazi Treasure OJ**. SHANTE is HAMMA's internal processing engine.
 
 Optional Google/Apple sign-in setup and verification limits: [account providers](docs/account-providers.md).
 
@@ -36,7 +35,7 @@ Each visitor has a separate session and history.
 Logs: `.hamma-data/server.err.log`. Startup state: `.hamma-data/launcher.json`.
 The launcher uses `.hamma-data/lan-test` to preserve the existing LAN job store.
 
-## Run the new file workspace
+## Run the web app
 
 ```sh
 npm ci
@@ -50,6 +49,9 @@ retry/cancel controls and 500-record guest history are implemented. The browser 
 Build [SHANTE CORE](native/README.md) to enable verified native Zstandard.
 
 See [supported formats, deployment and operational limits](docs/universal-processing.md).
+See [mixed-file workflows](docs/mixed-workflows.md) for grouped actions and upload recovery.
+The [HAMMA web engineering audit](docs/engineering/hammer-directive-audit.md)
+tracks release acceptance and remaining implementation work.
 The Account page supports durable local Free accounts, sign-in, sign-out and
 password changes. Guest and account files remain separate; signing out returns
 to the same guest session. Passwords are hashed with scrypt, and sessions use

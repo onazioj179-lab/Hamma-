@@ -12,13 +12,15 @@ from pathlib import Path
 import sqlite3
 import stat
 
+from .engine import ProcessingError
 
-class IndexQuotaError(Exception):
+
+class IndexQuotaError(ProcessingError):
     pass
 
 
 class DirectoryIndex:
-    def __init__(self, database, root, *, max_entries, batch_size=256):
+    def __init__(self, database, root, *, max_entries, batch_size=256, checkpoint=lambda: None):
         self.root = Path(root).resolve(strict=True)
         self.database = Path(database).resolve()
         if not self.root.is_dir():
@@ -30,6 +32,7 @@ class DirectoryIndex:
         if type(batch_size) is not int or not 1 <= batch_size <= 4096:
             raise ValueError('Batch size must be between 1 and 4096')
         self.max_entries, self.batch_size = max_entries, batch_size
+        self.checkpoint = checkpoint
         with self.connect() as db:
             db.execute('PRAGMA journal_mode=WAL')
             db.execute('CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)')
@@ -38,7 +41,8 @@ class DirectoryIndex:
                 raise ValueError('Index belongs to another root')
             db.execute("INSERT OR IGNORE INTO metadata VALUES ('root',?)", (str(self.root),))
             db.execute('CREATE TABLE IF NOT EXISTS entries(id INTEGER PRIMARY KEY,path TEXT NOT NULL UNIQUE,kind TEXT NOT NULL,size INTEGER NOT NULL,mtime_ns INTEGER NOT NULL,error TEXT)')
-            db.execute("INSERT OR IGNORE INTO metadata SELECT 'entry_count',cast(count(*) AS TEXT) FROM entries")
+            if not db.execute("SELECT 1 FROM metadata WHERE key='entry_count'").fetchone():
+                db.execute("INSERT INTO metadata SELECT 'entry_count',cast(count(*) AS TEXT) FROM entries")
             db.execute('CREATE TABLE IF NOT EXISTS frontier(path TEXT PRIMARY KEY,done INTEGER NOT NULL DEFAULT 0)')
             db.execute('CREATE INDEX IF NOT EXISTS frontier_pending ON frontier(done,path)')
             db.execute("INSERT OR IGNORE INTO frontier(path) VALUES ('')")
@@ -66,6 +70,7 @@ class DirectoryIndex:
                 if kind == 'directory':
                     db.execute('INSERT OR IGNORE INTO frontier(path) VALUES (?)', (path,))
             db.execute("UPDATE metadata SET value=? WHERE key='entry_count'", (str(count),))
+        self.checkpoint()
 
     def discover(self, *, cancelled=lambda: False):
         """Return False on cooperative interruption, True after all directories.

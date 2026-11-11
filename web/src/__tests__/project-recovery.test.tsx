@@ -12,12 +12,13 @@ let checkpoint: { id: string; upload: string; name: string; size: number; direct
 let offset: number, chunkWrites: number, jobAttempts: number;
 let rejectJob: boolean;
 const uploadId = 'c'.repeat(32);
-const caps = { projectRecovery: true, archives: ['zip'], conversions: [], version: 1, processing: 'local', limits: { files: 5000, input: 1e9, expanded: 1e9, seconds: 30 } };
+const caps = { groupedWorkflows: true, projectRecovery: true, recoverableUploads: false, archives: ['zip'], conversions: [], version: 1, processing: 'local', limits: { files: 5000, input: 1e9, expanded: 1e9, seconds: 30 } };
 const ok = (data: unknown) => ({ ok: true, status: 200, json: async () => data });
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   useAppStore.setState({ sessionOutputs: {}, recentArchives: [], history: [], result: null });
   saved = undefined; checkpoint = undefined; offset = 0; chunkWrites = 0; jobAttempts = 0; rejectJob = true;
+  caps.recoverableUploads = false;
   host = document.createElement('div'); document.body.append(host); root = createRoot(host);
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     const body = init?.body && typeof init.body === 'string' ? JSON.parse(init.body) : {};
@@ -28,12 +29,20 @@ beforeEach(() => {
       saved = { id: 'default', revision: (saved?.revision || 0) + 1, created: 1, updated: 1, settings: body.settings };
       return ok(saved);
     }
-    if (url.includes('/projects/default/inputs?')) return ok({ sources: checkpoint ? [{ ...checkpoint, uploaded: checkpoint.size, inspection: { format: 'file', conversions: [], extract: false } }] : [], total: checkpoint ? 1 : 0, scanned: checkpoint ? 1 : 0, unavailable: 0, nextCursor: null });
+    if (url.includes('/projects/default/inputs?')) return ok({ sources: checkpoint ? [{ ...checkpoint, uploaded: offset, inspection: { format: 'file', conversions: [], extract: false } }] : [], total: checkpoint ? 1 : 0, scanned: checkpoint ? 1 : 0, unavailable: 0, nextCursor: null });
     if (/\/projects\/default\/inputs\/[a-f0-9]{32}$/.test(url) && init?.method === 'PUT') {
+      expect(caps.recoverableUploads).toBe(false);
       checkpoint = { id: url.split('/').pop()!, upload: body.upload, name: 'resume.txt', size: 3, directory: false };
       return ok({ saved: true });
     }
-    if (url.endsWith('/uploads') && init?.method === 'POST') return ok({ id: uploadId });
+    if (url.endsWith('/uploads') && init?.method === 'POST') {
+      if (caps.recoverableUploads) {
+        expect(body.projectId).toBe('default');
+        expect(body.sourceId).toMatch(/^[a-f0-9]{32}$/);
+        checkpoint = { id: body.sourceId, upload: uploadId, name: body.name, size: body.size, directory: body.directory };
+      }
+      return ok({ id: uploadId });
+    }
     if (url.endsWith('/uploads/' + uploadId)) {
       if (init?.method === 'PUT') { chunkWrites++; offset += (init.body as Blob).size; }
       return ok({ offset });
@@ -54,7 +63,8 @@ afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi
 const render = async () => { await act(async () => root.render(<UniversalWorkspace visible screen="workspace" onHistory={() => {}} />)); };
 const compress = () => Array.from(host.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Compress')!;
 
-it('restores a completed upload after refresh and submits it without uploading its bytes again', async () => {
+it.each([false, true])('restores a completed upload without sending its bytes again (recoverableUploads=%s)', async recoverableUploads => {
+  caps.recoverableUploads = recoverableUploads;
   await render();
   const input = host.querySelector<HTMLInputElement>('[aria-label="Add files to queue"]')!;
   Object.defineProperty(input, 'files', { value: [new File(['abc'], 'resume.txt')], configurable: true });
@@ -90,9 +100,62 @@ it('clears recovered server inputs when the account changes', async () => {
   expect(host.querySelector('[aria-label="Selected files"]')).toBeNull();
 });
 
+it.each([false, true])('verifies saved bytes before resuming (SubtleCrypto=%s)', async localHash => {
+  saved = { id: 'default', revision: 1, created: 1, updated: 1, settings: defaultProjectSettings };
+  checkpoint = { id: 'a'.repeat(32), upload: uploadId, name: 'resume.txt', size: 3, directory: false };
+  caps.recoverableUploads = true;
+  offset = 1; rejectJob = false;
+  if (!localHash) vi.stubGlobal('crypto', { getRandomValues: crypto.getRandomValues.bind(crypto) });
+  const initial = vi.mocked(fetch).getMockImplementation()!;
+  let matches = false;
+  let writer = '';
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (String(url).includes('/prefix?')) {
+      expect(String(url)).toContain('start=0&length=1');
+      expect(init?.method ?? 'GET').toBe(localHash ? 'GET' : 'POST');
+      if (!localHash) return ok({ matches }) as Response;
+      return ok({ sha256: matches ? 'ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb' : 'different' }) as Response;
+    }
+    if (String(url).endsWith('/resume')) {
+      const body = JSON.parse(String(init?.body));
+      expect(body.offset).toBe(1);
+      writer = body.writer;
+      return ok({ offset }) as Response;
+    }
+    if (String(url).endsWith('/uploads/' + uploadId) && init?.method === 'PUT') {
+      expect(new Headers(init.headers).get('Upload-Writer')).toBe(writer);
+      expect(new Headers(init.headers).get('Upload-Offset')).toBe('1');
+      expect((init.body as Blob).size).toBe(2);
+    }
+    return initial(url, init);
+  });
+  await render();
+  expect(host.textContent).toContain('resume 1 incomplete upload');
+  await act(async () => compress().click());
+  expect(jobAttempts).toBe(0);
+  const picker = host.querySelector<HTMLInputElement>('[aria-label="Select original file for resume.txt"]')!;
+  const file = new File(['abc'], 'resume.txt');
+  const slice = file.slice.bind(file);
+  if (localHash) vi.spyOn(file, 'slice').mockImplementation((start, end) => {
+    const chunk = slice(start, end);
+    return Object.assign(chunk, { arrayBuffer: async () => new Uint8Array([97]).buffer });
+  });
+  Object.defineProperty(picker, 'files', { value: [file], configurable: true });
+  await act(async () => picker.dispatchEvent(new Event('change', { bubbles: true })));
+  await act(async () => compress().click());
+  expect(host.textContent).toContain('differs from the saved upload');
+  expect(chunkWrites).toBe(0);
+  matches = true;
+  await act(async () => compress().click());
+  expect(writer).toMatch(/^[a-f0-9]{32}$/);
+  expect(jobAttempts).toBe(1);
+  expect(chunkWrites).toBe(1);
+});
+
 it('lets the user remove a recovered entry whose upload has already expired', async () => {
   saved = { id: 'default', revision: 1, created: 1, updated: 1, settings: defaultProjectSettings };
   checkpoint = { id: 'a'.repeat(32), upload: uploadId, name: 'expired.txt', size: 3, directory: false };
+  offset = 3;
   const initial = vi.mocked(fetch).getMockImplementation()!;
   vi.mocked(fetch).mockImplementation(async (url, init) => String(url).endsWith('/uploads/' + uploadId) && init?.method === 'DELETE'
     ? { ok: false, status: 404, json: async () => ({ error: 'File unavailable' }) } as Response
@@ -137,4 +200,26 @@ it('reattaches the committed upload after an account action returns to the same 
   await act(async () => compress().click());
   expect(chunkWrites).toBe(1);
   expect(jobAttempts).toBe(2);
+});
+
+it('restores grouped choices with pending uploaded inputs and runs the remaining group', async () => {
+  saved = { id: 'default', revision: 1, created: 1, updated: 1, settings: { ...defaultProjectSettings, groupActions: { file: 'compress:zip' } } };
+  checkpoint = { id: 'a'.repeat(32), upload: uploadId, name: 'resume.txt', size: 3, directory: false };
+  offset = 3; rejectJob = false;
+  await render();
+  expect(host.querySelector('[aria-label="Action for Other files"]')?.textContent).toContain('Archive as ZIP');
+  await act(async () => Array.from(host.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Run grouped workflow')!.click());
+  expect(jobAttempts).toBe(1);
+  expect(chunkWrites).toBe(0);
+});
+
+it('refuses an incompatible restored group choice before submitting any work', async () => {
+  saved = { id: 'default', revision: 1, created: 1, updated: 1, settings: { ...defaultProjectSettings, groupActions: { file: 'convert:mp3' } } };
+  checkpoint = { id: 'a'.repeat(32), upload: uploadId, name: 'resume.txt', size: 3, directory: false };
+  offset = 3;
+  await render();
+  expect(host.textContent).toContain('choose a compatible action again');
+  const run = Array.from(host.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Run grouped workflow')!;
+  expect(run.disabled).toBe(true);
+  expect(jobAttempts).toBe(0);
 });

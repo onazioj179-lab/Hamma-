@@ -26,7 +26,12 @@ not a published external SDK.
 | `DELETE /projects/{id}/inputs/{sourceId}` | Forget a recovery reference; does not delete its source bytes |
 
 Settings contain `target`, `conversion`, `qualityMode`, `metadataPolicy` and
-`recursive`. A revision mismatch returns 409 rather than silently overwriting
+`recursive`. Processors advertising `groupedWorkflows: true` also accept an
+optional `groupActions` mapping of detected type to `compress:format`,
+`convert:format`, `extract:zip` or `skip`. The map is limited to 64 entries and
+revalidated against current capabilities before execution. Older clients omitting
+the optional map preserve it; an explicit empty map clears it. A revision mismatch
+returns 409 rather than silently overwriting
 another tab's settings. The client serializes its own saves and reconciles a lost
 save acknowledgment against the current revision.
 
