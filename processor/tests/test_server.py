@@ -321,6 +321,55 @@ class ServerTests(unittest.TestCase):
         self.service.store.patch(owner, 'job', job['id'], fileExpires=0)
         self.assert_status(410, lambda: self.call(path + '?limit=1'))
 
+    def test_paged_job_selection_submits_a_verified_archive_and_fences_replays(self):
+        first = self.upload(b'first', 'first.txt')
+        owner = self.service.store.list(kind='upload')[0][0]
+        uploads = [first['id']]
+        names = ['first.txt']
+        for number in range(1, 201):
+            upload = f'{number:032x}'
+            name = f'input-{number}.txt'
+            folder = self.service.store.folder(owner, upload)
+            folder.mkdir(parents=True)
+            (folder / 'input').write_bytes(name.encode())
+            self.service.store.put(owner, 'upload', {'id': upload, 'created': time.time(),
+                'name': name, 'size': len(name), 'directory': False, 'expires': time.time() + 300})
+            uploads.append(upload)
+            names.append(name)
+
+        selection = 'd' * 32
+        path = '/job-selections/' + selection
+        request = {'selectionId': selection, 'selectionCount': len(uploads),
+                   'operation': 'compress', 'target': 'zip', 'requestId': 'e' * 64}
+        first_page = {'offset': 0, 'uploads': uploads[:100]}
+        self.assertEqual(self.call(path, first_page, 'PUT')['offset'], 100)
+        self.assertEqual(self.call(path, first_page, 'PUT')['offset'], 100)
+        self.assert_status(409, lambda: self.call('/jobs', request, 'POST'))
+        self.assert_status(409, lambda: self.call(path, {'offset': 100, 'uploads': [uploads[0]]}, 'PUT'))
+        self.assertEqual(self.call(path, {'offset': 100, 'uploads': uploads[100:200]}, 'PUT')['offset'], 200)
+        self.assertEqual(self.call(path, {'offset': 200, 'uploads': uploads[200:]}, 'PUT')['offset'], 201)
+        stranger = build_opener(HTTPCookieProcessor(CookieJar()))
+        self.assert_status(404, lambda: self.call('/jobs', request, 'POST', client=stranger))
+
+        job = self.call('/jobs', request, 'POST')
+        self.assertEqual(self.call('/jobs', request, 'POST')['id'], job['id'])
+        self.assert_status(409, lambda: self.call(path, {'offset': 201, 'uploads': ['f' * 32]}, 'PUT'))
+        self.assertEqual(self.call('/jobs')['total'], 1)
+        completed = self.execute(job)
+        self.assertEqual(completed['state'], 'completed')
+        output = self.call(completed['download'].removeprefix('/api/process'), raw=True)
+        with zipfile.ZipFile(io.BytesIO(output)) as archive:
+            self.assertEqual(archive.namelist(), names)
+            self.assertEqual(archive.read('first.txt'), b'first')
+            self.assertTrue(all(archive.read(name) == name.encode() for name in names[1:]))
+
+        with self.service.store.connect() as db:
+            db.execute('UPDATE job_selections SET expires=0 WHERE owner=? AND id=?', (owner, selection))
+        self.assert_status(410, lambda: self.call('/jobs', request, 'POST'))
+        self.service.job_selections.cleanup()
+        with self.service.store.connect() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM job_selection_items').fetchone()[0], 0)
+
     def test_listener_starts_without_reverse_dns(self):
         with patch("socket.getfqdn", side_effect=AssertionError("unexpected reverse DNS")):
             with LocalHTTPServer(("127.0.0.1", 0), handler(self.service)) as listener:

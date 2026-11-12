@@ -11,7 +11,7 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 ## HAMMA web backlog
 
 1. **Validate recovery across mixed batches.** Exercise unstarted, interrupted, and completed uploads together after reopening a project on supported browsers.
-2. **Scale browser jobs.** Local indexed TAR jobs have disk-backed manifests and Files & History can page their verified outputs. Browser uploads still need disk-backed admission. Extend fairness testing to multiple owners under sustained pressure and test per-file retry under sustained load.
+2. **Scale browser jobs.** Browser submissions above 100 uploads stage their selection in SQLite pages and submit by reference. The processor still materializes the sealed selection and job input list, and browser folder discovery retains its source list. Extend bounded traversal through the worker and validate multi-owner scheduling and per-file retry under sustained load.
 3. **Validate physical devices.** Test mobile and foldable layouts, folder picking, touch, keyboard access, reduced motion, and recovery on real devices.
 4. **Isolate processing workers.** Enforce filesystem and network isolation, verify tenant boundaries, and expand dependency advisories, SBOM coverage, and fuzz tests.
 5. **Expand format support.** Verify archive interoperability and add encryption, split and join, broader codec coverage, and isolated PDF and Office conversions. Check decoded bytes, format fidelity, and advertised capabilities.
