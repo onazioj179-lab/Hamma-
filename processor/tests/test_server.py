@@ -356,7 +356,7 @@ class ServerTests(unittest.TestCase):
                 self.assertEqual(self.call(path, method="DELETE"), {"deleted": True})
             finally:
                 release.set()
-            self.assert_status(404, lambda: pending.result(timeout=5))
+            self.assert_status(410, lambda: pending.result(timeout=5))
         self.assertEqual(self.call("/jobs")["total"], 0)
 
     def test_retry_cannot_bypass_queue_capacity(self):
