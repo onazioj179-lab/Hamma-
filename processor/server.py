@@ -86,6 +86,11 @@ class Store:
                            json_extract(data,'$.scheduled') DESC)
                 WHERE kind='job' AND json_extract(data,'$.scheduled') IS NOT NULL
             """)
+            db.execute("""
+                CREATE INDEX IF NOT EXISTS records_owner_dispatch
+                ON records(owner,json_extract(data,'$.scheduled') DESC)
+                WHERE kind='job' AND json_extract(data,'$.scheduled') IS NOT NULL
+            """)
             db.execute("CREATE INDEX IF NOT EXISTS records_upload_bytes ON records(kind,json_extract(data,'$.size'))")
             db.execute("CREATE INDEX IF NOT EXISTS records_output_bytes ON records(kind,json_extract(data,'$.downloadAvailable'),json_extract(data,'$.outputSize'))")
             db.execute("CREATE INDEX IF NOT EXISTS records_index_bytes ON records(kind,json_extract(data,'$.indexBytes'))")
@@ -377,7 +382,15 @@ class Store:
         with self.connect() as db:
             ordering = "created,id,owner"
             if fair:
+                # Give each waiting owner a turn before rotating through their
+                # projects, so opening more projects cannot buy more turns.
                 ordering = """coalesce((
+                    SELECT json_extract(previous.data,'$.scheduled')
+                    FROM records AS previous
+                    WHERE previous.owner=records.owner AND previous.kind='job'
+                      AND json_extract(previous.data,'$.scheduled') IS NOT NULL
+                    ORDER BY json_extract(previous.data,'$.scheduled') DESC LIMIT 1
+                ),0),coalesce((
                     SELECT json_extract(previous.data,'$.scheduled')
                     FROM records AS previous
                     WHERE previous.owner=records.owner AND previous.kind='job'

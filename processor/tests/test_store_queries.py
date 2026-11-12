@@ -66,6 +66,24 @@ class StoreQueries(unittest.TestCase):
         self.assertEqual([owner for owner, _ in candidates], [self.other])
         self.assertEqual(len(self.store.queued(limit=1)), 1)
 
+    def test_fair_dispatch_rotates_owners_before_projects_and_keeps_project_fifo(self):
+        project_jobs = [
+            (self.owner, self.put(index, state='queued', projectId=project))
+            for index, project in enumerate(('shared', 'bulk', 'overflow', 'shared', 'bulk', 'overflow'), 1)
+        ]
+        other_jobs = [
+            (self.other, self.put(index, owner=self.other, state='queued', projectId='shared'))
+            for index in range(7, 13)
+        ]
+        (owner, first), = self.store.queued(excluded_owners={self.owner}, fair=True)
+        self.assertEqual((owner, first['id']), (self.other, other_jobs[0][1]['id']))
+        expected = [job for pair in zip(project_jobs, other_jobs) for job in pair]
+        for sequence, (expected_owner, expected_job) in enumerate(expected, 20):
+            (owner, job), = self.store.queued(fair=True)
+            self.assertEqual((owner, job['id']), (expected_owner, expected_job['id']))
+            self.store.patch(owner, 'job', job['id'], state='completed', scheduled=sequence)
+        self.assertEqual(self.store.queued(fair=True), [])
+
     def test_history_summaries_keep_counts_without_loading_private_manifests(self):
         self.put(1, inputs=[{'id': f'{index:032x}', 'path': 'private-path'} for index in range(1000)],
                  manifest=[{'name': 'private-member'}], filesCleaned=False)
