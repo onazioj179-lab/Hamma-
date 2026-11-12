@@ -15,7 +15,7 @@ remaining release acceptance work.
    verified formats do not cover the full matrix.
 4. Local ZIP preview and archive comments are implemented. Broader previews,
    safe duplicate-output reuse, an encrypted recovery vault, persistent
-   presets, routes, folder change detection, revision history, SDK, and
+   presets, folder change detection, revision history, SDK, and
    scoped temporary sharing remain open.
 5. Select and configure authorized storage connectors, compute nodes, and
    object storage before validating distributed coordination and cost.

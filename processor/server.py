@@ -28,6 +28,7 @@ import socket
 from socketserver import TCPServer
 import subprocess
 import shutil
+import stat
 import sqlite3
 import stat
 import tempfile
@@ -62,6 +63,10 @@ JOB_PROGRESS_RESET = dict(processed=0, entries=0, expanded=0, mediaSeconds=0, tr
                           phase=None, duration=None, started=None, finished=None, error=None, errorInfo=None)
 
 
+def upload_stamp(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
 class Store:
     def __init__(self, root):
         self.root = Path(root).resolve()
@@ -85,8 +90,13 @@ class Store:
             db.execute("CREATE INDEX IF NOT EXISTS records_visible ON records(owner,kind,coalesce(json_extract(data,'$.hidden'),0),created DESC)")
             db.execute("CREATE INDEX IF NOT EXISTS records_state ON records(kind,json_extract(data,'$.state'),created,id,owner)")
             db.execute("CREATE INDEX IF NOT EXISTS records_owner_state ON records(owner,kind,json_extract(data,'$.state'))")
-            db.execute("CREATE INDEX IF NOT EXISTS job_owner_scheduled ON records(owner,json_extract(data,'$.scheduled')) WHERE kind='job'")
-            db.execute("CREATE INDEX IF NOT EXISTS job_project_scheduled ON records(owner,coalesce(json_extract(data,'$.projectId'),'default'),json_extract(data,'$.scheduled')) WHERE kind='job'")
+            db.execute("CREATE INDEX IF NOT EXISTS job_owner_dispatch ON records(owner,json_extract(data,'$.scheduled') DESC) WHERE kind='job' AND json_extract(data,'$.scheduled') IS NOT NULL")
+            db.execute("""
+                CREATE INDEX IF NOT EXISTS records_project_dispatch
+                ON records(owner,coalesce(json_extract(data,'$.projectId'),'default'),
+                           json_extract(data,'$.scheduled') DESC)
+                WHERE kind='job' AND json_extract(data,'$.scheduled') IS NOT NULL
+            """)
             db.execute("CREATE INDEX IF NOT EXISTS records_upload_bytes ON records(kind,json_extract(data,'$.size'))")
             db.execute("CREATE INDEX IF NOT EXISTS records_output_bytes ON records(kind,json_extract(data,'$.downloadAvailable'),json_extract(data,'$.outputSize'))")
             db.execute("CREATE INDEX IF NOT EXISTS records_index_bytes ON records(kind,json_extract(data,'$.indexBytes'))")
@@ -95,6 +105,10 @@ class Store:
             db.execute("CREATE INDEX IF NOT EXISTS records_history_expiry ON records(kind,json_extract(data,'$.historyExpires'))")
             db.execute("CREATE INDEX IF NOT EXISTS records_owner_download_expiry ON records(owner,kind,json_extract(data,'$.downloadAvailable'),json_extract(data,'$.fileExpires'),created DESC)")
             db.execute("CREATE TABLE IF NOT EXISTS job_inputs (owner TEXT NOT NULL, job_id TEXT NOT NULL, upload_id TEXT NOT NULL, PRIMARY KEY(owner,job_id,upload_id))")
+            db.execute("""CREATE TABLE IF NOT EXISTS job_input_pages (
+                owner TEXT NOT NULL, job_id TEXT NOT NULL, position INTEGER NOT NULL,
+                data TEXT NOT NULL, PRIMARY KEY(owner,job_id,position)
+            )""")
             db.execute("CREATE TABLE IF NOT EXISTS local_index_sources(owner TEXT NOT NULL,job_id TEXT NOT NULL,root TEXT NOT NULL,PRIMARY KEY(owner,job_id))")
             db.execute("CREATE INDEX IF NOT EXISTS job_inputs_upload ON job_inputs(owner,upload_id,job_id)")
             db.execute("CREATE TABLE IF NOT EXISTS store_migrations (name TEXT PRIMARY KEY)")
@@ -130,11 +144,22 @@ class Store:
         finally:
             db.close()
 
-    def put(self, owner, kind, record, *, project_input=None):
+    def put(self, owner, kind, record, *, project_input=None, verified_uploads=(), input_rows=None):
         with self.connect() as db:
             db.execute("INSERT OR REPLACE INTO records VALUES (?,?,?,?,?)", (record["id"], owner, kind, record["created"], json.dumps(record)))
+            if verified_uploads:
+                db.executemany("UPDATE records SET data=json_set(data,'$.sha256',?,'$.format',?) WHERE owner=? AND kind='upload' AND id=?",
+                               ((upload["sha256"], upload["format"], owner, upload["id"]) for upload in verified_uploads))
             if kind == "job":
-                self._sync_inputs(db, owner, record)
+                if input_rows is None:
+                    if record.get("inputMode") != "upload-pages":
+                        self._sync_inputs(db, owner, record)
+                else:
+                    job_id = record["id"]
+                    db.executemany("INSERT INTO job_input_pages VALUES (?,?,?,?)",
+                                   ((owner, job_id, position, json.dumps(item)) for position, item in enumerate(input_rows)))
+                    db.executemany("INSERT INTO job_inputs VALUES (?,?,?)",
+                                   ((owner, job_id, item["id"]) for item in input_rows))
             if project_input is not None:
                 project_id, source_id = project_input
                 db.execute("INSERT OR REPLACE INTO project_inputs VALUES (?,?,?,?,?)",
@@ -149,6 +174,52 @@ class Store:
         with self.connect() as db:
             row = db.execute("SELECT data FROM records WHERE id=? AND owner=? AND kind=?", (record_id, owner, kind)).fetchone()
         return json.loads(row[0]) if row else None
+
+    def iter_job_inputs(self, owner, record):
+        if record.get("inputMode") != "upload-pages":
+            yield from record.get("inputs", ())
+            return
+        after = -1
+        count = 0
+        while count < record["fileCount"]:
+            with self.connect() as db:
+                rows = db.execute("""
+                    SELECT position,data FROM job_input_pages WHERE owner=? AND job_id=? AND position>?
+                    ORDER BY position LIMIT 100
+                """, (owner, record["id"], after)).fetchall()
+            if not rows:
+                raise ProcessingError("Job input manifest is incomplete")
+            for row in rows:
+                if row["position"] != count or count >= record["fileCount"]:
+                    raise ProcessingError("Job input manifest is incomplete")
+                yield json.loads(row["data"])
+                count += 1
+            after = rows[-1]["position"]
+
+    def job_input_ids(self, owner, record):
+        if record.get("inputMode") != "upload-pages":
+            return [item["id"] for item in record.get("inputs", ())]
+        with self.connect() as db:
+            return [row[0] for row in db.execute(
+                "SELECT upload_id FROM job_inputs WHERE owner=? AND job_id=?", (owner, record["id"]))]
+
+    def get_uploads(self, owner, ids):
+        with self.connect() as db:
+            rows = db.execute("""
+                SELECT records.id, records.data
+                FROM json_each(?) AS selected
+                JOIN records ON records.owner=? AND records.kind='upload' AND records.id=selected.value
+            """, (json.dumps(ids), owner)).fetchall()
+        return {row["id"]: json.loads(row["data"]) for row in rows}
+
+    def count_available_uploads(self, owner, ids, now):
+        with self.connect() as db:
+            return db.execute("""
+                SELECT count(*)
+                FROM json_each(?) AS selected
+                JOIN records ON records.owner=? AND records.kind='upload' AND records.id=selected.value
+                WHERE json_extract(records.data,'$.expires')>?
+            """, (json.dumps(ids), owner, now)).fetchone()[0]
 
     def patch(self, owner, kind, record_id, *, expected_states=None, **updates):
         with self.connect() as db:
@@ -181,6 +252,7 @@ class Store:
         with self.connect() as db:
             db.execute("DELETE FROM records WHERE owner=? AND id=?", (owner, record_id))
             db.execute("DELETE FROM job_inputs WHERE owner=? AND job_id=?", (owner, record_id))
+            db.execute("DELETE FROM job_input_pages WHERE owner=? AND job_id=?", (owner, record_id))
             db.execute("DELETE FROM local_index_sources WHERE owner=? AND job_id=?", (owner, record_id))
 
     def local_source(self, owner, job_id):
@@ -224,13 +296,15 @@ class Store:
         with self.connect() as db:
             db.execute("BEGIN")
             total = db.execute("SELECT count(*) FROM records WHERE " + condition, parameters).fetchone()[0]
-            projection = JOB_SUMMARY if summary else "data"
+            projection = JOB_SUMMARY + ",coalesce(json_array_length(data,'$.manifest'),0) AS manifest_count" if summary else "data"
             rows = db.execute("SELECT " + projection + " FROM records WHERE " + condition + " ORDER BY " + ordering + " LIMIT ? OFFSET ?",
                               [*parameters, min(100, max(1, limit)), min(2**63 - 1, max(0, offset))]).fetchall()
         records = [json.loads(row["data"]) for row in rows]
         if summary:
             for record, row in zip(records, rows):
                 record["fileCount"] = row["file_count"] or 0
+                if row["manifest_count"] and not record.get("manifestStorage"):
+                    record["manifestStorage"] = "inline"
         return total, records
 
     def live_jobs(self, owner, now):
@@ -247,6 +321,34 @@ class Store:
         # paged endpoint if an older database contains more.
         jobs = [dict(json.loads(row["data"]), fileCount=row["file_count"] or 0) for row in rows] if len(rows) <= 200 else None
         return revision[0] if revision else 0, jobs
+
+    def manifest_slice(self, owner, job_id, after, limit):
+        with self.connect() as db:
+            db.execute("BEGIN")
+            metadata = db.execute("""
+                SELECT json_extract(data,'$.inputMode') AS mode,
+                       json_extract(data,'$.sha256') AS sha256,
+                       json_extract(data,'$.downloadAvailable') AS available,
+                       json_extract(data,'$.fileExpires') AS expires,
+                       CASE WHEN json_extract(data,'$.inputMode')='directory-index'
+                            THEN json_extract(data,'$.fileCount')
+                            ELSE coalesce(json_array_length(data,'$.manifest'),0)
+                       END AS total
+                FROM records WHERE owner=? AND kind='job' AND id=?
+            """, (owner, job_id)).fetchone()
+            if metadata is None:
+                return None, []
+            if not metadata['available'] or (metadata['expires'] or 0) <= time.time():
+                return metadata, []
+            if metadata['mode'] == 'directory-index':
+                return metadata, []
+            rows = db.execute("""
+                SELECT member.key AS position, member.value AS entry
+                FROM records, json_each(records.data,'$.manifest') AS member
+                WHERE owner=? AND kind='job' AND records.id=? AND member.key>=? AND member.key<?
+                ORDER BY member.key
+            """, (owner, job_id, after, after + limit)).fetchall()
+        return metadata, [{**json.loads(row['entry']), 'id': row['position'] + 1} for row in rows]
 
     def history_overview(self, owner):
         condition = "owner=? AND kind='job' AND coalesce(json_extract(data,'$.hidden'),0)=0"
@@ -318,9 +420,11 @@ class Store:
         with self.connect() as db:
             ordering = "created,id,owner"
             if fair:
-                scheduled = "SELECT max(json_extract(previous.data,'$.scheduled')) FROM records AS previous WHERE previous.owner=records.owner AND previous.kind='job'"
+                scheduled = ("SELECT json_extract(previous.data,'$.scheduled') FROM records AS previous "
+                             "WHERE previous.owner=records.owner AND previous.kind='job' AND json_extract(previous.data,'$.scheduled') IS NOT NULL")
                 project = "coalesce(json_extract(previous.data,'$.projectId'),'default')=coalesce(json_extract(records.data,'$.projectId'),'default')"
-                ordering = f"coalesce(({scheduled}),0),coalesce(({scheduled} AND {project}),0),{ordering}"
+                recent = " ORDER BY json_extract(previous.data,'$.scheduled') DESC LIMIT 1"
+                ordering = f"coalesce(({scheduled}{recent}),0),coalesce(({scheduled} AND {project}{recent}),0),{ordering}"
                 if busy_owners:
                     ordering = f"owner IN ({','.join('?' for _ in busy_owners)}),{ordering}"
                     parameters.extend(busy_owners)
@@ -407,14 +511,17 @@ def run_job(root, owner, job_id, limits, isolated=False):
         if isolated and os.name == "nt":
             apply_windows_worker_limits()
         manifest = []
-        for upload in job["inputs"]:
-            upload["path"] = str(store.folder(owner, upload["id"]) / "input")
-            if upload.get("directory"):
-                continue
-            ctx.check()
-            original = file_digest(Path(upload["path"]), ctx)
-            if original["size"] != upload["size"] or original["sha256"] != upload["sha256"]:
-                raise ProcessingError("Input integrity check failed")
+        def verified_inputs():
+            for upload in store.iter_job_inputs(owner, job):
+                upload["path"] = str(store.folder(owner, upload["id"]) / "input")
+                if not upload.get("directory"):
+                    ctx.check()
+                    original = file_digest(Path(upload["path"]), ctx)
+                    if original["size"] != upload["size"] or original["sha256"] != upload["sha256"]:
+                        raise ProcessingError("Input integrity check failed")
+                yield upload
+
+        inputs = verified_inputs() if job.get("inputMode") == "upload-pages" else list(verified_inputs())
         indexed = None
         if job.get('inputMode') == 'directory-index':
             from .indexing import DirectoryIndex
@@ -447,20 +554,20 @@ def run_job(root, owner, job_id, limits, isolated=False):
             account_index()  # settle WAL accounting after the manifest writer closes
             job['inputSize'] = indexed['inputBytes']
         elif job["operation"] == "compress":
-            manifest = compress(job["inputs"], output, job["target"], ctx,
+            manifest = compress(inputs, output, job["target"], ctx,
                                 zip_profile=job.get("zipProfile", "balanced"), zip_comment=job.get("zipComment", ""))
         elif job["operation"] == "extract":
-            item = job["inputs"][0]
+            item = inputs[0]
             manifest = extract(Path(item["path"]), item["name"], output, ctx, job["recursive"],
                                job.get("zipIndexes"), repack=job["target"] == "zip-deflate")
         elif job["operation"] == "verify":
-            item = job["inputs"][0]
+            item = inputs[0]
             manifest = verify_archive(Path(item["path"]), item["name"], output, ctx)
         elif job["operation"] == "inspect":
             from .documents import inspect_office
-            manifest = inspect_office(Path(job["inputs"][0]["path"]), output, ctx)
+            manifest = inspect_office(Path(inputs[0]["path"]), output, ctx)
         else:
-            manifest = convert(Path(job["inputs"][0]["path"]), output, job["target"], ctx,
+            manifest = convert(Path(inputs[0]["path"]), output, job["target"], ctx,
                                job.get('qualityMode', 'lossless'), job.get('metadataPolicy', 'strip'))
         ctx.check()
         store.patch(owner, "job", job_id, expected_states=ACTIVE, state="verifying")
@@ -493,7 +600,7 @@ def run_job(root, owner, job_id, limits, isolated=False):
         state = "cancelled" if (directory / "cancel").exists() else "failed"
         latest = store.get(owner, 'job', job_id) or job
         failure = {'category': category, 'retryEligible': retry, 'stage': latest['state'],
-                   'jobId': job_id, 'fileIds': [item['id'] for item in job['inputs']]}
+                   'jobId': job_id, 'fileIds': store.job_input_ids(owner, job)}
         store.patch(owner, "job", job_id, expected_states=ACTIVE, state=state, error=message, errorInfo=failure, finished=time.time(), duration=time.time() - started, downloadAvailable=False)
         output.unlink(missing_ok=True)
     finally:
@@ -597,6 +704,8 @@ class Service:
             expiry = min(int(time.time()) + 3600, int(record["fileExpires"]))
             token = self.sign(f"{owner}:{record['id']}:{expiry}")
             result["download"] = f"/api/process/jobs/{record['id']}/download?expires={expiry}&token={token}"
+        if record.get("manifest") and not result.get("manifestStorage"):
+            result["manifestStorage"] = "inline"
         result["fileCount"] = record.get('fileCount', 0) if record.get('inputMode') == 'directory-index' else len(record["inputs"]) if "inputs" in record else record.get("fileCount", 0)
         return result
 
@@ -723,7 +832,7 @@ class Service:
             shutil.rmtree(directory, ignore_errors=False)
         self.store.patch(owner, "job", record["id"], downloadAvailable=False, outputFile=None, filesCleaned=True, fileExpires=time.time(), indexBytes=0)
         self.store.forget_local_source(owner, record['id'])
-        for upload in record["inputs"]:
+        for upload in self.store.iter_job_inputs(owner, record):
             if not self.store.upload_referenced(owner, upload["id"], now=time.time(), exclude_job=record["id"]):
                 folder = self.store.folder(owner, upload["id"])
                 if folder.exists():
@@ -778,7 +887,7 @@ class Service:
                 if self.reserved() + self.limits["expanded"] > self.limits["storage"] or shutil.disk_usage(self.store.root).free < disk_required:
                     self.store.patch(owner, "job", job["id"], state="failed", error="Storage full", finished=time.time(),
                                      errorInfo={'category': 'insufficient_storage', 'retryEligible': True, 'stage': 'queued',
-                                                'jobId': job['id'], 'fileIds': [item['id'] for item in job['inputs']]}, downloadAvailable=False)
+                                                'jobId': job['id'], 'fileIds': self.store.job_input_ids(owner, job)}, downloadAvailable=False)
                     continue
                 job = self.store.patch(owner, "job", job["id"], state="processing", scheduled=time.time())
                 try:
@@ -828,6 +937,7 @@ class HTTPError(Exception):
 
 
 class LocalHTTPServer(ThreadingHTTPServer):
+    request_queue_size = 64
     daemon_threads = True
     allow_reuse_address = os.name != "nt"
     tls_context = None
@@ -1049,37 +1159,6 @@ def handler(service):
                 raise HTTPError(413, "Invalid upload chunk")
             return source
 
-        def prepare_job_inputs(self, ids, verified):
-            inputs, pending, seen = [], {}, set()
-            for upload_id in ids:
-                record, source = self.upload_source(upload_id)
-                if record["expires"] <= time.time():
-                    raise HTTPError(404, "File unavailable")
-                try:
-                    info = source.stat()
-                except FileNotFoundError:
-                    raise HTTPError(410, "Upload expired or unavailable") from None
-                if not stat.S_ISREG(info.st_mode):
-                    raise HTTPError(410, "Upload expired or unavailable")
-                if info.st_size != record["size"]:
-                    raise HTTPError(409, "Upload incomplete")
-                name = record["name"].casefold()
-                if name in seen:
-                    raise HTTPError(400, "Duplicate filename")
-                seen.add(name)
-                if not record.get("sha256"):
-                    stamp = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
-                    if verified is None:
-                        pending[upload_id] = (source, stamp)
-                    else:
-                        result = verified.get(upload_id)
-                        if result is None or result[0] != stamp or result[1]["size"] != record["size"]:
-                            raise HTTPError(409, "Upload changed during verification. Retry the job.")
-                        record.update(result[1])
-                        service.store.put(self.owner, "upload", record)
-                inputs.append({key: value for key, value in record.items() if key != "writerHash"})
-            return inputs, pending
-
         def upload_chunk(self, upload_id):
             offset = int(self.headers.get("Upload-Offset", "-1"))
             length = int(self.headers.get("Content-Length", "-1"))
@@ -1205,7 +1284,7 @@ def handler(service):
                     raise HTTPError(400, str(error)) from error
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
-                return self.send(200, {"liveJobPolling": True, "groupedWorkflows": True, "projectRecovery": True, "recoverableUploads": True,
+                return self.send(200, {"liveJobPolling": True, "groupedWorkflows": True, "projectRecovery": True, "projectZipProfiles": True, "recoverableUploads": True,
                                        "draftScope": hashlib.sha256(("hamma-draft:" + self.owner).encode()).hexdigest(),
                                        "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(),
                                        "inspection": True, "zipVerification": True, "tarVerification": True, "zipSelection": True,
@@ -1397,6 +1476,7 @@ def handler(service):
                 if type(recoverable) is not bool:
                     raise HTTPError(400, 'Invalid recovery mode')
                 if recoverable:
+                    service.projects.get(self.owner, project_id)
                     identity = ['project-recovery-v1', project_id, sorted(ids), operation, target, bool(body.get('recursive')), quality_mode, metadata_policy]
                     if zip_indexes is not None:
                         identity.append(zip_indexes)
@@ -1408,60 +1488,102 @@ def handler(service):
                 if request_id is not None and (not isinstance(request_id, str) or not re.fullmatch(r"[a-f0-9]{64}", request_id)):
                     raise HTTPError(400, "Invalid request identifier")
                 job_id = hashlib.sha256((self.owner + request_id).encode()).hexdigest()[:32] if request_id else secrets.token_hex(16)
-                verified = None
-                while True:
-                    with service.lock:
+                def existing_job():
+                    existing = service.store.get(self.owner, "job", job_id)
+                    if existing:
+                        existing_ids = [i['id'] for i in service.store.iter_job_inputs(self.owner, existing)]
+                        if ((sorted(existing_ids) != sorted(ids) if recoverable else existing_ids != ids) or existing["operation"] != operation or existing["target"] != target or existing["recursive"] != bool(body.get("recursive")) or
+                            existing.get('projectId', 'default') != project_id or existing.get('qualityMode', 'lossless') != quality_mode or existing.get('metadataPolicy', 'strip') != metadata_policy or existing.get('zipIndexes') != zip_indexes or existing.get('zipProfile', 'balanced') != zip_profile or existing.get('zipComment', '') != zip_comment):
+                            raise HTTPError(409, "Request identifier already used")
                         if recoverable:
-                            service.projects.get(self.owner, project_id)
-                        existing = service.store.get(self.owner, "job", job_id)
-                        if existing:
-                            existing_ids = [i['id'] for i in existing['inputs']]
-                            if ((sorted(existing_ids) != sorted(ids) if recoverable else existing_ids != ids) or existing["operation"] != operation or existing["target"] != target or existing["recursive"] != bool(body.get("recursive")) or
-                                existing.get('projectId', 'default') != project_id or existing.get('qualityMode', 'lossless') != quality_mode or existing.get('metadataPolicy', 'strip') != metadata_policy or existing.get('zipIndexes') != zip_indexes or existing.get('zipProfile', 'balanced') != zip_profile or existing.get('zipComment', '') != zip_comment):
-                                raise HTTPError(409, "Request identifier already used")
-                            if recoverable:
-                                service.projects.forget_uploads(self.owner, project_id, ids)
-                            return self.send(200, service.public(self.owner, existing))
-                        if service.store.count(self.owner, states=(*ACTIVE, "paused")) >= self.plan['maxQueuedJobs']:
-                            raise HTTPError(429, "Queue limit reached. Wait for jobs to finish or cancel queued jobs." + (" Sign in for a larger queue." if not self.account else ""))
-                        if service.store.count(kind='job', states=(*ACTIVE, 'paused')) >= service.max_queued_jobs:
-                            raise HTTPError(429, 'Processor queue full')
-                        inputs, pending = self.prepare_job_inputs(ids, verified)
-                        if operation != "compress" and inputs[0].get("directory"):
-                            raise HTTPError(400, "Choose a file")
-                        if not pending:
-                            now = time.time()
-                            settings = service.defaults(self.owner)
-                            retention = RETENTION[settings["historyRetention"]]
-                            record = {"id": job_id, "projectId": project_id, "created": now, "name": inputs[0]["name"] if len(inputs) == 1 else f"{len(inputs)} files",
-                                      "operation": operation, "target": target, "inputs": inputs, "recursive": bool(body.get("recursive")),
-                                      'qualityMode': quality_mode, 'metadataPolicy': metadata_policy,
-                                      "state": "queued", "inputSize": sum(i["size"] for i in inputs), "outputSize": None,
-                                      "format": inputs[0]["format"] if len(inputs) == 1 else "batch", "processed": 0, "entries": 0,
-                                      "fileExpires": now + RETENTION[settings["fileRetention"]], "historyExpires": now + retention if retention else None,
-                                      "downloadAvailable": False, "error": None}
-                            if zip_indexes is not None:
-                                record["zipIndexes"] = zip_indexes
-                            if zip_profile != "balanced":
-                                record["zipProfile"] = zip_profile
-                            if zip_comment:
-                                record["zipComment"] = zip_comment
-                            service.store.folder(self.owner, record["id"]).mkdir(mode=0o700, parents=True)
-                            service.store.put(self.owner, "job", record)
-                            if recoverable:
-                                service.projects.forget_uploads(self.owner, project_id, ids)
-                            # Bound guest history independently of file retention.
-                            service.store.trim_history(self.owner, limit=self.plan['historyRecords'])
-                            break
-                    # Hash completed uploads without delaying unrelated work. The
-                    # next pass rechecks ownership, file identity and admission.
-                    verified = {}
-                    for upload_id, (source, stamp) in pending.items():
+                            service.projects.forget_uploads(self.owner, project_id, ids)
+                    return existing
+
+                def check_queue_capacity():
+                    if service.store.count(self.owner, states=(*ACTIVE, "paused")) >= self.plan['maxQueuedJobs']:
+                        raise HTTPError(429, "Queue limit reached. Wait for jobs to finish or cancel queued jobs." + (" Sign in for a larger queue." if not self.account else ""))
+                    if service.store.count(kind='job', states=(*ACTIVE, 'paused')) >= service.max_queued_jobs:
+                        raise HTTPError(429, 'Processor queue full')
+
+                with service.lock:
+                    existing = existing_job()
+                    if existing:
+                        return self.send(200, service.public(self.owner, existing))
+                    check_queue_capacity()
+                uploads = service.store.get_uploads(self.owner, ids)
+
+                inputs, verified_uploads, seen = [], [], set()
+                source_stamps = {}
+                for upload_id in ids:
+                    upload = uploads.get(upload_id)
+                    if not upload or upload["expires"] <= time.time():
+                        raise HTTPError(404, "File unavailable")
+                    source = service.store.folder(self.owner, upload_id) / "input"
+                    try:
+                        info = source.stat()
+                        if not stat.S_ISREG(info.st_mode):
+                            raise HTTPError(410, "Upload expired or unavailable")
+                        if info.st_size != upload["size"]:
+                            raise HTTPError(409, "Upload incomplete")
+                        source_stamps[source] = upload_stamp(info)
+                        name_key = upload["name"].casefold()
+                        if name_key in seen:
+                            raise HTTPError(400, "Duplicate filename")
+                        seen.add(name_key)
+                        if not upload.get("sha256"):
+                            ctx = Context(source.parent, service.limits)
+                            digest = file_digest(source, ctx)
+                            if digest["size"] != upload["size"]:
+                                raise HTTPError(409, "Upload changed during verification. Retry the job.")
+                            upload.update(digest, format=detect(source))
+                            verified_uploads.append(upload)
+                    except FileNotFoundError as error:
+                        raise HTTPError(410, "Upload expired or unavailable") from error
+                    inputs.append({key: value for key, value in upload.items() if key != "writerHash"})
+                if operation != "compress" and inputs[0].get("directory"):
+                    raise HTTPError(400, "Choose a file")
+
+                with service.lock:
+                    # Another request may have queued this job while hashing.
+                    existing = existing_job()
+                    if existing:
+                        return self.send(200, service.public(self.owner, existing))
+                    check_queue_capacity()
+                    now = time.time()
+                    if service.store.count_available_uploads(self.owner, ids, now) != len(ids):
+                        raise HTTPError(410, "Upload expired or unavailable")
+                    for source, stamp in source_stamps.items():
                         try:
-                            digest = file_digest(source, Context(source.parent, service.limits))
-                            verified[upload_id] = (stamp, {**digest, "format": detect(source)})
+                            unchanged = upload_stamp(source.stat()) == stamp
                         except FileNotFoundError:
                             raise HTTPError(410, "Upload expired or unavailable") from None
+                        if not unchanged:
+                            raise HTTPError(409, "Upload changed during verification. Retry the job.")
+                    settings = service.defaults(self.owner)
+                    retention = RETENTION[settings["historyRetention"]]
+                    record = {"id": job_id, "projectId": project_id, "created": now, "name": inputs[0]["name"] if len(inputs) == 1 else f"{len(inputs)} files",
+                              "operation": operation, "target": target, "inputs": inputs, "recursive": bool(body.get("recursive")),
+                              'qualityMode': quality_mode, 'metadataPolicy': metadata_policy,
+                              "state": "queued", "inputSize": sum(i["size"] for i in inputs), "outputSize": None,
+                              "format": inputs[0]["format"] if len(inputs) == 1 else "batch", "processed": 0, "entries": 0,
+                              "fileExpires": now + RETENTION[settings["fileRetention"]], "historyExpires": now + retention if retention else None,
+                              "downloadAvailable": False, "error": None}
+                    if zip_indexes is not None:
+                        record["zipIndexes"] = zip_indexes
+                    if zip_profile != "balanced":
+                        record["zipProfile"] = zip_profile
+                    if zip_comment:
+                        record["zipComment"] = zip_comment
+                    service.store.folder(self.owner, record["id"]).mkdir(mode=0o700, parents=True)
+                    input_rows = None
+                    if operation == "compress" and len(inputs) > 100 and (target == "zip" or target.startswith("tar")):
+                        input_rows = record.pop("inputs")
+                        record.update(inputMode="upload-pages", fileCount=len(input_rows))
+                    service.store.put(self.owner, "job", record, verified_uploads=verified_uploads, input_rows=input_rows)
+                    if recoverable:
+                        service.projects.forget_uploads(self.owner, project_id, ids)
+                    # Bound guest history independently of file retention.
+                    service.store.trim_history(self.owner, limit=self.plan['historyRecords'])
                 LOG.info("Job queued: %s %s", record["id"], operation)
                 return self.send(202, service.public(self.owner, record))
             if path == "/api/process/jobs/live" and method == "GET":
@@ -1487,12 +1609,31 @@ def handler(service):
             match = re.fullmatch(r"/api/process/jobs/([a-f0-9]{32})(?:/(cancel|pause|resume|retry|files|download|manifest))?", path)
             if match:
                 job_id, action = match.groups()
+                directory = service.store.folder(self.owner, job_id)
+                query = parse_qs(url.query)
+                if action == "manifest" and method == "GET" and ("limit" in query or "after" in query):
+                    after = int(query.get("after", [0])[0])
+                    limit = min(1000, max(1, int(query.get("limit", [100])[0])))
+                    if not 0 <= after <= 2**63 - 1 - limit:
+                        raise HTTPError(400, "Invalid manifest cursor")
+                    metadata, files = service.store.manifest_slice(self.owner, job_id, after, limit)
+                    if metadata is None:
+                        raise HTTPError(404, "Job unavailable")
+                    if not metadata["available"] or (metadata["expires"] or 0) <= time.time():
+                        raise HTTPError(410, "Verified manifest unavailable")
+                    if metadata["mode"] == "directory-index":
+                        from .indexed_archive import manifest_page
+                        files = manifest_page(directory / "discovery.sqlite3", after, limit)
+                        more = len(files) == limit
+                    else:
+                        more = after + len(files) < metadata["total"]
+                    return self.send(200, {"id": job_id, "sha256": metadata["sha256"], "files": files,
+                                           "total": metadata["total"],
+                                           "nextCursor": str(files[-1]["id"]) if files and more else None})
                 record = service.store.get(self.owner, "job", job_id)
                 if not record:
                     raise HTTPError(404, "Job unavailable")
-                directory = service.store.folder(self.owner, job_id)
                 if action == "download" and method in ("GET", "HEAD"):
-                    query = parse_qs(url.query)
                     expiry = query.get("expires", [""])[0]
                     token = query.get("token", [""])[0]
                     if not expiry.isdigit() or int(expiry) < time.time() or not hmac.compare_digest(service.sign(f"{self.owner}:{job_id}:{expiry}"), token):
@@ -1550,7 +1691,7 @@ def handler(service):
                                 raise HTTPError(429, "Queue limit reached. Wait for jobs to finish or cancel queued jobs." + (" Sign in for a larger queue." if not self.account else ""))
                             if service.store.count(kind='job', states=(*ACTIVE, 'paused')) >= service.max_queued_jobs:
                                 raise HTTPError(429, 'Processor queue full')
-                            if record["fileExpires"] <= time.time() or any(not (service.store.folder(self.owner, i["id"]) / "input").exists() for i in record["inputs"]):
+                            if record["fileExpires"] <= time.time() or any(not (service.store.folder(self.owner, i["id"]) / "input").exists() for i in service.store.iter_job_inputs(self.owner, record)):
                                 raise HTTPError(410, "Input files expired")
                             service.clean_work(self.owner, job_id)
                             (directory / "cancel").unlink(missing_ok=True)

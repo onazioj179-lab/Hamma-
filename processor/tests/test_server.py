@@ -328,37 +328,6 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(response.status, 404)
         self.assertFalse(self.service.store.folder(owner, record["id"]).exists())
 
-    def test_job_verification_allows_health_and_rechecks_deleted_input(self):
-        from processor.engine import detect
-
-        upload = self.upload()
-        path = "/uploads/" + upload["id"]
-        verified = threading.Event()
-        release = threading.Event()
-
-        def pause_verification(source):
-            format_name = detect(source)
-            verified.set()
-            if not release.wait(10):
-                raise TimeoutError("Test did not release verification")
-            return format_name
-
-        with (patch("processor.server.detect", side_effect=pause_verification),
-              ThreadPoolExecutor(max_workers=1) as executor):
-            pending = executor.submit(self.job, upload)
-            try:
-                self.assertTrue(verified.wait(5))
-                with closing(HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)) as client:
-                    client.request("GET", "/api/process/health")
-                    with client.getresponse() as response:
-                        self.assertEqual(response.status, 200)
-                        self.assertEqual(json.load(response)["activeJobs"], 0)
-                self.assertEqual(self.call(path, method="DELETE"), {"deleted": True})
-            finally:
-                release.set()
-            self.assert_status(404, lambda: pending.result(timeout=5))
-        self.assertEqual(self.call("/jobs")["total"], 0)
-
     def test_retry_cannot_bypass_queue_capacity(self):
         job = self.job()
         owner = self.service.store.list()[0][0]
@@ -398,6 +367,143 @@ class ServerTests(unittest.TestCase):
         self.assertNotIn("inputs", job)
         self.assertNotIn("outputFile", job)
         self.assertNotIn(str(self.service.store.root), json.dumps(job))
+
+    def test_standard_manifest_pages_match_verified_archive_and_respect_expiry(self):
+        first = self.upload(b'first payload', 'first.txt')
+        second = self.upload(b'second payload', 'second.txt')
+        job = self.execute(self.call('/jobs', {'uploads': [first['id'], second['id']],
+                                              'operation': 'compress', 'target': 'zip'}, 'POST'))
+        self.assertEqual(job['state'], 'completed')
+        self.assertEqual(job['manifestStorage'], 'inline')
+        self.assertEqual(self.call('/jobs')['jobs'][0]['manifestStorage'], 'inline')
+        path = '/jobs/' + job['id'] + '/manifest'
+        full = self.call(path)
+        page = self.call(path + '?limit=1')
+        self.assertEqual(page['total'], 2)
+        self.assertEqual(page['sha256'], full['sha256'])
+        self.assertEqual(page['files'], [{**full['files'][0], 'id': 1}])
+        last = self.call(path + '?limit=1&after=' + page['nextCursor'])
+        self.assertEqual(last['files'], [{**full['files'][1], 'id': 2}])
+        self.assertIsNone(last['nextCursor'])
+        self.assert_status(400, lambda: self.call(path + '?after=-1'))
+        self.assert_status(400, lambda: self.call(path + '?after=9223372036854775807'))
+        stranger = build_opener(HTTPCookieProcessor(CookieJar()))
+        self.assert_status(404, lambda: self.call(path + '?limit=1', client=stranger))
+        owner = self.service.store.list(kind='job')[0][0]
+        self.service.store.patch(owner, 'job', job['id'], fileExpires=0)
+        self.assert_status(410, lambda: self.call(path + '?limit=1'))
+
+    def test_batch_admission_keeps_other_requests_responsive_during_hashing(self):
+        from processor.server import file_digest
+
+        files = {'first.txt': b'first payload'}
+        first = self.upload(files['first.txt'], 'first.txt')
+        owner = self.service.store.list(kind='upload')[0][0]
+        uploads = [first['id']]
+        for index in range(1, 256):
+            upload_id = f'{index:032x}'
+            name = f'file-{index}.txt'
+            payload = files[name] = f'payload {index}'.encode()
+            folder = self.service.store.folder(owner, upload_id)
+            folder.mkdir(parents=True)
+            (folder / 'input').write_bytes(payload)
+            self.service.store.put(owner, 'upload', {
+                'id': upload_id, 'name': name, 'size': len(payload), 'created': time.time(),
+                'expires': time.time() + 60, 'directory': False,
+            })
+            uploads.append(upload_id)
+
+        hashing, release = threading.Event(), threading.Event()
+
+        def gated_digest(path, context):
+            if path.parent.name == first['id']:
+                hashing.set()
+                if not release.wait(15):
+                    raise AssertionError('Admission did not release its shared lock')
+            return file_digest(path, context)
+
+        with patch('processor.server.file_digest', side_effect=gated_digest), ThreadPoolExecutor(2) as pool:
+            admission = pool.submit(self.call, '/jobs',
+                                    {'uploads': uploads, 'operation': 'compress', 'target': 'zip'}, 'POST')
+            try:
+                self.assertTrue(hashing.wait(10))
+                history = pool.submit(self.call, '/jobs')
+                self.assertEqual(history.result(timeout=5)['total'], 0)
+            finally:
+                release.set()
+            job = admission.result(timeout=20)
+
+        self.assertEqual(job['fileCount'], len(files))
+        record = self.service.store.get(owner, 'job', job['id'])
+        self.assertEqual(record['inputMode'], 'upload-pages')
+        self.assertNotIn('inputs', record)
+        self.assertEqual([item['id'] for item in self.service.store.iter_job_inputs(owner, record)], uploads)
+        completed = self.execute(job)
+        self.assertEqual(completed['state'], 'completed')
+        output = self.call(completed['download'].removeprefix('/api/process'), raw=True)
+        with zipfile.ZipFile(io.BytesIO(output)) as archive:
+            self.assertEqual(archive.namelist(), list(files))
+            for name, payload in files.items():
+                self.assertEqual(archive.read(name), payload)
+
+        tar_job = self.call('/jobs', {'uploads': uploads, 'operation': 'compress', 'target': 'tar.gz'}, 'POST')
+        self.assertEqual(tar_job['inputMode'], 'upload-pages')
+        completed_tar = self.execute(tar_job)
+        self.assertEqual(completed_tar['state'], 'completed')
+        output = self.call(completed_tar['download'].removeprefix('/api/process'), raw=True)
+        with tarfile.open(fileobj=io.BytesIO(output), mode='r:gz') as archive:
+            self.assertEqual(archive.getnames(), list(files))
+            for name, payload in files.items():
+                with archive.extractfile(name) as member:
+                    self.assertEqual(member.read(), payload)
+
+    def test_batch_admission_rechecks_an_upload_deleted_after_hashing(self):
+        from processor.server import detect
+
+        upload = self.upload()
+        hashing, release = threading.Event(), threading.Event()
+
+        # Pause after both hash and format reads so the commit must recheck storage.
+        def gated_detect(path):
+            format_hint = detect(path)
+            hashing.set()
+            if not release.wait(15):
+                raise AssertionError('Upload could not be deleted during admission')
+            return format_hint
+
+        with patch('processor.server.detect', side_effect=gated_detect), ThreadPoolExecutor(2) as pool:
+            admission = pool.submit(self.job, upload)
+            try:
+                self.assertTrue(hashing.wait(10))
+                delete = pool.submit(self.call, '/uploads/' + upload['id'], method='DELETE')
+                self.assertTrue(delete.result(timeout=5)['deleted'])
+            finally:
+                release.set()
+            self.assert_status(410, lambda: admission.result(timeout=15))
+        self.assertEqual(self.call('/jobs')['total'], 0)
+
+    def test_batch_admission_rejects_same_size_changes_after_hashing(self):
+        from processor.server import detect
+
+        upload = self.upload(b"old bytes", "example.txt")
+        owner = self.service.store.list(kind="upload")[0][0]
+
+        def replace_after_detection(path):
+            format_hint = detect(path)
+            original = path.stat()
+            path.write_bytes(b"new bytes")
+            os.utime(path, ns=(original.st_atime_ns, original.st_mtime_ns + 2_000_000_000))
+            return format_hint
+
+        with patch("processor.server.detect", side_effect=replace_after_detection):
+            self.assert_status(409, lambda: self.job(upload))
+        self.assertEqual(self.call("/jobs")["total"], 0)
+        self.assertNotIn("sha256", self.service.store.get(owner, "upload", upload["id"]))
+
+        retried = self.job(upload)
+        saved = self.service.store.get(owner, "upload", upload["id"])
+        self.assertEqual(saved["sha256"], hashlib.sha256(b"new bytes").hexdigest())
+        self.assertEqual(self.execute(retried)["state"], "completed")
 
     def test_listener_starts_without_reverse_dns(self):
         with patch("socket.getfqdn", side_effect=AssertionError("unexpected reverse DNS")):

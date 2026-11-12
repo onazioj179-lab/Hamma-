@@ -378,12 +378,14 @@ def encode_zip_comment(comment):
     return comment.encode("ascii")
 
 
-def compress(inputs: list[dict], output: Path, target: str, ctx: Context, *, zip_profile="balanced", zip_comment=""):
+def compress(inputs, output: Path, target: str, ctx: Context, *, zip_profile="balanced", zip_comment=""):
     comment = encode_zip_comment(zip_comment)
     if comment and target != "zip":
         raise ProcessingError("Archive comments require ZIP")
     manifest = []
-    names = [(item, ctx.register(item["name"], item.get("directory", False))) for item in inputs]
+    names = ((item, ctx.register(item["name"], item.get("directory", False))) for item in inputs)
+    if not (target == "zip" or target.startswith("tar")):
+        names = iter(list(names))
     if target == "zstd":
         from .native import run
         if len(inputs) != 1 or inputs[0].get("directory"):
@@ -398,7 +400,7 @@ def compress(inputs: list[dict], output: Path, target: str, ctx: Context, *, zip
         ctx.report(state="verifying")
         if file_digest(source, ctx) != original:
             raise ProcessingError("Input changed during verification")
-        manifest.append({"name": names[0][1], **original})
+        manifest.append({"name": next(names)[1], **original})
     elif target == "zip":
         if zip_profile not in ZIP_PROFILES:
             raise ProcessingError("Unsupported ZIP compression profile")
@@ -476,7 +478,7 @@ def compress(inputs: list[dict], output: Path, target: str, ctx: Context, *, zip
             actual = ctx.copy(source, Sink(), progress=False, expected=row["size"])
         if row != actual:
             raise ProcessingError("Integrity check failed")
-        manifest.append({"name": names[0][1], **row})
+        manifest.append({"name": next(names)[1], **row})
     return manifest
 
 

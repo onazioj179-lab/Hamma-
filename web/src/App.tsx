@@ -28,6 +28,26 @@ import { AccountPanel } from './components/ui/AccountPanel';
 const remoteServer = !['localhost', '127.0.0.1', '::1'].includes(location.hostname);
 
 type View = 'process' | 'files' | 'overview' | 'settings' | 'account';
+type Route = { view: View; section: SettingsSection };
+
+function readRoute(): Route {
+  const params = new URLSearchParams(window.location.search);
+  const view = params.get('view');
+  const section = params.get('section');
+  if (view === 'settings') {
+    return {
+      view,
+      section: section === 'privacy' || section === 'storage' || section === 'about'
+        ? section
+        : 'general',
+    };
+  }
+  if (view === 'files' || view === 'overview' || view === 'account') {
+    return { view, section: 'general' };
+  }
+  return { view: 'process', section: 'general' };
+}
+
 const navigation = [
   { key: 'process', label: 'Workspace', icon: LayoutGrid },
   { key: 'files', label: 'Files & History', icon: FolderOpen },
@@ -43,9 +63,8 @@ export default function App() {
   const outputs = useAppStore(state => state.sessionOutputs);
   const localCount = new Set([...recent.map(entry => entry.id), ...Object.values(outputs).filter(output => !output.hidden).map(output => output.archive.id)]).size;
   const { privacyChoice, setPrivacyChoice } = usePreferences();
-  const [view, setView] = useState<View>('process');
+  const [{ view, section }, setRoute] = useState(readRoute);
   useEffect(() => { if (privacyChoice === 'learning') setPrivacyChoice('essential'); }, [privacyChoice, setPrivacyChoice]);
-  const [section, setSection] = useState<SettingsSection>('general');
   const mainRef = useRef<HTMLElement>(null);
   const previousView = useRef(view);
   const [announcement, setAnnouncement] = useState('');
@@ -70,10 +89,21 @@ export default function App() {
   }, []);
 
   const [termsAccepted, setTermsAccepted] = useState(() => browserStorage.getItem('hamma-terms-v1') === 'accepted');
-  const openSettings = (next: SettingsSection) => {
-    setSection(next);
-    setView('settings');
-  };
+  const navigate = useCallback((next: View, section: SettingsSection = 'general') => {
+    const url = new URL(window.location.href);
+    if (next === 'process') url.searchParams.delete('view');
+    else url.searchParams.set('view', next);
+    if (next === 'settings' && section !== 'general') url.searchParams.set('section', section);
+    else url.searchParams.delete('section');
+    if (url.href !== window.location.href) window.history.pushState(null, '', url);
+    setRoute({ view: next, section });
+  }, []);
+  const openSettings = (next: SettingsSection) => navigate('settings', next);
+  useEffect(() => {
+    const restore = () => setRoute(readRoute());
+    window.addEventListener('popstate', restore);
+    return () => window.removeEventListener('popstate', restore);
+  }, []);
   useEffect(() => {
     if (previousView.current === view) return;
     previousView.current = view;
@@ -110,7 +140,7 @@ export default function App() {
       ) {
         event.preventDefault();
         // Mount the picker while the keyboard event still carries user activation.
-        if (view !== 'process') flushSync(() => setView('process'));
+        if (view !== 'process') flushSync(() => navigate('process'));
         mainRef.current?.querySelector<HTMLInputElement>('input[aria-label="Add files to queue"]')?.click();
       }
       if (event.key === 'Escape' && isProcessing) {
@@ -128,7 +158,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [view, isProcessing, result, cancel, download]);
+  }, [view, isProcessing, result, cancel, download, navigate]);
 
   const selectedTitle =
     view === 'settings'
@@ -144,7 +174,7 @@ export default function App() {
       <aside className="sidebar" aria-label="Application sidebar">
         <button
           className="brand"
-          onClick={() => setView('process')}
+          onClick={() => navigate('process')}
           aria-label="HAMMA workspace"
         >
           <span className="brand-symbol">
@@ -161,7 +191,7 @@ export default function App() {
             <button
               key={key}
               aria-current={view === key ? 'page' : undefined}
-              onClick={() => setView(key)}
+              onClick={() => navigate(key)}
             >
               <Icon size={17} strokeWidth={1.7} />
               <span>{label}</span>
@@ -235,20 +265,20 @@ export default function App() {
             onSpkDownload={download}
             visible={view === 'process' || view === 'files'}
             screen={view === 'files' ? 'history' : 'workspace'}
-            onHistory={() => setView('files')}
+            onHistory={() => navigate('files')}
           />
               {view === 'account' && <AccountPanel />}
               {view === 'overview' && (
                 <LocalOverview
-                  onHistory={() => setView('files')}
+                  onHistory={() => navigate('files')}
                 />
               )}
               {view === 'settings' && (
                 <SettingsPanel
                   section={section}
-                  onSectionChange={setSection}
+                  onSectionChange={openSettings}
                   busy={isProcessing}
-                  onHistory={() => setView('files')}
+                  onHistory={() => navigate('files')}
                 />
               )}
           <footer className="workspace-footer">
@@ -259,7 +289,7 @@ export default function App() {
           </footer>
         </main>
       </div>
-      {notice && <aside className="job-toast" aria-label="Job update"><span key={notice.message} className={notice.success ? "job-toast-success" : undefined}>{notice.message}</span><button className="button secondary" onClick={() => { setView('files'); setNotice(null); }}>View files</button><button className="text-button" aria-label="Dismiss job update" onClick={() => setNotice(null)}>Dismiss</button></aside>}
+      {notice && <aside className="job-toast" aria-label="Job update"><span key={notice.message} className={notice.success ? "job-toast-success" : undefined}>{notice.message}</span><button className="button secondary" onClick={() => { navigate('files'); setNotice(null); }}>View files</button><button className="text-button" aria-label="Dismiss job update" onClick={() => setNotice(null)}>Dismiss</button></aside>}
       <span className="sr-only" role="status">
         {announcement}
       </span>

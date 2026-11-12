@@ -13,6 +13,17 @@ class ProjectRoutes(unittest.TestCase):
     execute = test_server.ServerTests.execute
     assert_status = test_server.ServerTests.assert_status
 
+    def test_zip_profile_survives_reopening_and_saves_from_older_clients(self):
+        from processor.projects import DEFAULT_SETTINGS
+
+        path = '/projects/archives'
+        first = self.call(path, {'settings': {**DEFAULT_SETTINGS, 'zipProfile': 'maximum'}}, 'PUT')
+        self.assertEqual(self.call(path)['settings']['zipProfile'], 'maximum')
+        older = self.call(path, {'settings': DEFAULT_SETTINGS, 'revision': first['revision']}, 'PUT')
+        self.assertEqual(older['settings']['zipProfile'], 'maximum')
+        self.assert_status(400, lambda: self.call(
+            path, {'settings': {**DEFAULT_SETTINGS, 'zipProfile': 'unknown'}, 'revision': older['revision']}, 'PUT'))
+
     def test_memory_pressure_defers_admission_and_disk_exhaustion_is_reported(self):
         job = self.job()
         with patch('processor.server.available_memory', return_value=0):
