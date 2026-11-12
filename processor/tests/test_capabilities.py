@@ -27,6 +27,12 @@ class RegistryTests(unittest.TestCase):
         ]):
             self.assertEqual(_media_targets('fixture-engine', 1, 1), ('mp4', 'png'))
 
+    def test_tiff_signature_offers_lossless_image_targets(self):
+        from processor.capabilities import inspect_headers
+        with patch('processor.capabilities.media_targets', return_value=('png', 'tiff')):
+            result = inspect_headers([{'head': b'II*\x00'.hex(), 'name': 'renamed.bin'}])
+        self.assertEqual(result, [{'format': 'tiff', 'conversions': ['png', 'tiff'], 'extract': False}])
+
     def test_h264_preset_requires_all_three_encoders(self):
         encoders = ' V..... libx264 H.264\n A..... aac AAC\n'
         for suffix in ('', ' S..... mov_text Text\n'):

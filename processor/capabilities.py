@@ -24,6 +24,7 @@ MEDIA_OUTPUTS = {
     'png': ('image2', ('png',)),
     'webp': ('webp', ('libwebp',)),
     'jpg': ('image2', ('mjpeg',)),
+    'tiff': ('image2', ('tiff',)),
 }
 
 
@@ -60,8 +61,9 @@ def action_registry():
     from .native import capability
     native = bool(capability())
     return [
-        {'mime': ['image/png', 'image/jpeg', 'image/webp', 'image/avif', 'image/gif'], 'extensions': ['png', 'jpg', 'jpeg', 'webp', 'avif', 'gif'],
-         'conversions': supported('png', 'webp', 'jpg'), 'extract': False},
+        {'mime': ['image/png', 'image/jpeg', 'image/webp', 'image/avif', 'image/gif', 'image/tiff'],
+         'extensions': ['png', 'jpg', 'jpeg', 'webp', 'avif', 'gif', 'tif', 'tiff'],
+         'conversions': supported('png', 'webp', 'jpg', 'tiff'), 'extract': False},
         {'mime': ['audio/wav', 'audio/x-wav', 'audio/flac', 'audio/mpeg', 'audio/ogg'],
          'extensions': ['wav', 'flac', 'mp3', 'ogg', 'opus', 'm4a', 'aac'],
          'conversions': supported(*AUDIO_TARGETS), 'extract': False},
