@@ -1,0 +1,26 @@
+{
+  "jobs": 11,
+  "projects": 3,
+  "dispatchOrder": [
+    "bulk-a",
+    "bulk-b",
+    "interactive",
+    "bulk-a",
+    "bulk-b",
+    "interactive",
+    "bulk-a",
+    "bulk-b",
+    "interactive",
+    "bulk-a",
+    "bulk-b"
+  ],
+  "verifiedDownloads": 11,
+  "verifiedInputBytes": 33751040,
+  "interactiveQueueWaitSeconds": [
+    3.02,
+    42.932,
+    50.874
+  ],
+  "workerElapsedSeconds": 58.522,
+  "scope": "Loopback HTTP and spawned workers, one guest and three projects, one worker per guest"
+}
