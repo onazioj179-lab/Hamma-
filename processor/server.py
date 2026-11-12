@@ -29,6 +29,7 @@ from socketserver import TCPServer
 import subprocess
 import shutil
 import sqlite3
+import stat
 import tempfile
 import threading
 import tarfile
@@ -1048,6 +1049,37 @@ def handler(service):
                 raise HTTPError(413, "Invalid upload chunk")
             return source
 
+        def prepare_job_inputs(self, ids, verified):
+            inputs, pending, seen = [], {}, set()
+            for upload_id in ids:
+                record, source = self.upload_source(upload_id)
+                if record["expires"] <= time.time():
+                    raise HTTPError(404, "File unavailable")
+                try:
+                    info = source.stat()
+                except FileNotFoundError:
+                    raise HTTPError(410, "Upload expired or unavailable") from None
+                if not stat.S_ISREG(info.st_mode):
+                    raise HTTPError(410, "Upload expired or unavailable")
+                if info.st_size != record["size"]:
+                    raise HTTPError(409, "Upload incomplete")
+                name = record["name"].casefold()
+                if name in seen:
+                    raise HTTPError(400, "Duplicate filename")
+                seen.add(name)
+                if not record.get("sha256"):
+                    stamp = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+                    if verified is None:
+                        pending[upload_id] = (source, stamp)
+                    else:
+                        result = verified.get(upload_id)
+                        if result is None or result[0] != stamp or result[1]["size"] != record["size"]:
+                            raise HTTPError(409, "Upload changed during verification. Retry the job.")
+                        record.update(result[1])
+                        service.store.put(self.owner, "upload", record)
+                inputs.append({key: value for key, value in record.items() if key != "writerHash"})
+            return inputs, pending
+
         def upload_chunk(self, upload_id):
             offset = int(self.headers.get("Upload-Offset", "-1"))
             length = int(self.headers.get("Content-Length", "-1"))
@@ -1360,79 +1392,76 @@ def handler(service):
                     validate_conversion_options(target if operation == 'convert' else None, quality_mode, metadata_policy)
                 except ValueError as error:
                     raise HTTPError(400, str(error)) from error
-                with service.lock:
-                    request_id = body.get("requestId")
-                    recoverable = body.get('recoverable', False)
-                    if type(recoverable) is not bool:
-                        raise HTTPError(400, 'Invalid recovery mode')
-                    if recoverable:
-                        service.projects.get(self.owner, project_id)
-                        identity = ['project-recovery-v1', project_id, sorted(ids), operation, target, bool(body.get('recursive')), quality_mode, metadata_policy]
-                        if zip_indexes is not None:
-                            identity.append(zip_indexes)
-                        if zip_profile != "balanced":
-                            identity.append(zip_profile)
-                        if zip_comment:
-                            identity.append(["zipComment", zip_comment])
-                        request_id = hashlib.sha256(json.dumps(identity, separators=(',', ':')).encode()).hexdigest()
-                    if request_id is not None and (not isinstance(request_id, str) or not re.fullmatch(r"[a-f0-9]{64}", request_id)):
-                        raise HTTPError(400, "Invalid request identifier")
-                    job_id = hashlib.sha256((self.owner + request_id).encode()).hexdigest()[:32] if request_id else secrets.token_hex(16)
-                    existing = service.store.get(self.owner, "job", job_id)
-                    if existing:
-                        existing_ids = [i['id'] for i in existing['inputs']]
-                        if ((sorted(existing_ids) != sorted(ids) if recoverable else existing_ids != ids) or existing["operation"] != operation or existing["target"] != target or existing["recursive"] != bool(body.get("recursive")) or
-                            existing.get('projectId', 'default') != project_id or existing.get('qualityMode', 'lossless') != quality_mode or existing.get('metadataPolicy', 'strip') != metadata_policy or existing.get('zipIndexes') != zip_indexes or existing.get('zipProfile', 'balanced') != zip_profile or existing.get('zipComment', '') != zip_comment):
-                            raise HTTPError(409, "Request identifier already used")
-                        if recoverable:
-                            service.projects.forget_uploads(self.owner, project_id, ids)
-                        return self.send(200, service.public(self.owner, existing))
-                    if service.store.count(self.owner, states=(*ACTIVE, "paused")) >= self.plan['maxQueuedJobs']:
-                        raise HTTPError(429, "Queue limit reached. Wait for jobs to finish or cancel queued jobs." + (" Sign in for a larger queue." if not self.account else ""))
-                    if service.store.count(kind='job', states=(*ACTIVE, 'paused')) >= service.max_queued_jobs:
-                        raise HTTPError(429, 'Processor queue full')
-                    inputs, seen = [], set()
-                    for upload_id in ids:
-                        record = service.store.get(self.owner, "upload", upload_id)
-                        if not record or record["expires"] <= time.time():
-                            raise HTTPError(404, "File unavailable")
-                        source = service.store.folder(self.owner, upload_id) / "input"
-                        if not source.is_file():
-                            raise HTTPError(410, "Upload expired or unavailable")
-                        if source.stat().st_size != record["size"]:
-                            raise HTTPError(409, "Upload incomplete")
-                        if record["name"].casefold() in seen:
-                            raise HTTPError(400, "Duplicate filename")
-                        seen.add(record["name"].casefold())
-                        if not record.get("sha256"):
-                            ctx = Context(source.parent, service.limits)
-                            record.update(file_digest(source, ctx), format=detect(source))
-                            service.store.put(self.owner, "upload", record)
-                        inputs.append({key: value for key, value in record.items() if key != "writerHash"})
-                    if operation != "compress" and inputs[0].get("directory"):
-                        raise HTTPError(400, "Choose a file")
-                    now = time.time()
-                    settings = service.defaults(self.owner)
-                    retention = RETENTION[settings["historyRetention"]]
-                    record = {"id": job_id, "projectId": project_id, "created": now, "name": inputs[0]["name"] if len(inputs) == 1 else f"{len(inputs)} files",
-                              "operation": operation, "target": target, "inputs": inputs, "recursive": bool(body.get("recursive")),
-                              'qualityMode': quality_mode, 'metadataPolicy': metadata_policy,
-                              "state": "queued", "inputSize": sum(i["size"] for i in inputs), "outputSize": None,
-                              "format": inputs[0]["format"] if len(inputs) == 1 else "batch", "processed": 0, "entries": 0,
-                              "fileExpires": now + RETENTION[settings["fileRetention"]], "historyExpires": now + retention if retention else None,
-                              "downloadAvailable": False, "error": None}
+                request_id = body.get("requestId")
+                recoverable = body.get('recoverable', False)
+                if type(recoverable) is not bool:
+                    raise HTTPError(400, 'Invalid recovery mode')
+                if recoverable:
+                    identity = ['project-recovery-v1', project_id, sorted(ids), operation, target, bool(body.get('recursive')), quality_mode, metadata_policy]
                     if zip_indexes is not None:
-                        record["zipIndexes"] = zip_indexes
+                        identity.append(zip_indexes)
                     if zip_profile != "balanced":
-                        record["zipProfile"] = zip_profile
+                        identity.append(zip_profile)
                     if zip_comment:
-                        record["zipComment"] = zip_comment
-                    service.store.folder(self.owner, record["id"]).mkdir(mode=0o700, parents=True)
-                    service.store.put(self.owner, "job", record)
-                    if recoverable:
-                        service.projects.forget_uploads(self.owner, project_id, ids)
-                    # Bound guest history independently of file retention.
-                    service.store.trim_history(self.owner, limit=self.plan['historyRecords'])
+                        identity.append(["zipComment", zip_comment])
+                    request_id = hashlib.sha256(json.dumps(identity, separators=(',', ':')).encode()).hexdigest()
+                if request_id is not None and (not isinstance(request_id, str) or not re.fullmatch(r"[a-f0-9]{64}", request_id)):
+                    raise HTTPError(400, "Invalid request identifier")
+                job_id = hashlib.sha256((self.owner + request_id).encode()).hexdigest()[:32] if request_id else secrets.token_hex(16)
+                verified = None
+                while True:
+                    with service.lock:
+                        if recoverable:
+                            service.projects.get(self.owner, project_id)
+                        existing = service.store.get(self.owner, "job", job_id)
+                        if existing:
+                            existing_ids = [i['id'] for i in existing['inputs']]
+                            if ((sorted(existing_ids) != sorted(ids) if recoverable else existing_ids != ids) or existing["operation"] != operation or existing["target"] != target or existing["recursive"] != bool(body.get("recursive")) or
+                                existing.get('projectId', 'default') != project_id or existing.get('qualityMode', 'lossless') != quality_mode or existing.get('metadataPolicy', 'strip') != metadata_policy or existing.get('zipIndexes') != zip_indexes or existing.get('zipProfile', 'balanced') != zip_profile or existing.get('zipComment', '') != zip_comment):
+                                raise HTTPError(409, "Request identifier already used")
+                            if recoverable:
+                                service.projects.forget_uploads(self.owner, project_id, ids)
+                            return self.send(200, service.public(self.owner, existing))
+                        if service.store.count(self.owner, states=(*ACTIVE, "paused")) >= self.plan['maxQueuedJobs']:
+                            raise HTTPError(429, "Queue limit reached. Wait for jobs to finish or cancel queued jobs." + (" Sign in for a larger queue." if not self.account else ""))
+                        if service.store.count(kind='job', states=(*ACTIVE, 'paused')) >= service.max_queued_jobs:
+                            raise HTTPError(429, 'Processor queue full')
+                        inputs, pending = self.prepare_job_inputs(ids, verified)
+                        if operation != "compress" and inputs[0].get("directory"):
+                            raise HTTPError(400, "Choose a file")
+                        if not pending:
+                            now = time.time()
+                            settings = service.defaults(self.owner)
+                            retention = RETENTION[settings["historyRetention"]]
+                            record = {"id": job_id, "projectId": project_id, "created": now, "name": inputs[0]["name"] if len(inputs) == 1 else f"{len(inputs)} files",
+                                      "operation": operation, "target": target, "inputs": inputs, "recursive": bool(body.get("recursive")),
+                                      'qualityMode': quality_mode, 'metadataPolicy': metadata_policy,
+                                      "state": "queued", "inputSize": sum(i["size"] for i in inputs), "outputSize": None,
+                                      "format": inputs[0]["format"] if len(inputs) == 1 else "batch", "processed": 0, "entries": 0,
+                                      "fileExpires": now + RETENTION[settings["fileRetention"]], "historyExpires": now + retention if retention else None,
+                                      "downloadAvailable": False, "error": None}
+                            if zip_indexes is not None:
+                                record["zipIndexes"] = zip_indexes
+                            if zip_profile != "balanced":
+                                record["zipProfile"] = zip_profile
+                            if zip_comment:
+                                record["zipComment"] = zip_comment
+                            service.store.folder(self.owner, record["id"]).mkdir(mode=0o700, parents=True)
+                            service.store.put(self.owner, "job", record)
+                            if recoverable:
+                                service.projects.forget_uploads(self.owner, project_id, ids)
+                            # Bound guest history independently of file retention.
+                            service.store.trim_history(self.owner, limit=self.plan['historyRecords'])
+                            break
+                    # Hash completed uploads without delaying unrelated work. The
+                    # next pass rechecks ownership, file identity and admission.
+                    verified = {}
+                    for upload_id, (source, stamp) in pending.items():
+                        try:
+                            digest = file_digest(source, Context(source.parent, service.limits))
+                            verified[upload_id] = (stamp, {**digest, "format": detect(source)})
+                        except FileNotFoundError:
+                            raise HTTPError(410, "Upload expired or unavailable") from None
                 LOG.info("Job queued: %s %s", record["id"], operation)
                 return self.send(202, service.public(self.owner, record))
             if path == "/api/process/jobs/live" and method == "GET":
