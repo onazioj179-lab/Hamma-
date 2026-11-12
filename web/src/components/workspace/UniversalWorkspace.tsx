@@ -46,7 +46,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const [recoveryReady, setRecoveryReady] = useState(false);
   const [selectionKey, setSelectionKey] = useState('');
   const [recoveryNotice, setRecoveryNotice] = useState('');
-  const drafts = useRef(new Map<string, { sources: Source[]; selected: Set<string>; target: string; conversion: string; qualityMode: 'lossless' | 'lossy'; metadataPolicy: 'strip' | 'preserve'; recursive: boolean; groupActions: Record<string, string>; errors: Record<string, SourceFailure> }>());
+  const drafts = useRef(new Map<string, { sources: Source[]; selected: Set<string>; target: string; zipProfile: string; conversion: string; qualityMode: 'lossless' | 'lossy'; metadataPolicy: 'strip' | 'preserve'; recursive: boolean; groupActions: Record<string, string>; errors: Record<string, SourceFailure> }>());
   const [sources, setSources] = useState<Source[]>([]);
   const liveSources = useRef(sources); liveSources.current = sources;
   const [selected, setSelected] = useState(new Set<string>());
@@ -135,6 +135,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     const generation = ownerGeneration.current;
     setRecovering(true);
     const settings = saved?.settings ?? defaultProjectSettings;
+    setZipProfile(settings.zipProfile ?? 'balanced');
     setTarget(settings.target); setConversion(settings.conversion); setQualityMode(settings.qualityMode);
     setMetadataPolicy(settings.metadataPolicy); setRecursive(settings.recursive);
     setGroupActions(settings.groupActions || {});
@@ -203,11 +204,11 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     const generation = ownerGeneration.current;
     const timer = setTimeout(() => {
       if (generation !== ownerGeneration.current || accountChanging() || !mounted.current) return;
-      void recovery.current.save(projectId, { target, conversion, qualityMode, metadataPolicy, recursive, ...(capability.groupedWorkflows ? { groupActions } : {}) }, controller.signal)
+      void recovery.current.save(projectId, { target, conversion, qualityMode, metadataPolicy, recursive, ...(capability.projectZipProfiles ? { zipProfile } : {}), ...(capability.groupedWorkflows ? { groupActions } : {}) }, controller.signal)
         .catch(caught => { if (!controller.signal.aborted && generation === ownerGeneration.current && mounted.current) setError(caught instanceof Error ? caught.message : 'Project settings could not be saved.'); });
     }, 500);
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [capability, recoveryReady, recovering, busy, projectId, target, conversion, qualityMode, metadataPolicy, recursive, groupActions]);
+  }, [capability, recoveryReady, recovering, busy, projectId, target, conversion, qualityMode, metadataPolicy, recursive, groupActions, zipProfile]);
   useEffect(() => {
     const guard = (event: Event) => { if (busy || recovering || spkBusy || submitting.current || mutation.current || preparingDelete.current || savingRetention) event.preventDefault(); };
     const clear = () => {
@@ -324,10 +325,10 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   }, [sources, capability]);
   const switchProject = (id: string) => {
     if (busy || recovering || spkBusy || mutation.current || submitting.current || folderController.current || id === projectId) return;
-    drafts.current.set(projectId, { sources, selected, target, conversion, qualityMode, metadataPolicy, recursive, groupActions, errors: sourceErrors });
+    drafts.current.set(projectId, { sources, selected, target, zipProfile, conversion, qualityMode, metadataPolicy, recursive, groupActions, errors: sourceErrors });
     const draft = drafts.current.get(id);
     setSources(draft?.sources || []); setSelected(draft?.selected || new Set());
-    setTarget(draft?.target || 'zip'); setZipProfile('balanced'); setZipComment(''); setConversion(draft?.conversion || 'wav');
+    setTarget(draft?.target || 'zip'); setZipProfile(draft?.zipProfile ?? 'balanced'); setZipComment(''); setConversion(draft?.conversion || 'wav');
     setQualityMode(draft?.qualityMode || 'lossless'); setMetadataPolicy(draft?.metadataPolicy || 'strip');
     setRecursive(draft?.recursive || false); setSourceErrors(draft?.errors || {});
     setGroupActions(draft?.groupActions || {});
@@ -421,7 +422,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     const generation = ownerGeneration.current;
     const submitted = new Set<string>();
     try {
-      if (capability.projectRecovery) await recovery.current.save(projectId, { target, conversion, qualityMode, metadataPolicy, recursive, ...(capability.groupedWorkflows ? { groupActions } : {}) }, controller.signal);
+      if (capability.projectRecovery) await recovery.current.save(projectId, { target, conversion, qualityMode, metadataPolicy, recursive, ...(capability.projectZipProfiles ? { zipProfile } : {}), ...(capability.groupedWorkflows ? { groupActions } : {}) }, controller.signal);
       const report = operation === 'verify' || operation === 'inspect';
       const jobTarget = report ? 'json' : operation === 'extract' ? repack ? 'zip-deflate' : 'zip' : operation === 'compress' ? archiveTarget : conversionTarget;
       const plan = planned || summarizePlan([{ id: 'selection', sources: chosen, operation, target: jobTarget, qualityMode, metadataPolicy, recursive }], 0, capability);
