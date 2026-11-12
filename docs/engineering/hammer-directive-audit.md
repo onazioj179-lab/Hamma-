@@ -11,11 +11,29 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 ## HAMMA web backlog
 
 1. **Validate recovery across mixed batches.** Exercise unstarted, interrupted, and completed uploads together after reopening a project on supported browsers.
-2. **Scale browser jobs.** Connect folder discovery to disk-backed manifests. Test paged inputs and outputs, fairness across projects, and per-file retry under sustained load.
+2. **Scale browser jobs.** Local indexed TAR jobs have disk-backed manifests and Files & History can page their verified outputs. Browser uploads still need disk-backed admission. Test fairness across projects and per-file retry under sustained load.
 3. **Validate physical devices.** Test mobile and foldable layouts, folder picking, touch, keyboard access, reduced motion, and recovery on real devices.
 4. **Isolate processing workers.** Enforce filesystem and network isolation, verify tenant boundaries, and expand dependency advisories, SBOM coverage, and fuzz tests.
 5. **Expand format support.** Verify archive interoperability and add encryption, split and join, broader codec coverage, and isolated PDF and Office conversions. Check decoded bytes, format fidelity, and advertised capabilities.
 6. **Validate production operations.** Test rollback, migration, retention, and monitoring in the target environment. Distributed testing requires authorized compute and object storage.
+
+## Processor stress evidence
+
+The Windows loopback run completed 48 jobs across 16 concurrent guest sessions in
+62.14 seconds. It verified 32 ZIP/gzip downloads and their restored bytes,
+range responses, duplicate submissions, and owner isolation. All 16 corrupt
+inputs failed as expected. The first run encountered a refused connection with
+the inherited five-connection listen backlog. The fresh run passed with a
+backlog of 64. See [the run report](../../validation/processor-stress-16-sessions.json).
+This workload covers small HTTP uploads and downloads. It leaves sustained
+mixed-project fairness and browser recovery at workload scale open.
+
+The indexed TAR.GZ benchmark independently verified 6,000 unique files
+(49,152,000 input bytes). The manifest reported 6,006 entries. Discovery, packing, and internal
+verification took 374.77 seconds and peaked at 2,616,340 bytes of traced Python
+allocations. The timing overlapped the HTTP workload and has no matching
+before/after baseline. Tracing excludes SQLite, native memory, and OS cache.
+See [the indexed payload report](../../validation/indexed-tar-6000-payload.json).
 
 ## Capability audit
 
