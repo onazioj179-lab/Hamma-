@@ -129,7 +129,7 @@ See [the worker report](../../validation/scheduler-worker-fairness.json).
 - ZIP compression profiles use Deflate levels 1, 6 and 9. Auto samples at
   most 64 KiB per file and stores members whose sample saves less than 1%.
   Every profile verifies original bytes after packaging. The job records the
-  chosen profile for retries. The selector resets to Balanced on project changes.
+  chosen profile for retries. The project saves the selected ZIP profile. Older project records default to Balanced.
 - ZIP creation accepts an optional plain-text archive comment of up to 1,024
   printable ASCII characters. The worker verifies the embedded bytes before
   publishing. Local inspection previews up to 4,096 comment bytes and escapes

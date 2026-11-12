@@ -1120,7 +1120,7 @@ def handler(service):
                     raise HTTPError(400, str(error)) from error
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
-                return self.send(200, {"groupedWorkflows": True, "projectRecovery": True, "recoverableUploads": True, "draftScope": hashlib.sha256(("hamma-draft:" + self.owner).encode()).hexdigest(), "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "tarVerification": True, "zipSelection": True, "archiveRepack": True, "officeInspection": True, "zipComments": True, "zipProfiles": list(ZIP_PROFILES), "actionRegistry": action_registry(), "conversions": media_targets(),
+                return self.send(200, {"groupedWorkflows": True, "projectRecovery": True, "projectZipProfiles": True, "recoverableUploads": True, "draftScope": hashlib.sha256(("hamma-draft:" + self.owner).encode()).hexdigest(), "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "tarVerification": True, "zipSelection": True, "archiveRepack": True, "officeInspection": True, "zipComments": True, "zipProfiles": list(ZIP_PROFILES), "actionRegistry": action_registry(), "conversions": media_targets(),
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
             if path == "/api/process/settings":
                 if method == "GET":
