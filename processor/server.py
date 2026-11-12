@@ -198,14 +198,44 @@ class Store:
         with self.connect() as db:
             db.execute("BEGIN")
             total = db.execute("SELECT count(*) FROM records WHERE " + condition, parameters).fetchone()[0]
-            projection = "json_remove(data,'$.inputs','$.manifest','$.outputFile','$.filesCleaned','$.errorInfo.fileIds') AS data,coalesce(json_extract(data,'$.fileCount'),json_array_length(data,'$.inputs')) AS file_count" if summary else "data"
+            projection = "json_remove(data,'$.inputs','$.manifest','$.outputFile','$.filesCleaned','$.errorInfo.fileIds') AS data,coalesce(json_extract(data,'$.fileCount'),json_array_length(data,'$.inputs')) AS file_count,coalesce(json_array_length(data,'$.manifest'),0) AS manifest_count" if summary else "data"
             rows = db.execute("SELECT " + projection + " FROM records WHERE " + condition + " ORDER BY " + ordering + " LIMIT ? OFFSET ?",
                               [*parameters, min(100, max(1, limit)), min(2**63 - 1, max(0, offset))]).fetchall()
         records = [json.loads(row["data"]) for row in rows]
         if summary:
             for record, row in zip(records, rows):
                 record["fileCount"] = row["file_count"] or 0
+                if row["manifest_count"] and not record.get("manifestStorage"):
+                    record["manifestStorage"] = "inline"
         return total, records
+
+    def manifest_slice(self, owner, job_id, after, limit):
+        with self.connect() as db:
+            db.execute("BEGIN")
+            metadata = db.execute("""
+                SELECT json_extract(data,'$.inputMode') AS mode,
+                       json_extract(data,'$.sha256') AS sha256,
+                       json_extract(data,'$.downloadAvailable') AS available,
+                       json_extract(data,'$.fileExpires') AS expires,
+                       CASE WHEN json_extract(data,'$.inputMode')='directory-index'
+                            THEN json_extract(data,'$.fileCount')
+                            ELSE coalesce(json_array_length(data,'$.manifest'),0)
+                       END AS total
+                FROM records WHERE owner=? AND kind='job' AND id=?
+            """, (owner, job_id)).fetchone()
+            if metadata is None:
+                return None, []
+            if not metadata['available'] or (metadata['expires'] or 0) <= time.time():
+                return metadata, []
+            if metadata['mode'] == 'directory-index':
+                return metadata, []
+            rows = db.execute("""
+                SELECT member.key AS position, member.value AS entry
+                FROM records, json_each(records.data,'$.manifest') AS member
+                WHERE owner=? AND kind='job' AND records.id=? AND member.key>=? AND member.key<?
+                ORDER BY member.key
+            """, (owner, job_id, after, after + limit)).fetchall()
+        return metadata, [{**json.loads(row['entry']), 'id': row['position'] + 1} for row in rows]
 
     def history_overview(self, owner):
         condition = "owner=? AND kind='job' AND coalesce(json_extract(data,'$.hidden'),0)=0"
@@ -539,6 +569,8 @@ class Service:
             expiry = min(int(time.time()) + 3600, int(record["fileExpires"]))
             token = self.sign(f"{owner}:{record['id']}:{expiry}")
             result["download"] = f"/api/process/jobs/{record['id']}/download?expires={expiry}&token={token}"
+        if record.get("manifest") and not result.get("manifestStorage"):
+            result["manifestStorage"] = "inline"
         result["fileCount"] = record.get('fileCount', 0) if record.get('inputMode') == 'directory-index' else len(record["inputs"]) if "inputs" in record else record.get("fileCount", 0)
         return result
 
@@ -1346,12 +1378,31 @@ def handler(service):
             match = re.fullmatch(r"/api/process/jobs/([a-f0-9]{32})(?:/(cancel|pause|resume|retry|files|download|manifest))?", path)
             if match:
                 job_id, action = match.groups()
+                directory = service.store.folder(self.owner, job_id)
+                query = parse_qs(url.query)
+                if action == "manifest" and method == "GET" and ("limit" in query or "after" in query):
+                    after = int(query.get("after", [0])[0])
+                    limit = min(1000, max(1, int(query.get("limit", [100])[0])))
+                    if not 0 <= after <= 2**63 - 1 - limit:
+                        raise HTTPError(400, "Invalid manifest cursor")
+                    metadata, files = service.store.manifest_slice(self.owner, job_id, after, limit)
+                    if metadata is None:
+                        raise HTTPError(404, "Job unavailable")
+                    if not metadata["available"] or (metadata["expires"] or 0) <= time.time():
+                        raise HTTPError(410, "Verified manifest unavailable")
+                    if metadata["mode"] == "directory-index":
+                        from .indexed_archive import manifest_page
+                        files = manifest_page(directory / "discovery.sqlite3", after, limit)
+                        more = len(files) == limit
+                    else:
+                        more = after + len(files) < metadata["total"]
+                    return self.send(200, {"id": job_id, "sha256": metadata["sha256"], "files": files,
+                                           "total": metadata["total"],
+                                           "nextCursor": str(files[-1]["id"]) if files and more else None})
                 record = service.store.get(self.owner, "job", job_id)
                 if not record:
                     raise HTTPError(404, "Job unavailable")
-                directory = service.store.folder(self.owner, job_id)
                 if action == "download" and method in ("GET", "HEAD"):
-                    query = parse_qs(url.query)
                     expiry = query.get("expires", [""])[0]
                     token = query.get("token", [""])[0]
                     if not expiry.isdigit() or int(expiry) < time.time() or not hmac.compare_digest(service.sign(f"{self.owner}:{job_id}:{expiry}"), token):

@@ -29,7 +29,7 @@ export interface Job {
   created: number; finished?: number | null; duration?: number; error?: string; entries: number; hidden?: boolean;
   download?: string; downloadAvailable: boolean; outputName?: string;
   fileExpires: number; historyExpires: number | null; fileCount: number; format: string;
-  manifestStorage?: 'index';
+  manifestStorage?: 'index' | 'inline';
   expanded?: number; mediaSeconds?: number; track?: number; tracks?: number;
 }
 export interface Source { inspection?: Inspection; id: string; file: File | null; name: string; size: number; directory: boolean; upload?: string; uploaded?: number; resume?: boolean }

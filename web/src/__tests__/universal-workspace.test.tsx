@@ -683,3 +683,37 @@ it('recovers projects from durable jobs and retries only the active project fail
   await act(async () => button('Retry failed').click());
   expect(fetchMock.mock.calls.filter(([url, init]) => init?.method === 'POST' && String(url).endsWith('/retry')).map(([url]) => url)).toEqual(['/api/process/jobs/bad/retry']);
 });
+
+it('opens a standard job manifest lazily and requests the next page by cursor', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  const manifestRequests: string[] = [];
+  fetchMock.mockImplementation(async (url: string) => {
+    if (url.includes('/manifest?')) {
+      manifestRequests.push(url);
+      const after = new URL(url, window.location.href).searchParams.get('after');
+      const files = after === '0'
+        ? Array.from({ length: 50 }, (_, index) => ({ id: index + 1, name: `entry-${index + 1}.txt`, size: 10 }))
+        : [{ id: 51, name: 'last.txt', size: 20 }];
+      return { ok: true, json: async () => ({ files, total: 51, nextCursor: after === '0' ? '50' : null }) };
+    }
+    if (url.includes('/jobs?')) {
+      return { ok: true, json: async () => ({ total: 1, jobs: [{
+        id: 'standard', name: 'files.zip', operation: 'compress', state: 'completed',
+        inputSize: 500, outputSize: 250, processed: 500, created: 1,
+        fileExpires: 2, downloadAvailable: true, manifestStorage: 'inline',
+      }] }) };
+    }
+    return initial(url);
+  });
+  await render('history');
+  expect(manifestRequests).toEqual([]);
+  const details = host.querySelector<HTMLDetailsElement>('.verified-files')!;
+  await act(async () => {
+    details.open = true;
+    details.dispatchEvent(new Event('toggle'));
+  });
+  expect(details.textContent).toContain('1–50 of 51');
+  await act(async () => button('Next files').click());
+  expect(details.textContent).toContain('last.txt · 20 bytes');
+  expect(manifestRequests.map(url => new URL(url, window.location.href).searchParams.get('after'))).toEqual(['0', '50']);
+});
