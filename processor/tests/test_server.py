@@ -362,6 +362,10 @@ class ServerTests(unittest.TestCase):
             job = admission.result(timeout=20)
 
         self.assertEqual(job['fileCount'], len(files))
+        record = self.service.store.get(owner, 'job', job['id'])
+        self.assertEqual(record['inputMode'], 'upload-pages')
+        self.assertNotIn('inputs', record)
+        self.assertEqual([item['id'] for item in self.service.store.iter_job_inputs(owner, record)], uploads)
         completed = self.execute(job)
         self.assertEqual(completed['state'], 'completed')
         output = self.call(completed['download'].removeprefix('/api/process'), raw=True)
@@ -369,6 +373,17 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(archive.namelist(), list(files))
             for name, payload in files.items():
                 self.assertEqual(archive.read(name), payload)
+
+        tar_job = self.call('/jobs', {'uploads': uploads, 'operation': 'compress', 'target': 'tar.gz'}, 'POST')
+        self.assertEqual(tar_job['inputMode'], 'upload-pages')
+        completed_tar = self.execute(tar_job)
+        self.assertEqual(completed_tar['state'], 'completed')
+        output = self.call(completed_tar['download'].removeprefix('/api/process'), raw=True)
+        with tarfile.open(fileobj=io.BytesIO(output), mode='r:gz') as archive:
+            self.assertEqual(archive.getnames(), list(files))
+            for name, payload in files.items():
+                with archive.extractfile(name) as member:
+                    self.assertEqual(member.read(), payload)
 
     def test_batch_admission_rechecks_an_upload_deleted_after_hashing(self):
         from processor.server import detect
