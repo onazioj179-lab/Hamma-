@@ -761,3 +761,33 @@ it('opens a standard job manifest lazily and requests the next page by cursor', 
   expect(details.textContent).toContain('20 bytes');
   expect(manifestRequests.map(url => new URL(url, window.location.href).searchParams.get('after'))).toEqual(['0', '50']);
 });
+
+it('stages large selections in pages before submitting the job by reference', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  const pages: { url: string; offset: number; uploads: string[] }[] = [];
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/capabilities')) {
+      return { ok: true, json: async () => ({ ...caps, pagedJobSelections: true }) };
+    }
+    if (url.includes('/job-selections/')) {
+      const page = JSON.parse(String(init?.body));
+      pages.push({ url, ...page });
+      return { ok: true, json: async () => ({ offset: page.offset + page.uploads.length }) };
+    }
+    return initial(url, init);
+  });
+  let nextUpload = 0;
+  vi.spyOn(processingClient, 'upload').mockImplementation(async () => (++nextUpload).toString(16).padStart(32, '0'));
+  vi.spyOn(processingClient, 'requestId').mockResolvedValue('fixture');
+  const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({});
+  await render();
+  await select(Array.from({ length: 201 }, (_, index) => new File(['fixture'], `file-${index}.txt`)));
+  await act(async () => button('Compress').click());
+  expect(pages.map(page => [page.offset, page.uploads.length])).toEqual([[0, 100], [100, 100], [200, 1]]);
+  const selectionId = pages[0].url.split('/').pop();
+  expect(new Set(pages.map(page => page.url)).size).toBe(1);
+  const [path, body] = submit.mock.calls[0];
+  expect(path).toBe('/jobs');
+  expect(body).toEqual(expect.objectContaining({ selectionId, selectionCount: 201 }));
+  expect(body).not.toHaveProperty('uploads');
+});
