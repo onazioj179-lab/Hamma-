@@ -736,6 +736,7 @@ class HTTPError(Exception):
 
 
 class LocalHTTPServer(ThreadingHTTPServer):
+    request_queue_size = 64
     daemon_threads = True
     allow_reuse_address = os.name != "nt"
     tls_context = None
