@@ -92,6 +92,21 @@ class StoreQueries(unittest.TestCase):
         for private in ('inputs', 'manifest', 'outputFile', 'filesCleaned'):
             self.assertNotIn(private, rows[0])
 
+    def test_overview_counts_retained_jobs_and_projects_only_the_latest_five(self):
+        for index in range(1, 7):
+            self.put(index, operation='compress', manifest=[{'name': 'private'}])
+        self.put(7, operation='extract', outputSize=10000)
+        self.put(8, operation='compress', state='paused', outputSize=None)
+        self.put(9, operation='compress', state='failed', outputSize=None)
+        self.put(10, operation='compress', hidden=True)
+        self.put(11, owner=self.other, operation='compress')
+        metrics, latest = self.store.history_overview(self.owner)
+        self.assertEqual(metrics, {'total': 9, 'completed': 7, 'active': 1, 'failed': 1,
+                                   'compressed': 6, 'extracted': 1, 'converted': 0,
+                                   'measured': 6, 'input': 210, 'output': 21})
+        self.assertEqual([row['created'] for row in latest], [9, 8, 7, 6, 5])
+        self.assertTrue(all('manifest' not in row and 'inputs' not in row for row in latest))
+
     def test_hidden_downloads_are_opt_in_owner_scoped_and_expire_independently(self):
         self.put(1, hidden=True)
         self.put(2, hidden=True, fileExpires=0)

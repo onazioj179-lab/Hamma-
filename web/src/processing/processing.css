@@ -64,6 +64,8 @@
 .job-details summary { font-size: 10px; }
 .job-details dl { display: grid; grid-template-columns: 90px 1fr; font-size: 11px; color: rgb(var(--muted)); gap: 6px; overflow-wrap: anywhere; }
 .job-details dd { margin: 0; }
+.verified-files ul { margin: 8px 0; padding-inline-start: 18px; font-size: 12px; overflow-wrap: anywhere; }
+.verified-files [role="status"] { font-size: 12px; }
 .job-measurement { display: flex; gap: 12px; align-items: center; margin: 12px 0 0 64px; font-size: 11px; color: rgb(var(--muted)); }
 .job-measurement progress { flex: 1; max-width: 320px; height: 4px; accent-color: rgb(var(--accent)); }
 .job-error { margin: 10px 0 0 64px; font-size: 12px; }
@@ -92,6 +94,9 @@
 .folder-selection-help { margin-top: 12px; }
 
 .source-error { max-width: 38%; overflow: hidden; text-overflow: ellipsis; text-align: left; min-height: 44px; color: rgb(var(--text)); text-decoration: underline; }
+.source-failure { display: flex; align-items: center; gap: 8px; max-width: 48%; }
+.source-failure .source-error { max-width: none; min-width: 0; }
+.source-failure .text-button { flex-shrink: 0; min-height: 44px; white-space: nowrap; }
 
 .project-toolbar { display:flex; flex-wrap:wrap; align-items:end; gap:12px; margin-bottom:16px; }
 .project-toolbar label { display:grid; gap:6px; flex:1; min-width:160px; max-width:320px; font-size:12px; }

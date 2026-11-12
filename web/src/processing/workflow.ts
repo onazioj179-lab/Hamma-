@@ -6,7 +6,7 @@ export interface WorkflowHooks {
   prepare: (source: Source) => Promise<string>;
   queue: (group: TaskGroup, inputs: string[]) => Promise<void>;
   submitted: (source: Source) => void;
-  failed: (source: Source, message: string) => void;
+  failed: (source: Source, message: string, group: TaskGroup) => void;
   browserExtract?: (source: Source) => Promise<void>;
 }
 
@@ -18,8 +18,8 @@ const fileRejection = (error: unknown) => error instanceof ProcessorError && [40
 export async function executeWorkflow(plan: ExecutionPlan, hooks: WorkflowHooks): Promise<number> {
   if (plan.issues.length) throw new Error(plan.issues.join(' '));
   let failures = 0;
-  const rejected = (source: Source, error: unknown) => {
-    failures++; hooks.failed(source, error instanceof Error ? error.message : 'This file could not be queued.');
+  const rejected = (source: Source, error: unknown, group: TaskGroup) => {
+    failures++; hooks.failed(source, error instanceof Error ? error.message : 'This file could not be queued.', group);
   };
   let active = plan.groups.map(group => ({ group, next: 0, inputs: [] as string[] }));
   while (active.length) {
@@ -32,14 +32,14 @@ export async function executeWorkflow(plan: ExecutionPlan, hooks: WorkflowHooks)
         try { state.inputs.push(await hooks.prepare(source)); }
         catch (error) {
           if (hooks.signal.aborted || !fileRejection(error)) throw error;
-          rejected(source, error); continue; // Keep the whole archive group unsubmitted.
+          rejected(source, error, group); continue; // Keep the whole archive group unsubmitted.
         }
         if (state.next < group.sources.length) { waiting.push(state); continue; }
         hooks.signal.throwIfAborted();
         try { await hooks.queue(group, state.inputs); }
         catch (error) {
           if (hooks.signal.aborted || !fileRejection(error)) throw error;
-          group.sources.forEach(source => rejected(source, error)); continue;
+          group.sources.forEach(source => rejected(source, error, group)); continue;
         }
         group.sources.forEach(hooks.submitted);
       } else {
@@ -53,7 +53,7 @@ export async function executeWorkflow(plan: ExecutionPlan, hooks: WorkflowHooks)
           hooks.submitted(source);
         } catch (error) {
           if (hooks.signal.aborted || !fileRejection(error)) throw error;
-          rejected(source, error);
+          rejected(source, error, group);
         }
         if (state.next < group.sources.length) waiting.push(state);
       }
