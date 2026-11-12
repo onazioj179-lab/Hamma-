@@ -19,6 +19,13 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 
 ## Processor stress evidence
 
+Browser job admission now reads upload metadata as a batch and hashes outside
+the shared scheduler lock. It rechecks queue limits and upload availability
+before saving the job. A 256-file admission test paused hashing, completed a
+concurrent history request, then verified every member of the resulting ZIP.
+The submission still carries an array of upload IDs. Disk-backed browser
+manifests and bounded worker input traversal remain open.
+
 The Windows loopback run completed 48 jobs across 16 concurrent guest sessions in
 62.14 seconds. It verified 32 ZIP/gzip downloads and their restored bytes,
 range responses, duplicate submissions, and owner isolation. All 16 corrupt
