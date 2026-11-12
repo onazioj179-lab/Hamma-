@@ -19,6 +19,14 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 
 ## Processor stress evidence
 
+Large ZIP and TAR jobs now store input snapshots in ordered SQLite rows.
+Workers read up to 100 rows at a time, and scheduler and progress records
+carry only the input count. Existing inline records still run. The 256-file
+test exercises both ZIP and TAR.GZ and verifies every restored member.
+Admission still assembles the input list before saving it. Archive name
+registries, ZIP codec metadata, and standard output manifests still scale
+with the member count.
+
 Browser job admission now reads upload metadata as a batch and hashes outside
 the shared scheduler lock. It rechecks queue limits and upload availability
 before saving the job. A 256-file admission test paused hashing, completed a
