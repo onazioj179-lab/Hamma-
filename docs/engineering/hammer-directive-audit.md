@@ -11,13 +11,21 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 ## HAMMA web backlog
 
 1. **Verify selection recovery under load.** The workspace saves unstarted selections as project metadata, prompts for original files, and pages those selections alongside upload checkpoints. Exercise mixed batches with interrupted and completed uploads at workload scale.
-2. **Scale browser jobs.** Local indexed TAR jobs have disk-backed manifests and Files & History can page their verified outputs. Browser uploads still need disk-backed admission. Extend fairness testing to multiple owners under sustained pressure and test per-file retry under sustained load.
+2. **Scale browser jobs.** Browser submissions above 100 uploads stage their selection in SQLite pages and submit by reference. The processor still materializes the sealed selection and job input list, and browser folder discovery retains its source list. Extend bounded traversal through the worker and validate multi-owner scheduling and per-file retry under sustained load.
 3. **Validate physical devices.** Test mobile and foldable layouts, folder picking, touch, keyboard access, reduced motion, and recovery on real devices.
 4. **Isolate processing workers.** Enforce filesystem and network isolation, verify tenant boundaries, and expand dependency advisories, SBOM coverage, and fuzz tests.
 5. **Expand format support.** Verify archive interoperability and add encryption, split and join, broader codec coverage, and isolated PDF and Office conversions. Check decoded bytes, format fidelity, and advertised capabilities.
 6. **Validate production operations.** Test rollback, migration, retention, and monitoring in the target environment. Distributed testing requires authorized compute and object storage.
 
 ## Processor stress evidence
+
+Large ZIP and TAR jobs now store input snapshots in ordered SQLite rows.
+Workers read up to 100 rows at a time, and scheduler and progress records
+carry only the input count. Existing inline records still run. The 256-file
+test exercises both ZIP and TAR.GZ and verifies every restored member.
+Admission still assembles the input list before saving it. Archive name
+registries, ZIP codec metadata, and standard output manifests still scale
+with the member count.
 
 Browser job admission now reads upload metadata as a batch and hashes outside
 the shared scheduler lock. It rechecks queue limits and upload availability
