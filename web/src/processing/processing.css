@@ -118,7 +118,3 @@
   .source-row { gap:8px; }
   .source-row > svg { flex-shrink:0; }
 }
-.universal-picker { display:inline-block; max-width:100%; }
-.universal-picker summary { cursor:pointer; list-style:none; min-height:44px; }
-.universal-picker summary::-webkit-details-marker { display:none; }
-.universal-picker[open] .button-row { margin-top:10px; justify-content:center; flex-wrap:wrap; }

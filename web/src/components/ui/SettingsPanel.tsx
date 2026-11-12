@@ -75,13 +75,7 @@ export function SettingsPanel({ section, onSectionChange, busy, onHistory }: Pro
   return (
     <div className="settings-page">
       <div className="page-heading">
-        <div>
-          <p className="eyebrow">MAKE IT YOURS</p>
-          <h1>{section === 'about' ? 'About HAMMA' : 'Settings'}</h1>
-          <p className="page-description">
-            Appearance, downloads, privacy, and storage.
-          </p>
-        </div>
+        <h1>{section === 'about' ? 'About HAMMA' : 'Settings'}</h1>
       </div>
       <nav className="settings-tabs" aria-label="Settings sections">
         {(['general', 'privacy', 'storage', 'about'] as const).map((item) => (

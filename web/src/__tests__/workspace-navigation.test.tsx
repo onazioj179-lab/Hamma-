@@ -104,7 +104,7 @@ it('opens real account controls while retaining browser outputs across navigatio
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ authenticated: false, credentialsAllowed: true, account: null, billingEnabled: false, plan: { tier: 'guest', historyRecords: 500, maxQueuedJobs: 100, maxConcurrentJobs: 1, maxUploadFiles: 5000, maxInputBytes: 1e9, maxStorageBytes: 1e10 } }) })));
   await act(async () => button('Account').click());
   expect(host.querySelector('#account-title')?.textContent).toBe('Account');
-  expect(host.textContent).toContain('A place for your files. A sign-in that stays simple.');
+  expect(host.querySelector('input[autocomplete="username"]')).not.toBeNull();
   expect(host.querySelector('input[autocomplete="current-password"]')).not.toBeNull();
   await act(async () => button('Files & History').click());
   expect(host.querySelector('a[download="real.spk"]')?.getAttribute('href')).toBe('blob:current');
