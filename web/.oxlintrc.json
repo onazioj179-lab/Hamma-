@@ -1,0 +1,12 @@
+{
+  "categories": {
+    "correctness": "off"
+  },
+  "rules": {
+    "eslint/no-constant-binary-expression": "error",
+    "eslint/no-debugger": "error",
+    "eslint/no-duplicate-case": "error",
+    "eslint/no-sparse-arrays": "error",
+    "eslint/no-unreachable": "error"
+  }
+}

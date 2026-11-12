@@ -7,7 +7,7 @@ browser engine and optional Rust API remain separate.
 
 ## Run
 
-Install Node.js 22.13+, Python 3.11+ (tested with 3.13), and optional FFmpeg and FFprobe
+Install Node.js 22+, Python 3.11+ (tested with 3.13), and optional FFmpeg and FFprobe
 on PATH. No Python packages or AI API keys are required. From the repository:
 
 ```sh
