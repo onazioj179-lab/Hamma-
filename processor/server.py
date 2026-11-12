@@ -922,6 +922,10 @@ def handler(service):
             # No filenames, signed URLs, cookies, or query strings in access logs.
             LOG.debug("HTTP %s", self.command)
 
+        def end_headers(self):
+            self.response_started = True
+            super().end_headers()
+
         def send(self, status, value, retry_after=None):
             data = json.dumps(value, ensure_ascii=True).encode()
             self.send_response(status)
@@ -1657,21 +1661,30 @@ def handler(service):
                     self.wfile.write(chunk)
                     remaining -= len(chunk)
 
+        def send_failure(self, status, message, retry_after=None):
+            if getattr(self, "response_started", False):
+                self.close_connection = True
+                return
+            try:
+                self.send(status, {"error": message}, retry_after)
+            except (ConnectionError, TimeoutError):
+                self.close_connection = True
+
         def handle_request(self):
             try:
                 self.route()
             except (HTTPError, AccountError, ProjectError) as error:
-                self.send(error.status, {"error": error.message}, error.retry_after)
+                self.send_failure(error.status, error.message, error.retry_after)
             except (ValueError, TypeError, KeyError, ProcessingError):
-                self.send(400, {"error": "Invalid request"})
-            except (BrokenPipeError, ConnectionResetError, TimeoutError):
-                pass
+                self.send_failure(400, "Invalid request")
+            except (ConnectionError, TimeoutError):
+                self.close_connection = True
             except OSError:
                 LOG.exception("Storage operation failed")
-                self.send(507, {"error": "Storage unavailable"})
+                self.send_failure(507, "Storage unavailable")
             except Exception:
                 LOG.exception("Request failed")
-                self.send(500, {"error": "Request failed"})
+                self.send_failure(500, "Request failed")
 
         do_GET = do_POST = do_PUT = do_DELETE = do_HEAD = handle_request
 
