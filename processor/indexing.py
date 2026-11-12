@@ -60,15 +60,19 @@ class DirectoryIndex:
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             count = int(db.execute("SELECT value FROM metadata WHERE key='entry_count'").fetchone()[0])
-            for path, kind, size, mtime, error in rows:
-                exists = db.execute('SELECT 1 FROM entries WHERE path=?', (path,)).fetchone()
-                if not exists:
-                    if count >= self.max_entries:
-                        raise IndexQuotaError('Discovery entry quota reached; raise quota to resume')
-                    count += 1
-                db.execute('INSERT INTO entries(path,kind,size,mtime_ns,error) VALUES (?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET kind=excluded.kind,size=excluded.size,mtime_ns=excluded.mtime_ns,error=excluded.error', (path, kind, size, mtime, error))
-                if kind == 'directory':
-                    db.execute('INSERT OR IGNORE INTO frontier(path) VALUES (?)', (path,))
+            inserted = db.executemany(
+                'INSERT INTO entries(path,kind,size,mtime_ns,error) VALUES (?,?,?,?,?) ON CONFLICT(path) DO NOTHING',
+                rows,
+            ).rowcount
+            if inserted and count + inserted > self.max_entries:
+                raise IndexQuotaError('Discovery entry quota reached; raise quota to resume')
+            count += inserted
+            if inserted != len(rows):
+                # Replay updates metadata without changing entry IDs.
+                db.executemany('UPDATE entries SET kind=?,size=?,mtime_ns=?,error=? WHERE path=?',
+                               [(kind, size, mtime, error, path) for path, kind, size, mtime, error in rows])
+            db.executemany('INSERT OR IGNORE INTO frontier(path) VALUES (?)',
+                           [(path,) for path, kind, *_ in rows if kind == 'directory'])
             db.execute("UPDATE metadata SET value=? WHERE key='entry_count'", (str(count),))
         self.checkpoint()
 

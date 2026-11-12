@@ -58,6 +58,7 @@ afterEach(async () => {
   host.remove();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  window.history.replaceState(null, '', '/');
 });
 const button = (name: string) =>
   Array.from(host.querySelectorAll('button')).find(
@@ -140,4 +141,21 @@ it('keeps all pages usable when browser storage reads and writes are denied', as
     await act(async () => button(name).click());
     expect(host.querySelector('main')?.textContent).not.toBe('');
   }
+});
+
+it('restores settings links on reload and follows browser history', async () => {
+  await act(async () => button('Settings').click());
+  await act(async () => button('Privacy').click());
+  expect(window.location.search).toBe('?view=settings&section=privacy');
+
+  await act(async () => root.unmount());
+  root = createRoot(host);
+  await act(async () => root.render(<App />));
+  expect(host.querySelector('input[role=switch]')).not.toBeNull();
+
+  await act(async () => {
+    window.history.replaceState(null, '', '/?view=overview');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  });
+  expect(button('Overview').getAttribute('aria-current')).toBe('page');
 });
