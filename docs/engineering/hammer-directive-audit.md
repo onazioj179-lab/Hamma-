@@ -29,7 +29,7 @@ This workload covers small HTTP uploads and downloads. It leaves sustained
 mixed-project fairness and browser recovery at workload scale open.
 
 The indexed TAR.GZ benchmark independently verified 6,000 unique files
-(49,152,000 input bytes) and six directories. Discovery, packing, and internal
+(49,152,000 input bytes). The manifest reported 6,006 entries. Discovery, packing, and internal
 verification took 374.77 seconds and peaked at 2,616,340 bytes of traced Python
 allocations. The timing overlapped the HTTP workload and has no matching
 before/after baseline. Tracing excludes SQLite, native memory, and OS cache.
