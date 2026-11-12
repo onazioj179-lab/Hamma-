@@ -1,3 +1,4 @@
+import errno
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
@@ -63,6 +64,26 @@ class ServerTests(unittest.TestCase):
                     self.assertEqual(caught.exception.code, 400)
                     self.assertIn("error", json.loads(caught.exception.read()))
         self.assertIn("id", self.upload())
+
+    def test_upload_retries_at_last_acknowledged_offset_after_disk_fills(self):
+        source = self.call("/uploads", {"name": "resume.txt", "size": 6}, "POST")
+        path = "/uploads/" + source["id"]
+        self.call(path, b"abc", "PUT", {"Upload-Offset": "0"}, raw=True)
+
+        def partial_write(pending, stream, _length):
+            stream.write(pending.read(1))
+            raise OSError(errno.ENOSPC, "injected disk exhaustion")
+
+        with patch("processor.server.shutil.copyfileobj", side_effect=partial_write):
+            self.assert_status(507, lambda: self.call(path, b"def", "PUT", {"Upload-Offset": "3"}, raw=True))
+        self.assertEqual(self.call(path)["offset"], 3)
+        self.call(path, b"def", "PUT", {"Upload-Offset": "3"}, raw=True)
+
+        completed = self.execute(self.job(source))
+        self.assertEqual(completed["state"], "completed", completed)
+        downloaded = self.call(completed["download"].removeprefix("/api/process"), raw=True)
+        with zipfile.ZipFile(io.BytesIO(downloaded)) as archive:
+            self.assertEqual(archive.read("resume.txt"), b"abcdef")
 
     def test_conversion_quality_is_enforced_before_queueing_and_bound_to_request_identity(self):
         source = self.upload()
