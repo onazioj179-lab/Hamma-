@@ -57,3 +57,17 @@ it('persists grouped choices and compares them independently of key insertion or
   await recovery.save('default', { ...defaultProjectSettings, groupActions: { png: 'convert:jpg' } });
   expect(JSON.parse(fetch.mock.calls[1][1].body as string).revision).toBe(1);
 });
+
+it('saves a ZIP profile change on a project created before profile persistence', async () => {
+  const fetch = vi.fn(async (_url: string, init: RequestInit) => {
+    const body = JSON.parse(init.body as string);
+    return response({ id: 'default', revision: body.revision + 1, settings: body.settings });
+  });
+  vi.stubGlobal('fetch', fetch);
+  const recovery = new ProjectRecovery();
+  await recovery.save('default', defaultProjectSettings);
+  await recovery.save('default', { ...defaultProjectSettings, zipProfile: 'maximum' });
+  await recovery.save('default', { ...defaultProjectSettings, zipProfile: 'maximum' });
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(recovery.get('default')?.settings.zipProfile).toBe('maximum');
+});

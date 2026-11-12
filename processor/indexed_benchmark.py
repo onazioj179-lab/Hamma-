@@ -53,11 +53,14 @@ def main():
             if record['state'] != 'completed':
                 raise RuntimeError(record.get('error', 'Processing failed'))
             archive_path = service.store.folder(owner, job['id']) / record['outputFile']
+            seen = bytearray(args.files)
             count = 0
             with tarfile.open(archive_path, 'r|*') as archive:
                 while info := archive.next():
                     if info.isfile():
                         number = int(Path(info.name).stem.removeprefix('file-'))
+                        assert 0 <= number < args.files and not seen[number], info.name
+                        seen[number] = 1
                         assert info.name == f'folder-{number // 1000}/file-{number}.bin'
                         assert info.size == args.bytes_per_file
                         with archive.extractfile(info) as stream:
