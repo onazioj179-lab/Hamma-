@@ -10,7 +10,7 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 
 ## HAMMA web backlog
 
-1. **Preserve selections before upload.** Restore the selection list after reopening the project, prompt for original files as needed, and test recovery across mixed batches with unstarted, interrupted, and completed uploads.
+1. **Validate recovery across mixed batches.** Exercise unstarted, interrupted, and completed uploads together after reopening a project on supported browsers.
 2. **Scale browser jobs.** Connect folder discovery to disk-backed manifests. Test paged inputs and outputs, fairness across projects, and per-file retry under sustained load.
 3. **Validate physical devices.** Test mobile and foldable layouts, folder picking, touch, keyboard access, reduced motion, and recovery on real devices.
 4. **Isolate processing workers.** Enforce filesystem and network isolation, verify tenant boundaries, and expand dependency advisories, SBOM coverage, and fuzz tests.

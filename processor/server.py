@@ -207,6 +207,37 @@ class Store:
                 record["fileCount"] = row["file_count"] or 0
         return total, records
 
+    def history_overview(self, owner):
+        condition = "owner=? AND kind='job' AND coalesce(json_extract(data,'$.hidden'),0)=0"
+        with self.connect() as db:
+            db.execute("BEGIN")
+            metrics = db.execute(f"""
+                WITH jobs AS (
+                    SELECT json_extract(data,'$.state') AS state,
+                           json_extract(data,'$.operation') AS operation,
+                           json_extract(data,'$.inputSize') AS input_size,
+                           json_extract(data,'$.outputSize') AS output_size
+                    FROM records WHERE {condition}
+                )
+                SELECT count(*) AS total,
+                       count(*) FILTER (WHERE state='completed') AS completed,
+                       count(*) FILTER (WHERE state IN ('queued','processing','verifying','paused')) AS active,
+                       count(*) FILTER (WHERE state IN ('failed','interrupted')) AS failed,
+                       count(*) FILTER (WHERE state='completed' AND operation='compress') AS compressed,
+                       count(*) FILTER (WHERE state='completed' AND operation='extract') AS extracted,
+                       count(*) FILTER (WHERE state='completed' AND operation='convert') AS converted,
+                       count(output_size) FILTER (WHERE state='completed' AND operation='compress') AS measured,
+                       total(input_size) FILTER (WHERE state='completed' AND operation='compress' AND output_size IS NOT NULL) AS input,
+                       total(output_size) FILTER (WHERE state='completed' AND operation='compress') AS output
+                FROM jobs
+            """, (owner,)).fetchone()
+            rows = db.execute(f"""
+                SELECT json_remove(data,'$.inputs','$.manifest','$.outputFile','$.filesCleaned','$.errorInfo.fileIds') AS data,
+                       coalesce(json_extract(data,'$.fileCount'),json_array_length(data,'$.inputs'),0) AS file_count
+                FROM records WHERE {condition} ORDER BY created DESC,id ASC LIMIT 5
+            """, (owner,)).fetchall()
+        return dict(metrics), [{**json.loads(row['data']), 'fileCount': row['file_count']} for row in rows]
+
     def trim_history(self, owner, limit=500):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -1042,7 +1073,7 @@ def handler(service):
                     raise HTTPError(400, str(error)) from error
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
-                return self.send(200, {"groupedWorkflows": True, "projectRecovery": True, "projectZipProfiles": True, "recoverableUploads": True, "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "tarVerification": True, "zipSelection": True, "archiveRepack": True, "officeInspection": True, "zipComments": True, "zipProfiles": list(ZIP_PROFILES), "actionRegistry": action_registry(), "conversions": media_targets(),
+                return self.send(200, {"groupedWorkflows": True, "projectRecovery": True, "projectZipProfiles": True, "recoverableUploads": True, "draftScope": hashlib.sha256(("hamma-draft:" + self.owner).encode()).hexdigest(), "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "tarVerification": True, "zipSelection": True, "archiveRepack": True, "officeInspection": True, "zipComments": True, "zipProfiles": list(ZIP_PROFILES), "actionRegistry": action_registry(), "conversions": media_targets(),
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
             if path == "/api/process/settings":
                 if method == "GET":
@@ -1299,6 +1330,9 @@ def handler(service):
                     service.store.trim_history(self.owner, limit=self.plan['historyRecords'])
                 LOG.info("Job queued: %s %s", record["id"], operation)
                 return self.send(202, service.public(self.owner, record))
+            if path == "/api/process/jobs/overview" and method == "GET":
+                metrics, jobs = service.store.history_overview(self.owner)
+                return self.send(200, {"metrics": metrics, "jobs": [service.public(self.owner, job) for job in jobs]})
             if path == "/api/process/jobs" and method == "GET":
                 query = parse_qs(url.query)
                 offset = max(0, int(query.get("offset", [0])[0]))

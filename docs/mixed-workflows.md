@@ -39,7 +39,10 @@ For an incomplete upload, choose **Select original** on the recovered file row,
 then run the action again. HAMMA checks the original file against the saved
 bytes and appends the remaining data. On plain HTTP connections where the browser
 cannot hash files, HAMMA sends the saved portion for comparison without writing
-it again. Add any files that never started uploading again from their originals.
+it again. The same browser restores files that never started uploading from
+the project selection saved in browser storage for up to 24 hours. Choose
+**Select original** to supply each file again. The browser stores filenames,
+sizes and selection state for this feature.
 
 ## Planner and executor boundaries
 
