@@ -157,7 +157,11 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
         const pending = draft.sources.filter(source => !existing.has(source.id) && !uploadedIds.has(source.id));
         return [...current, ...allocateSourcePaths(current, pending)];
       });
-      setSelected(previous => new Set([...previous, ...draft.selected, ...uploadedIds]));
+      const localIds = new Set(draft.sources.map(source => source.id));
+      const restoredSelection = result.sources
+        .filter(source => !source.pending || !localIds.has(source.id))
+        .map(source => source.id);
+      setSelected(previous => new Set([...previous, ...draft.selected, ...restoredSelection]));
       setSelectionKey(key);
       const complete = result.sources.filter(source => source.upload && !source.resume).length;
       const pending = result.sources.filter(source => source.pending).length;

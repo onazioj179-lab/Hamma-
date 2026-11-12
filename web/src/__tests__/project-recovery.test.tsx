@@ -188,6 +188,23 @@ it('restores an unstarted selection and requires the original before uploading',
   expect(localStorage.getItem('hamma-selection:test-owner:default')).toBeNull();
 });
 
+it('preserves a deselected browser draft when the processor also restores it', async () => {
+  caps.draftScope = 'test-owner';
+  caps.projectSelections = true;
+  saved = { id: 'default', revision: 1, created: 1, updated: 1, settings: defaultProjectSettings };
+  const draft = { id: 'b'.repeat(32), name: 'draft.txt', size: 3, directory: false };
+  selections = [draft];
+  localStorage.setItem('hamma-selection:test-owner:default', JSON.stringify({
+    expires: Date.now() + 60_000, sources: [draft], selected: [],
+  }));
+
+  await render();
+
+  const restored = host.querySelector<HTMLInputElement>('[aria-label="Select draft.txt"]');
+  expect(restored).not.toBeNull();
+  expect(restored?.checked).toBe(false);
+});
+
 it('lets the user remove a recovered entry whose upload has already expired', async () => {
   saved = { id: 'default', revision: 1, created: 1, updated: 1, settings: defaultProjectSettings };
   checkpoint = { id: 'a'.repeat(32), upload: uploadId, name: 'expired.txt', size: 3, directory: false };
