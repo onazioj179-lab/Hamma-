@@ -43,6 +43,7 @@ from .worker_limits import apply_windows_worker_limits, apply_worker_limits
 from .resources import available_memory, worker_capacity
 from .errors import describe_failure
 from .projects import Projects, ProjectError
+from .job_selections import JobSelections
 from .accounts import Accounts, AccountError, plan as account_plan
 from .catalog import FileCatalog
 from .capabilities import action_registry, inspect_headers, media_targets, single_file_archives
@@ -637,6 +638,7 @@ class Service:
         self.limits = limits or configured_limits()
         self.lock = threading.RLock()
         self.projects = Projects(self.store, self.limits)
+        self.job_selections = JobSelections(self.store, self.limits["files"])
         self.running = {}
         self.restart_until = 0
         self.stop = threading.Event()
@@ -741,6 +743,7 @@ class Service:
     def cleanup(self):
         self.oauth.cleanup()
         self.projects.cleanup()
+        self.job_selections.cleanup()
         now = time.time()
         jobs = self.store.expired_jobs(now)
         for owner, candidate in jobs:
@@ -1178,10 +1181,15 @@ def handler(service):
                 pending.seek(0)
                 with service.lock:
                     source = self.check_upload_chunk(upload_id, offset, length)
-                    with source.open("ab") as stream:
-                        shutil.copyfileobj(pending, stream, BLOCK)
-                        stream.flush()
-                        os.fsync(stream.fileno())
+                    try:
+                        with source.open("ab") as stream:
+                            shutil.copyfileobj(pending, stream, BLOCK)
+                            stream.flush()
+                            os.fsync(stream.fileno())
+                    except OSError:
+                        # A failed chunk must leave its last acknowledged offset intact.
+                        os.truncate(source, offset)
+                        raise
                     committed = source.stat().st_size
             return self.send(200, {"offset": committed})
 
@@ -1285,6 +1293,7 @@ def handler(service):
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
                 return self.send(200, {"liveJobPolling": True, "groupedWorkflows": True, "projectRecovery": True, "projectZipProfiles": True, "recoverableUploads": True,
+                                       "pagedJobSelections": True,
                                        "draftScope": hashlib.sha256(("hamma-draft:" + self.owner).encode()).hexdigest(),
                                        "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(),
                                        "inspection": True, "zipVerification": True, "tarVerification": True, "zipSelection": True,
@@ -1430,9 +1439,22 @@ def handler(service):
                         result = {"deleted": True}
                 if method in ("GET", "DELETE"):
                     return self.send(200, result)
+            selection_route = re.fullmatch(r'/api/process/job-selections/([a-f0-9]{32})', path)
+            if selection_route and method == 'PUT':
+                body = self.json_body()
+                offset = service.job_selections.append(
+                    self.owner, selection_route[1], body.get('projectId', 'default'),
+                    body.get('offset'), body.get('uploads'))
+                return self.send(200, {'offset': offset})
             if path == "/api/process/jobs" and method == "POST":
                 body = self.json_body()
                 ids = body.get("uploads")
+                if "selectionId" in body or "selectionCount" in body:
+                    if "uploads" in body:
+                        raise HTTPError(400, "Choose either uploads or a job selection")
+                    project = Projects.identifier(body.get('projectId', 'default'))
+                    ids = service.job_selections.seal(
+                        self.owner, body.get("selectionId"), project, body.get("selectionCount"))
                 operation, target = body.get("operation"), body.get("target")
                 if not isinstance(ids, list) or not ids or len(ids) > service.limits["files"] or not all(isinstance(i, str) for i in ids) or len(set(ids)) != len(ids):
                     raise HTTPError(400, "Invalid file selection")

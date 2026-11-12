@@ -13,7 +13,7 @@ import { SelectField } from '../ui/SelectField';
 import { ConfirmAction, type ConfirmationRequest } from '../ui/ConfirmAction';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowDownToLine, ArrowRightLeft, Check, ChevronLeft, ChevronRight, Download, File, FileArchive, FolderPlus, History, Loader2, Pause, Play, Plus, RefreshCw, Search, ShieldCheck, Trash2, X } from 'lucide-react';
-import { activeJob, droppedSources, jsonRequest, ProcessorError, request, requestId, randomId, upload, type Capability, type Job, type Retention, type Source } from '../../processing/client';
+import { activeJob, droppedSources, jsonRequest, stageJobSelection, ProcessorError, request, requestId, randomId, upload, type Capability, type Job, type Retention, type Source } from '../../processing/client';
 import { formatFileSize } from '../../utils/fileHelpers';
 import { accountChanging } from '../../processing/account';
 import { directoryPicker, readFolder } from '../../processing/folders';
@@ -479,7 +479,10 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
           const identity = planned ? [generation, projectId, uploads, group.operation, group.target, nested, conversionOptions]
             : compression ? [generation, projectId, group.sources.map(source => source.id), group.operation, group.target, ...Object.values(profiles), ...(archiveComment ? [['zipComment', archiveComment]] : [])]
             : [generation, projectId, sourcesByUpload.get(uploads[0]), group.operation, report || repack ? group.target : conversionTarget, nested, conversionOptions, ...(zipIndexes ? [zipIndexes] : [])];
-          await jsonRequest('/jobs', { ...(projectId === 'default' ? {} : { projectId }), uploads, operation: group.operation,
+          const jobInputs = capability.pagedJobSelections && uploads.length > 100
+            ? await stageJobSelection(projectId, uploads, controller.signal)
+            : { uploads };
+          await jsonRequest('/jobs', { ...(projectId === 'default' ? {} : { projectId }), ...jobInputs, operation: group.operation,
             target: group.target, ...(!compression ? { recursive: nested } : {}), ...conversionOptions, ...profiles, ...selection,
             ...(archiveComment ? { zipComment: archiveComment } : {}),
             ...(capability.projectRecovery ? { recoverable: true } : { requestId: await requestId(identity) }) }, 'POST', { signal: controller.signal });

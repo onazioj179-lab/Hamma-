@@ -5,6 +5,7 @@ export interface Capability {
   projectZipProfiles?: boolean;
   projectRecovery?: boolean;
   recoverableUploads?: boolean;
+  pagedJobSelections?: boolean;
   draftScope?: string;
   inspection?: boolean;
   zipVerification?: boolean;
@@ -80,6 +81,19 @@ export const jsonRequest = <T>(path: string, data: unknown, method = 'POST', ini
   request<T>(path, { ...init, method, headers: { 'Content-Type': 'application/json', ...init.headers }, body: JSON.stringify(data) });
 
 export const randomId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
+
+export async function stageJobSelection(projectId: string, uploads: string[], signal: AbortSignal) {
+  const selectionId = randomId();
+  for (let offset = 0; offset < uploads.length; offset += 100) {
+    const page = uploads.slice(offset, offset + 100);
+    const saved = await jsonRequest<{ offset: number }>(
+      `/job-selections/${selectionId}`, { projectId, offset, uploads: page }, 'PUT', { signal },
+    );
+    if (saved.offset !== offset + page.length) throw new Error('The processor did not save the full selection page.');
+  }
+  return { selectionId, selectionCount: uploads.length };
+}
+
 const requestKeys = new Map<string, string>();
 export async function requestId(parts: unknown[]): Promise<string> {
   const key = JSON.stringify(parts);

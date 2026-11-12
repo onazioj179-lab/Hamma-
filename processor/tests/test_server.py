@@ -1,3 +1,4 @@
+import errno
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
@@ -64,6 +65,26 @@ class ServerTests(unittest.TestCase):
                     self.assertEqual(caught.exception.code, 400)
                     self.assertIn("error", json.loads(caught.exception.read()))
         self.assertIn("id", self.upload())
+
+    def test_upload_retries_at_last_acknowledged_offset_after_disk_fills(self):
+        source = self.call("/uploads", {"name": "resume.txt", "size": 6}, "POST")
+        path = "/uploads/" + source["id"]
+        self.call(path, b"abc", "PUT", {"Upload-Offset": "0"}, raw=True)
+
+        def partial_write(pending, stream, _length):
+            stream.write(pending.read(1))
+            raise OSError(errno.ENOSPC, "injected disk exhaustion")
+
+        with patch("processor.server.shutil.copyfileobj", side_effect=partial_write):
+            self.assert_status(507, lambda: self.call(path, b"def", "PUT", {"Upload-Offset": "3"}, raw=True))
+        self.assertEqual(self.call(path)["offset"], 3)
+        self.call(path, b"def", "PUT", {"Upload-Offset": "3"}, raw=True)
+
+        completed = self.execute(self.job(source))
+        self.assertEqual(completed["state"], "completed", completed)
+        downloaded = self.call(completed["download"].removeprefix("/api/process"), raw=True)
+        with zipfile.ZipFile(io.BytesIO(downloaded)) as archive:
+            self.assertEqual(archive.read("resume.txt"), b"abcdef")
 
     def test_conversion_quality_is_enforced_before_queueing_and_bound_to_request_identity(self):
         source = self.upload()
@@ -423,6 +444,55 @@ class ServerTests(unittest.TestCase):
         owner = self.service.store.list(kind='job')[0][0]
         self.service.store.patch(owner, 'job', job['id'], fileExpires=0)
         self.assert_status(410, lambda: self.call(path + '?limit=1'))
+
+    def test_paged_job_selection_submits_a_verified_archive_and_fences_replays(self):
+        first = self.upload(b'first', 'first.txt')
+        owner = self.service.store.list(kind='upload')[0][0]
+        uploads = [first['id']]
+        names = ['first.txt']
+        for number in range(1, 201):
+            upload = f'{number:032x}'
+            name = f'input-{number}.txt'
+            folder = self.service.store.folder(owner, upload)
+            folder.mkdir(parents=True)
+            (folder / 'input').write_bytes(name.encode())
+            self.service.store.put(owner, 'upload', {'id': upload, 'created': time.time(),
+                'name': name, 'size': len(name), 'directory': False, 'expires': time.time() + 300})
+            uploads.append(upload)
+            names.append(name)
+
+        selection = 'd' * 32
+        path = '/job-selections/' + selection
+        request = {'selectionId': selection, 'selectionCount': len(uploads),
+                   'operation': 'compress', 'target': 'zip', 'requestId': 'e' * 64}
+        first_page = {'offset': 0, 'uploads': uploads[:100]}
+        self.assertEqual(self.call(path, first_page, 'PUT')['offset'], 100)
+        self.assertEqual(self.call(path, first_page, 'PUT')['offset'], 100)
+        self.assert_status(409, lambda: self.call('/jobs', request, 'POST'))
+        self.assert_status(409, lambda: self.call(path, {'offset': 100, 'uploads': [uploads[0]]}, 'PUT'))
+        self.assertEqual(self.call(path, {'offset': 100, 'uploads': uploads[100:200]}, 'PUT')['offset'], 200)
+        self.assertEqual(self.call(path, {'offset': 200, 'uploads': uploads[200:]}, 'PUT')['offset'], 201)
+        stranger = build_opener(HTTPCookieProcessor(CookieJar()))
+        self.assert_status(404, lambda: self.call('/jobs', request, 'POST', client=stranger))
+
+        job = self.call('/jobs', request, 'POST')
+        self.assertEqual(self.call('/jobs', request, 'POST')['id'], job['id'])
+        self.assert_status(409, lambda: self.call(path, {'offset': 201, 'uploads': ['f' * 32]}, 'PUT'))
+        self.assertEqual(self.call('/jobs')['total'], 1)
+        completed = self.execute(job)
+        self.assertEqual(completed['state'], 'completed')
+        output = self.call(completed['download'].removeprefix('/api/process'), raw=True)
+        with zipfile.ZipFile(io.BytesIO(output)) as archive:
+            self.assertEqual(archive.namelist(), names)
+            self.assertEqual(archive.read('first.txt'), b'first')
+            self.assertTrue(all(archive.read(name) == name.encode() for name in names[1:]))
+
+        with self.service.store.connect() as db:
+            db.execute('UPDATE job_selections SET expires=0 WHERE owner=? AND id=?', (owner, selection))
+        self.assert_status(410, lambda: self.call('/jobs', request, 'POST'))
+        self.service.job_selections.cleanup()
+        with self.service.store.connect() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM job_selection_items').fetchone()[0], 0)
 
     def test_batch_admission_keeps_other_requests_responsive_during_hashing(self):
         from processor.server import file_digest
