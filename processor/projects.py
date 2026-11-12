@@ -8,7 +8,7 @@ import re
 import time
 
 from .capabilities import inspect_headers
-from .engine import Context, detect, file_digest
+from .engine import Context, ZIP_PROFILES, detect, file_digest
 
 
 class ProjectError(Exception):
@@ -42,8 +42,11 @@ class Projects:
     def save(self, owner, project_id, body):
         self.identifier(project_id)
         settings = body.get('settings', DEFAULT_SETTINGS)
-        if not isinstance(settings, dict) or not set(DEFAULT_SETTINGS).issubset(settings) or set(settings) - set(DEFAULT_SETTINGS) - {'groupActions'}:
+        if not isinstance(settings, dict) or not set(DEFAULT_SETTINGS).issubset(settings) or set(settings) - set(DEFAULT_SETTINGS) - {'groupActions', 'zipProfile'}:
             raise ProjectError(400, 'Invalid project settings')
+        profile = settings.get('zipProfile', 'balanced')
+        if not isinstance(profile, str) or profile not in ZIP_PROFILES:
+            raise ProjectError(400, 'Invalid ZIP profile')
         group_actions = settings.get('groupActions', {})
         if (not isinstance(group_actions, dict) or len(group_actions) > 64 or
                 any(not isinstance(key, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', key) or
@@ -63,8 +66,9 @@ class Projects:
             previous = json.loads(row[0]) if row else None
             if expected != (previous['revision'] if previous else 0):
                 raise ProjectError(409, 'Project changed in another tab. Reconnect before saving.')
-            # Older clients cannot edit the optional grouped configuration.
-            # Omission preserves it; an explicit empty mapping clears it.
+            # Older clients omit optional settings they cannot edit.
+            if previous and 'zipProfile' not in settings and 'zipProfile' in previous['settings']:
+                settings = {**settings, 'zipProfile': previous['settings']['zipProfile']}
             if previous and 'groupActions' not in settings and 'groupActions' in previous['settings']:
                 settings = {**settings, 'groupActions': previous['settings']['groupActions']}
             if not previous and db.execute("SELECT count(*) FROM records WHERE owner=? AND kind='project'", (owner,)).fetchone()[0] >= 20:

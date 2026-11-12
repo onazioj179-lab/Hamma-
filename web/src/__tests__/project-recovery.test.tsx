@@ -13,7 +13,7 @@ let selections: { id: string; name: string; size: number; directory: boolean }[]
 let offset: number, chunkWrites: number, jobAttempts: number;
 let rejectJob: boolean;
 const uploadId = 'c'.repeat(32);
-const caps = { groupedWorkflows: true, projectRecovery: true, projectSelections: false, recoverableUploads: false, archives: ['zip'], conversions: [], version: 1, processing: 'local', limits: { files: 5000, input: 1e9, expanded: 1e9, seconds: 30 } };
+const caps = { groupedWorkflows: true, projectRecovery: true, projectSelections: false, recoverableUploads: false, draftScope: '', archives: ['zip'], conversions: [], version: 1, processing: 'local', limits: { files: 5000, input: 1e9, expanded: 1e9, seconds: 30 } };
 const ok = (data: unknown) => ({ ok: true, status: 200, json: async () => data });
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -21,6 +21,8 @@ beforeEach(() => {
   saved = undefined; checkpoint = undefined; offset = 0; chunkWrites = 0; jobAttempts = 0; rejectJob = true;
   caps.recoverableUploads = false;
   caps.projectSelections = false; selections = [];
+  caps.draftScope = '';
+  localStorage.clear();
   host = document.createElement('div'); document.body.append(host); root = createRoot(host);
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     const body = init?.body && typeof init.body === 'string' ? JSON.parse(init.body) : {};
@@ -141,7 +143,7 @@ it.each([false, true])('verifies saved bytes before resuming (SubtleCrypto=%s)',
     return initial(url, init);
   });
   await render();
-  expect(host.textContent).toContain('resume 1 incomplete upload');
+  expect(host.textContent).toContain('continue 1 upload');
   await act(async () => compress().click());
   expect(jobAttempts).toBe(0);
   const picker = host.querySelector<HTMLInputElement>('[aria-label="Select original file for resume.txt"]')!;
@@ -161,6 +163,29 @@ it.each([false, true])('verifies saved bytes before resuming (SubtleCrypto=%s)',
   expect(writer).toMatch(/^[a-f0-9]{32}$/);
   expect(jobAttempts).toBe(1);
   expect(chunkWrites).toBe(1);
+});
+
+it('restores an unstarted selection and requires the original before uploading', async () => {
+  caps.draftScope = 'test-owner';
+  await render();
+  const input = host.querySelector<HTMLInputElement>('[aria-label="Add files to queue"]')!;
+  const file = new File(['abc'], 'resume.txt');
+  Object.defineProperty(input, 'files', { value: [file] });
+  await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })));
+  await act(async () => root.unmount());
+  root = createRoot(host);
+  await render();
+  const picker = host.querySelector<HTMLInputElement>('[aria-label="Select original file for resume.txt"]')!;
+  expect(picker).toBeTruthy();
+  await act(async () => compress().click());
+  expect(chunkWrites).toBe(0);
+  Object.defineProperty(picker, 'files', { value: [file] });
+  await act(async () => picker.dispatchEvent(new Event('change', { bubbles: true })));
+  rejectJob = false;
+  await act(async () => compress().click());
+  expect(chunkWrites).toBe(1);
+  expect(jobAttempts).toBe(1);
+  expect(localStorage.getItem('hamma-selection:test-owner:default')).toBeNull();
 });
 
 it('lets the user remove a recovered entry whose upload has already expired', async () => {

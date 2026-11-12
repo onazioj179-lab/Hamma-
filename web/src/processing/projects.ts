@@ -1,14 +1,39 @@
 import { jsonRequest, ProcessorError, request, type Source } from './client';
 
 export interface ProjectSettings {
+  zipProfile?: string;
   groupActions?: Record<string, string>;
   target: string; conversion: string; qualityMode: 'lossless' | 'lossy';
   metadataPolicy: 'strip' | 'preserve'; recursive: boolean;
 }
 export interface SavedProject { id: string; created: number; updated: number; revision: number; settings: ProjectSettings }
 export const defaultProjectSettings: ProjectSettings = { target: 'zip', conversion: 'wav', qualityMode: 'lossless', metadataPolicy: 'strip', recursive: false };
+
+export function readSelection(key: string): { sources: Source[]; selected: string[] } {
+  try {
+    const draft = JSON.parse(localStorage.getItem(key) || 'null');
+    if (draft && draft.expires > Date.now() && Array.isArray(draft.sources) && Array.isArray(draft.selected)) {
+      return { sources: draft.sources.slice(0, 5000).map((source: Source) => ({ ...source, file: null })), selected: draft.selected.slice(0, 5000) };
+    }
+    localStorage.removeItem(key);
+  } catch { /* Browser storage may be unavailable. */ }
+  return { sources: [], selected: [] };
+}
+
+export function saveSelection(key: string, sources: Source[], selected: Set<string>) {
+  try {
+    const pending = sources.filter(source => !source.upload);
+    if (!pending.length) { localStorage.removeItem(key); return; }
+    localStorage.setItem(key, JSON.stringify({
+      expires: Date.now() + 86400000,
+      sources: pending.map(({ id, name, size, directory }) => ({ id, name, size, directory })),
+      selected: pending.filter(source => selected.has(source.id)).map(source => source.id),
+    }));
+  } catch { /* Browser storage may be unavailable or full. */ }
+}
 const sameSettings = (left: ProjectSettings, right: ProjectSettings) =>
   (Object.keys(defaultProjectSettings) as (keyof ProjectSettings)[]).every(key => left[key] === right[key]) &&
+  (left.zipProfile === undefined || left.zipProfile === (right.zipProfile ?? 'balanced')) &&
   JSON.stringify(Object.entries(left.groupActions || {}).sort()) === JSON.stringify(Object.entries(right.groupActions || {}).sort());
 
 /** One instance per owner. No file bytes, cookies or credentials in browser storage. */
@@ -33,7 +58,7 @@ export class ProjectRecovery {
   private async saveNow(id: string, settings: ProjectSettings, signal?: AbortSignal): Promise<SavedProject> {
     signal?.throwIfAborted();
     const previous = this.records.get(id);
-    if (previous && sameSettings(previous.settings, settings)) return previous;
+    if (previous && sameSettings(settings, previous.settings)) return previous;
     try {
       const record = await jsonRequest<SavedProject>('/projects/' + id, { settings, revision: previous?.revision || 0 }, 'PUT', { signal });
       this.records.set(id, record);
@@ -43,7 +68,7 @@ export class ProjectRecovery {
       if (error instanceof ProcessorError && error.status === 409) {
         const current = await request<SavedProject>('/projects/' + id, { signal });
         this.records.set(id, current);
-        if (sameSettings(current.settings, settings)) return current;
+        if (sameSettings(settings, current.settings)) return current;
       }
       throw error;
     }

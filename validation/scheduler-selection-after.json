@@ -1,0 +1,10 @@
+{
+  "projects": 20,
+  "retainedJobs": 5000,
+  "initialQueuedJobs": 300,
+  "dispatches": 100,
+  "medianSelectionMs": 15.002,
+  "p95SelectionMs": 26.281,
+  "fairRotationAndProjectFifoVerified": true,
+  "scope": "SQLite scheduler selection over synthetic metadata; excludes job execution and admission wait"
+}
