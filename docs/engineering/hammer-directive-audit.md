@@ -28,6 +28,13 @@ backlog of 64. See [the run report](../../validation/processor-stress-16-session
 This workload covers small HTTP uploads and downloads. It leaves sustained
 mixed-project fairness and browser recovery at workload scale open.
 
+The indexed TAR.GZ benchmark independently verified 6,000 unique files
+(49,152,000 input bytes) and six directories. Discovery, packing, and internal
+verification took 374.77 seconds and peaked at 2,616,340 bytes of traced Python
+allocations. The timing overlapped the HTTP workload and has no matching
+before/after baseline. Tracing excludes SQLite, native memory, and OS cache.
+See [the indexed payload report](../../validation/indexed-tar-6000-payload.json).
+
 ## Capability audit
 
 | Capability | Status | Implementation and remaining acceptance |
