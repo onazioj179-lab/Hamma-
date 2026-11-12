@@ -27,6 +27,7 @@ import socket
 from socketserver import TCPServer
 import subprocess
 import shutil
+import stat
 import sqlite3
 import tempfile
 import threading
@@ -110,9 +111,12 @@ class Store:
         finally:
             db.close()
 
-    def put(self, owner, kind, record, *, project_input=None):
+    def put(self, owner, kind, record, *, project_input=None, verified_uploads=()):
         with self.connect() as db:
             db.execute("INSERT OR REPLACE INTO records VALUES (?,?,?,?,?)", (record["id"], owner, kind, record["created"], json.dumps(record)))
+            if verified_uploads:
+                db.executemany("UPDATE records SET data=? WHERE owner=? AND kind='upload' AND id=?",
+                               [(json.dumps(upload), owner, upload["id"]) for upload in verified_uploads])
             if kind == "job":
                 self._sync_inputs(db, owner, record)
             if project_input is not None:
@@ -129,6 +133,24 @@ class Store:
         with self.connect() as db:
             row = db.execute("SELECT data FROM records WHERE id=? AND owner=? AND kind=?", (record_id, owner, kind)).fetchone()
         return json.loads(row[0]) if row else None
+
+    def get_uploads(self, owner, ids):
+        with self.connect() as db:
+            rows = db.execute("""
+                SELECT records.id, records.data
+                FROM json_each(?) AS selected
+                JOIN records ON records.owner=? AND records.kind='upload' AND records.id=selected.value
+            """, (json.dumps(ids), owner)).fetchall()
+        return {row["id"]: json.loads(row["data"]) for row in rows}
+
+    def count_available_uploads(self, owner, ids, now):
+        with self.connect() as db:
+            return db.execute("""
+                SELECT count(*)
+                FROM json_each(?) AS selected
+                JOIN records ON records.owner=? AND records.kind='upload' AND records.id=selected.value
+                WHERE json_extract(records.data,'$.expires')>?
+            """, (json.dumps(ids), owner, now)).fetchone()[0]
 
     def patch(self, owner, kind, record_id, *, expected_states=None, **updates):
         with self.connect() as db:
@@ -1302,24 +1324,24 @@ def handler(service):
                     validate_conversion_options(target if operation == 'convert' else None, quality_mode, metadata_policy)
                 except ValueError as error:
                     raise HTTPError(400, str(error)) from error
-                with service.lock:
-                    request_id = body.get("requestId")
-                    recoverable = body.get('recoverable', False)
-                    if type(recoverable) is not bool:
-                        raise HTTPError(400, 'Invalid recovery mode')
-                    if recoverable:
-                        service.projects.get(self.owner, project_id)
-                        identity = ['project-recovery-v1', project_id, sorted(ids), operation, target, bool(body.get('recursive')), quality_mode, metadata_policy]
-                        if zip_indexes is not None:
-                            identity.append(zip_indexes)
-                        if zip_profile != "balanced":
-                            identity.append(zip_profile)
-                        if zip_comment:
-                            identity.append(["zipComment", zip_comment])
-                        request_id = hashlib.sha256(json.dumps(identity, separators=(',', ':')).encode()).hexdigest()
-                    if request_id is not None and (not isinstance(request_id, str) or not re.fullmatch(r"[a-f0-9]{64}", request_id)):
-                        raise HTTPError(400, "Invalid request identifier")
-                    job_id = hashlib.sha256((self.owner + request_id).encode()).hexdigest()[:32] if request_id else secrets.token_hex(16)
+                request_id = body.get("requestId")
+                recoverable = body.get('recoverable', False)
+                if type(recoverable) is not bool:
+                    raise HTTPError(400, 'Invalid recovery mode')
+                if recoverable:
+                    service.projects.get(self.owner, project_id)
+                    identity = ['project-recovery-v1', project_id, sorted(ids), operation, target, bool(body.get('recursive')), quality_mode, metadata_policy]
+                    if zip_indexes is not None:
+                        identity.append(zip_indexes)
+                    if zip_profile != "balanced":
+                        identity.append(zip_profile)
+                    if zip_comment:
+                        identity.append(["zipComment", zip_comment])
+                    request_id = hashlib.sha256(json.dumps(identity, separators=(',', ':')).encode()).hexdigest()
+                if request_id is not None and (not isinstance(request_id, str) or not re.fullmatch(r"[a-f0-9]{64}", request_id)):
+                    raise HTTPError(400, "Invalid request identifier")
+                job_id = hashlib.sha256((self.owner + request_id).encode()).hexdigest()[:32] if request_id else secrets.token_hex(16)
+                def existing_job():
                     existing = service.store.get(self.owner, "job", job_id)
                     if existing:
                         existing_ids = [i['id'] for i in existing['inputs']]
@@ -1328,32 +1350,56 @@ def handler(service):
                             raise HTTPError(409, "Request identifier already used")
                         if recoverable:
                             service.projects.forget_uploads(self.owner, project_id, ids)
-                        return self.send(200, service.public(self.owner, existing))
+                    return existing
+
+                def check_queue_capacity():
                     if service.store.count(self.owner, states=(*ACTIVE, "paused")) >= self.plan['maxQueuedJobs']:
                         raise HTTPError(429, "Queue limit reached. Wait for jobs to finish or cancel queued jobs." + (" Sign in for a larger queue." if not self.account else ""))
                     if service.store.count(kind='job', states=(*ACTIVE, 'paused')) >= service.max_queued_jobs:
                         raise HTTPError(429, 'Processor queue full')
-                    inputs, seen = [], set()
-                    for upload_id in ids:
-                        record = service.store.get(self.owner, "upload", upload_id)
-                        if not record or record["expires"] <= time.time():
-                            raise HTTPError(404, "File unavailable")
-                        source = service.store.folder(self.owner, upload_id) / "input"
-                        if not source.is_file():
+
+                with service.lock:
+                    existing = existing_job()
+                    if existing:
+                        return self.send(200, service.public(self.owner, existing))
+                    check_queue_capacity()
+                uploads = service.store.get_uploads(self.owner, ids)
+
+                inputs, verified_uploads, seen = [], [], set()
+                for upload_id in ids:
+                    upload = uploads.get(upload_id)
+                    if not upload or upload["expires"] <= time.time():
+                        raise HTTPError(404, "File unavailable")
+                    source = service.store.folder(self.owner, upload_id) / "input"
+                    try:
+                        info = source.stat()
+                        if not stat.S_ISREG(info.st_mode):
                             raise HTTPError(410, "Upload expired or unavailable")
-                        if source.stat().st_size != record["size"]:
+                        if info.st_size != upload["size"]:
                             raise HTTPError(409, "Upload incomplete")
-                        if record["name"].casefold() in seen:
+                        name_key = upload["name"].casefold()
+                        if name_key in seen:
                             raise HTTPError(400, "Duplicate filename")
-                        seen.add(record["name"].casefold())
-                        if not record.get("sha256"):
+                        seen.add(name_key)
+                        if not upload.get("sha256"):
                             ctx = Context(source.parent, service.limits)
-                            record.update(file_digest(source, ctx), format=detect(source))
-                            service.store.put(self.owner, "upload", record)
-                        inputs.append({key: value for key, value in record.items() if key != "writerHash"})
-                    if operation != "compress" and inputs[0].get("directory"):
-                        raise HTTPError(400, "Choose a file")
+                            upload.update(file_digest(source, ctx), format=detect(source))
+                            verified_uploads.append(upload)
+                    except FileNotFoundError as error:
+                        raise HTTPError(410, "Upload expired or unavailable") from error
+                    inputs.append({key: value for key, value in upload.items() if key != "writerHash"})
+                if operation != "compress" and inputs[0].get("directory"):
+                    raise HTTPError(400, "Choose a file")
+
+                with service.lock:
+                    # Another request may have queued this job while hashing.
+                    existing = existing_job()
+                    if existing:
+                        return self.send(200, service.public(self.owner, existing))
+                    check_queue_capacity()
                     now = time.time()
+                    if service.store.count_available_uploads(self.owner, ids, now) != len(ids):
+                        raise HTTPError(410, "Upload expired or unavailable")
                     settings = service.defaults(self.owner)
                     retention = RETENTION[settings["historyRetention"]]
                     record = {"id": job_id, "projectId": project_id, "created": now, "name": inputs[0]["name"] if len(inputs) == 1 else f"{len(inputs)} files",
@@ -1370,7 +1416,7 @@ def handler(service):
                     if zip_comment:
                         record["zipComment"] = zip_comment
                     service.store.folder(self.owner, record["id"]).mkdir(mode=0o700, parents=True)
-                    service.store.put(self.owner, "job", record)
+                    service.store.put(self.owner, "job", record, verified_uploads=verified_uploads)
                     if recoverable:
                         service.projects.forget_uploads(self.owner, project_id, ids)
                     # Bound guest history independently of file retention.
