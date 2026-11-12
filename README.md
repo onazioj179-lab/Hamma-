@@ -13,7 +13,7 @@ Build and verification instructions: [SHANTE CORE](native/README.md).
 
 Double-click **Start HAMMA.cmd** in this folder (or the HAMMA desktop shortcut).
 It builds changed app files, starts the local processor in the background, and
-opens the browser. Reopening it reuses the running server. Node.js 22.12+ and
+opens the browser. Reopening it reuses the running server. Node.js 22.13+ and
 Python 3.11+ must already be installed; the first launch installs npm dependencies.
 
 The default address is **http://127.0.0.1:5014**. Phones and other computers on
@@ -42,7 +42,7 @@ npm ci
 npm run start:local
 ```
 
-Open http://127.0.0.1:5010. Requires Node.js 22.12+, Python 3.11+, and optional
+Open http://127.0.0.1:5010. Requires Node.js 22.13+, Python 3.11+, and optional
 FFmpeg/FFprobe for media conversion. Jobs run in local background processes.
 Standard ZIP/TAR/GZIP/BZIP2/XZ operations, verified downloads, resumable uploads,
 retry/cancel controls and 500-record guest history are implemented. The browser SPK engine is available through the same Workspace file picker.
