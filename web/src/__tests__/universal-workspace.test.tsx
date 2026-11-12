@@ -712,8 +712,10 @@ it('opens a standard job manifest lazily and requests the next page by cursor', 
     details.open = true;
     details.dispatchEvent(new Event('toggle'));
   });
-  expect(details.textContent).toContain('1–50 of 51');
+  expect(details.querySelectorAll('li')).toHaveLength(50);
+  expect(details.textContent).toContain('of 51');
   await act(async () => button('Next files').click());
-  expect(details.textContent).toContain('last.txt · 20 bytes');
+  expect(details.textContent).toContain('last.txt');
+  expect(details.textContent).toContain('20 bytes');
   expect(manifestRequests.map(url => new URL(url, window.location.href).searchParams.get('after'))).toEqual(['0', '50']);
 });
