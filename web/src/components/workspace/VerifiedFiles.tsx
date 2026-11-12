@@ -4,7 +4,7 @@ import { request } from '../../processing/client';
 const pageSize = 50;
 
 interface ManifestPage {
-  files: { id: number; name: string; directory: number; size: number }[];
+  files: { id: number; name: string; directory?: boolean | number; size: number }[];
   total: number;
   nextCursor: string | null;
 }

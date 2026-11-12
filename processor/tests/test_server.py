@@ -296,6 +296,31 @@ class ServerTests(unittest.TestCase):
         self.assertNotIn("outputFile", job)
         self.assertNotIn(str(self.service.store.root), json.dumps(job))
 
+    def test_standard_manifest_pages_match_verified_archive_and_respect_expiry(self):
+        first = self.upload(b'first payload', 'first.txt')
+        second = self.upload(b'second payload', 'second.txt')
+        job = self.execute(self.call('/jobs', {'uploads': [first['id'], second['id']],
+                                              'operation': 'compress', 'target': 'zip'}, 'POST'))
+        self.assertEqual(job['state'], 'completed')
+        self.assertEqual(job['manifestStorage'], 'inline')
+        self.assertEqual(self.call('/jobs')['jobs'][0]['manifestStorage'], 'inline')
+        path = '/jobs/' + job['id'] + '/manifest'
+        full = self.call(path)
+        page = self.call(path + '?limit=1')
+        self.assertEqual(page['total'], 2)
+        self.assertEqual(page['sha256'], full['sha256'])
+        self.assertEqual(page['files'], [{**full['files'][0], 'id': 1}])
+        last = self.call(path + '?limit=1&after=' + page['nextCursor'])
+        self.assertEqual(last['files'], [{**full['files'][1], 'id': 2}])
+        self.assertIsNone(last['nextCursor'])
+        self.assert_status(400, lambda: self.call(path + '?after=-1'))
+        self.assert_status(400, lambda: self.call(path + '?after=9223372036854775807'))
+        stranger = build_opener(HTTPCookieProcessor(CookieJar()))
+        self.assert_status(404, lambda: self.call(path + '?limit=1', client=stranger))
+        owner = self.service.store.list(kind='job')[0][0]
+        self.service.store.patch(owner, 'job', job['id'], fileExpires=0)
+        self.assert_status(410, lambda: self.call(path + '?limit=1'))
+
     def test_listener_starts_without_reverse_dns(self):
         with patch("socket.getfqdn", side_effect=AssertionError("unexpected reverse DNS")):
             with LocalHTTPServer(("127.0.0.1", 0), handler(self.service)) as listener:
