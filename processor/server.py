@@ -1073,10 +1073,15 @@ def handler(service):
                 pending.seek(0)
                 with service.lock:
                     source = self.check_upload_chunk(upload_id, offset, length)
-                    with source.open("ab") as stream:
-                        shutil.copyfileobj(pending, stream, BLOCK)
-                        stream.flush()
-                        os.fsync(stream.fileno())
+                    try:
+                        with source.open("ab") as stream:
+                            shutil.copyfileobj(pending, stream, BLOCK)
+                            stream.flush()
+                            os.fsync(stream.fileno())
+                    except OSError:
+                        # A failed chunk must leave its last acknowledged offset intact.
+                        os.truncate(source, offset)
+                        raise
                     committed = source.stat().st_size
             return self.send(200, {"offset": committed})
 
