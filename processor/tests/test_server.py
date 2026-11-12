@@ -328,6 +328,37 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(response.status, 404)
         self.assertFalse(self.service.store.folder(owner, record["id"]).exists())
 
+    def test_job_verification_allows_health_and_rechecks_deleted_input(self):
+        from processor.engine import detect
+
+        upload = self.upload()
+        path = "/uploads/" + upload["id"]
+        verified = threading.Event()
+        release = threading.Event()
+
+        def pause_verification(source):
+            format_name = detect(source)
+            verified.set()
+            if not release.wait(10):
+                raise TimeoutError("Test did not release verification")
+            return format_name
+
+        with (patch("processor.server.detect", side_effect=pause_verification),
+              ThreadPoolExecutor(max_workers=1) as executor):
+            pending = executor.submit(self.job, upload)
+            try:
+                self.assertTrue(verified.wait(5))
+                with closing(HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)) as client:
+                    client.request("GET", "/api/process/health")
+                    with client.getresponse() as response:
+                        self.assertEqual(response.status, 200)
+                        self.assertEqual(json.load(response)["activeJobs"], 0)
+                self.assertEqual(self.call(path, method="DELETE"), {"deleted": True})
+            finally:
+                release.set()
+            self.assert_status(410, lambda: pending.result(timeout=5))
+        self.assertEqual(self.call("/jobs")["total"], 0)
+
     def test_retry_cannot_bypass_queue_capacity(self):
         job = self.job()
         owner = self.service.store.list()[0][0]

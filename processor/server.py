@@ -1476,7 +1476,6 @@ def handler(service):
                 if type(recoverable) is not bool:
                     raise HTTPError(400, 'Invalid recovery mode')
                 if recoverable:
-                    service.projects.get(self.owner, project_id)
                     identity = ['project-recovery-v1', project_id, sorted(ids), operation, target, bool(body.get('recursive')), quality_mode, metadata_policy]
                     if zip_indexes is not None:
                         identity.append(zip_indexes)
@@ -1489,6 +1488,8 @@ def handler(service):
                     raise HTTPError(400, "Invalid request identifier")
                 job_id = hashlib.sha256((self.owner + request_id).encode()).hexdigest()[:32] if request_id else secrets.token_hex(16)
                 def existing_job():
+                    if recoverable:
+                        service.projects.get(self.owner, project_id)
                     existing = service.store.get(self.owner, "job", job_id)
                     if existing:
                         existing_ids = [i['id'] for i in service.store.iter_job_inputs(self.owner, existing)]
