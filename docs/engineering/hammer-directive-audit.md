@@ -10,12 +10,20 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 
 ## HAMMA web backlog
 
-1. **Validate recovery across mixed batches.** Exercise unstarted, interrupted, and completed uploads together after reopening a project on supported browsers.
+1. **Validate recovery across mixed batches on physical devices.** Automated browser tests merge an unstarted selection with 105 processor checkpoints across two pages. The processor test covers 106 checkpoints, including a partial upload that disappears during the read. Real device recovery and sustained per-file retry remain open.
 2. **Scale browser jobs.** Local indexed TAR jobs have disk-backed manifests and Files & History can page their verified outputs. Browser uploads still need disk-backed admission. Test fairness across projects and per-file retry under sustained load.
 3. **Validate physical devices.** Test mobile and foldable layouts, folder picking, touch, keyboard access, reduced motion, and recovery on real devices.
 4. **Isolate processing workers.** Enforce filesystem and network isolation, verify tenant boundaries, and expand dependency advisories, SBOM coverage, and fuzz tests.
 5. **Expand format support.** Verify archive interoperability and add encryption, split and join, broader codec coverage, and isolated PDF and Office conversions. Check decoded bytes, format fidelity, and advertised capabilities.
 6. **Validate production operations.** Test rollback, migration, retention, and monitoring in the target environment. Distributed testing requires authorized compute and object storage.
+
+The [original scheduler query report](../../validation/scheduler-selection-before.json)
+recorded 8,130.924 ms median and 9,659.665 ms p95 for 100 selections across
+20 projects. Both variants preserved rotation and FIFO. The indexed run in
+[PR #53](https://github.com/onazioj179-lab/Hamma-/pull/53) measured 15.002 ms
+median and 26.281 ms p95 on the same synthetic fixture. The runs overlapped
+other workloads, so the timings are observations rather than a controlled
+speedup measurement.
 
 ## Processor stress evidence
 

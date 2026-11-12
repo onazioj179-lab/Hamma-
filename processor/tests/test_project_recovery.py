@@ -1,6 +1,7 @@
 from http.cookiejar import CookieJar
 import hashlib
 import json
+from pathlib import Path
 from urllib.request import build_opener, HTTPCookieProcessor
 import time
 import unittest
@@ -159,6 +160,49 @@ class ProjectRecoveryRoutes(unittest.TestCase):
         self.assertEqual(completed['state'], 'completed')
         other = self.call('/jobs', {**body, 'target': 'tar'}, 'POST')
         self.assertNotEqual(other['id'], first['id'])
+
+    def test_recovery_pages_mix_cached_complete_partial_and_disappearing_inputs(self):
+        self.save()
+        owner = self.service.store.list(kind='project')[0][0]
+        store = self.service.store
+        complete_ids = set()
+        partial_paths = set()
+        for number in range(1, 107):
+            source_id = f'{number:032x}'
+            upload_id = f'{number + 1000:032x}'
+            path = store.folder(owner, upload_id) / 'input'
+            path.parent.mkdir(parents=True)
+            data = b'\x89PNG\r\n\x1a\nfixture'
+            path.write_bytes(data)
+            upload = {'id': upload_id, 'created': 1, 'expires': time.time() + 120,
+                      'name': f'file-{number}.png', 'directory': False, 'size': len(data)}
+            if number < 105:
+                complete_ids.add(upload_id)
+                upload.update(sha256=hashlib.sha256(data).hexdigest(), format='png')
+            else:
+                upload['size'] += 1
+                partial_paths.add(path)
+            store.put(owner, 'upload', upload, project_input=('default', source_id))
+
+        original_open = Path.open
+        vanished = max(partial_paths)
+
+        def open_for_recovery(path, *args, **kwargs):
+            if path.name == 'input':
+                self.assertNotIn(path.parent.name, complete_ids)
+                if path == vanished:
+                    raise FileNotFoundError(path)
+            return original_open(path, *args, **kwargs)
+
+        url = '/projects/default/inputs?includeIncomplete=1'
+        with patch.object(Path, 'open', open_for_recovery):
+            first = self.call(url)
+            second = self.call(url + '&after=' + first['nextCursor'])
+        self.assertEqual((first['scanned'], second['scanned'], second['unavailable']), (100, 6, 1))
+        sources = first['sources'] + second['sources']
+        self.assertEqual(len(sources), 105)
+        self.assertTrue(all(source['inspection']['format'] == 'png' for source in sources))
+        self.assertEqual(sum(source['uploaded'] < source['size'] for source in sources), 1)
 
     def test_keyset_recovery_does_not_skip_inputs_after_an_earlier_removal(self):
         self.save()
