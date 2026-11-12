@@ -1,5 +1,5 @@
 import type { RecentArchive, SessionOutput } from '../store/app';
-import { activeJob, request, type Job } from './client';
+import { activeJob, ProcessorError, request, type Job } from './client';
 
 export interface ActivityJob extends Job { localId?: string; savedToDevice?: boolean; historyHidden?: boolean }
 
@@ -31,6 +31,39 @@ export async function refreshJobHistory(previous: JobHistorySnapshot | null, sig
   // Signed links last at most an hour and can expire earlier with their file.
   const refreshAt = records.reduce((next, job) => job.downloadAvailable ? Math.min(next, job.fileExpires) : next, live.now + 1800);
   return { revision: live.revision, records, refreshAt };
+}
+
+export function summarizeActivity(jobs: Job[]) {
+  const completed = jobs.filter(job => job.state === 'completed');
+  const compressed = completed.filter(job => job.operation === 'compress');
+  const measured = compressed.filter(job => job.outputSize !== null);
+  return {
+    total: jobs.length,
+    completed: completed.length,
+    active: jobs.filter(activeJob).length,
+    failed: jobs.filter(job => job.state === 'failed' || job.state === 'interrupted').length,
+    compressed: compressed.length,
+    extracted: completed.filter(job => job.operation === 'extract').length,
+    converted: completed.filter(job => job.operation === 'convert').length,
+    measured: measured.length,
+    input: measured.reduce((sum, job) => sum + job.inputSize, 0),
+    output: measured.reduce((sum, job) => sum + job.outputSize!, 0),
+  };
+}
+
+export interface ActivityOverview {
+  metrics: ReturnType<typeof summarizeActivity>;
+  jobs: Job[];
+}
+
+export async function loadOverview(signal?: AbortSignal): Promise<ActivityOverview> {
+  try {
+    return await request<ActivityOverview>('/jobs/overview', { signal });
+  } catch (error) {
+    if (!(error instanceof ProcessorError) || error.status !== 404) throw error;
+    const jobs = await loadJobs(signal);
+    return { metrics: summarizeActivity(jobs), jobs: jobs.slice(0, 5) };
+  }
 }
 
 export function combineActivity(jobs: Job[], archives: RecentArchive[], outputs: Record<string, SessionOutput> = {}, includeHidden = false): ActivityJob[] {
