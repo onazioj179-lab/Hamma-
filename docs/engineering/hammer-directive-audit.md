@@ -35,6 +35,16 @@ allocations. The timing overlapped the HTTP workload and has no matching
 before/after baseline. Tracing excludes SQLite, native memory, and OS cache.
 See [the indexed payload report](../../validation/indexed-tar-6000-payload.json).
 
+## Scheduler scale evidence
+
+Run `python -m processor.scheduler_benchmark --output REPORT.json` for the
+synthetic scheduler workload. With 5,000 retained records and 300 queued jobs
+across 20 projects, it verified 100 dispatch selections in exact rotation and
+FIFO order per project. The indexed selection measured 15.002 ms median and
+26.281 ms p95 on this Windows host. See [the run report](../../validation/scheduler-selection-after.json).
+This measures SQLite selection, including the call into the store. Job execution
+and admission under live resource pressure remain open.
+
 ## Capability audit
 
 | Capability | Status | Implementation and remaining acceptance |
