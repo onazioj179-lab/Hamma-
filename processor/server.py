@@ -78,6 +78,12 @@ class Store:
             db.execute("CREATE INDEX IF NOT EXISTS records_visible ON records(owner,kind,coalesce(json_extract(data,'$.hidden'),0),created DESC)")
             db.execute("CREATE INDEX IF NOT EXISTS records_state ON records(kind,json_extract(data,'$.state'),created,id,owner)")
             db.execute("CREATE INDEX IF NOT EXISTS records_owner_state ON records(owner,kind,json_extract(data,'$.state'))")
+            db.execute("""
+                CREATE INDEX IF NOT EXISTS records_project_dispatch
+                ON records(owner,coalesce(json_extract(data,'$.projectId'),'default'),
+                           json_extract(data,'$.scheduled') DESC)
+                WHERE kind='job' AND json_extract(data,'$.scheduled') IS NOT NULL
+            """)
             db.execute("CREATE INDEX IF NOT EXISTS records_upload_bytes ON records(kind,json_extract(data,'$.size'))")
             db.execute("CREATE INDEX IF NOT EXISTS records_output_bytes ON records(kind,json_extract(data,'$.downloadAvailable'),json_extract(data,'$.outputSize'))")
             db.execute("CREATE INDEX IF NOT EXISTS records_index_bytes ON records(kind,json_extract(data,'$.indexBytes'))")
@@ -307,7 +313,15 @@ class Store:
         with self.connect() as db:
             ordering = "created,id,owner"
             if fair:
-                ordering = "coalesce((SELECT max(json_extract(previous.data,'$.scheduled')) FROM records AS previous WHERE previous.owner=records.owner AND previous.kind='job' AND coalesce(json_extract(previous.data,'$.projectId'),'default')=coalesce(json_extract(records.data,'$.projectId'),'default')),0),created,id,owner"
+                ordering = """coalesce((
+                    SELECT json_extract(previous.data,'$.scheduled')
+                    FROM records AS previous
+                    WHERE previous.owner=records.owner AND previous.kind='job'
+                      AND json_extract(previous.data,'$.scheduled') IS NOT NULL
+                      AND coalesce(json_extract(previous.data,'$.projectId'),'default')=
+                          coalesce(json_extract(records.data,'$.projectId'),'default')
+                    ORDER BY json_extract(previous.data,'$.scheduled') DESC LIMIT 1
+                ),0),created,id,owner"""
             rows = db.execute("SELECT owner,data FROM records WHERE " + " AND ".join(where) + " ORDER BY " + ordering + " LIMIT ?", [*parameters, max(1, min(100, limit))]).fetchall()
         return [(row[0], json.loads(row[1])) for row in rows]
 

@@ -11,7 +11,7 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 ## HAMMA web backlog
 
 1. **Validate recovery across mixed batches.** Exercise unstarted, interrupted, and completed uploads together after reopening a project on supported browsers.
-2. **Scale browser jobs.** Local indexed TAR jobs have disk-backed manifests and Files & History can page their verified outputs. Browser uploads still need disk-backed admission. Test fairness across projects and per-file retry under sustained load.
+2. **Scale browser jobs.** Local indexed TAR jobs have disk-backed manifests and Files & History can page their verified outputs. Browser uploads still need disk-backed admission. Extend fairness testing to multiple owners under sustained pressure and test per-file retry under sustained load.
 3. **Validate physical devices.** Test mobile and foldable layouts, folder picking, touch, keyboard access, reduced motion, and recovery on real devices.
 4. **Isolate processing workers.** Enforce filesystem and network isolation, verify tenant boundaries, and expand dependency advisories, SBOM coverage, and fuzz tests.
 5. **Expand format support.** Verify archive interoperability and add encryption, split and join, broader codec coverage, and isolated PDF and Office conversions. Check decoded bytes, format fidelity, and advertised capabilities.
@@ -34,6 +34,26 @@ verification took 374.77 seconds and peaked at 2,616,340 bytes of traced Python
 allocations. The timing overlapped the HTTP workload and has no matching
 before/after baseline. Tracing excludes SQLite, native memory, and OS cache.
 See [the indexed payload report](../../validation/indexed-tar-6000-payload.json).
+
+## Scheduler scale evidence
+
+Run `python -m processor.scheduler_benchmark --output REPORT.json` for the
+synthetic scheduler workload. With 5,000 retained records and 300 queued jobs
+across 20 projects, it verified 100 dispatch selections in exact rotation and
+FIFO order per project. The indexed selection measured 15.002 ms median and
+26.281 ms p95 on this Windows host. See [the run report](../../validation/scheduler-selection-after.json).
+This measures SQLite selection, including the call into the store. Job execution
+and admission under live resource pressure remain open.
+
+A second run used loopback HTTP and spawned workers for one guest with three
+projects. An interactive project joined after the first bulk dispatch and got a
+turn in each of the next three rotations while both bulk queues had work.
+All 11 ZIP downloads and 33,751,040 input bytes were verified. The first
+interactive job waited 3.02 seconds to dispatch. The next two waited 42.932
+and 50.874 seconds from submission. The original-query metadata benchmark
+overlapped this run. These wait times describe this workload on this host.
+Multi-owner admission under sustained resource pressure remains open.
+See [the worker report](../../validation/scheduler-worker-fairness.json).
 
 ## Capability audit
 
