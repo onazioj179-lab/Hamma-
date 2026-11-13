@@ -61,8 +61,8 @@ def check(base, state_path=None, after_restart=False):
         assert last["nextCursor"] is None
         return [(entry["name"], entry["sha256"]) for entry in first["files"] + last["files"]]
 
-    def download(operation, target, uploads):
-        job = post("/api/process/jobs", {"operation": operation, "target": target, "uploads": uploads})
+    def download(operation, target, uploads, **options):
+        job = post("/api/process/jobs", {"operation": operation, "target": target, "uploads": uploads, **options})
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             job = call("/api/process/jobs/" + job["id"])
@@ -127,6 +127,17 @@ def check(base, state_path=None, after_restart=False):
     assert_owner_only(restored_job)
     manifest = check_manifest(restored_job)
     assert manifest == [(name, hashlib.sha256(data).hexdigest()) for name, data in files.items()]
+    assert 1 in capabilities["filePartSizesMiB"], capabilities
+    original = random.Random(19).randbytes(2 * 1024**2 + 7)
+    split_job, package = download("split", "zip", [upload("parts-fixture.bin", original)], partMiB=1)
+    with ZipFile(BytesIO(package)) as parts:
+        names = ["parts/000001.part", "parts/000002.part", "parts/000003.part"]
+        assert parts.namelist() == [*names, "hamma-parts.json"]
+        assert b"".join(parts.read(name) for name in names) == original
+    joined_job, joined = download("join", "file", [upload(split_job["outputName"], package)])
+    assert joined_job["outputName"] == "parts-fixture.bin"
+    assert joined == original
+    assert_owner_only(joined_job)
     if state_path:
         settings = {"historyRetention": "30d", "fileRetention": "7d"}
         call("/api/process/settings", json.dumps(settings).encode(), "PUT",
@@ -140,7 +151,7 @@ def check(base, state_path=None, after_restart=False):
                                           "sha256": restored_job["sha256"],
                                           "manifest": manifest,
                                           "upload": source["id"]}), encoding="utf-8")
-    print("Container served the web build and verified an exact TAR.ZST round trip.")
+    print("Container served the web build and verified PDF pages, TAR.ZST, and split/join.")
 
 
 if __name__ == "__main__":
