@@ -707,6 +707,7 @@ class Service:
         self.job_selections = JobSelections(self.store, self.limits["files"])
         self.running = {}
         self.restart_until = 0
+        self.waiting_for_memory = False
         self.stop = threading.Event()
         self.last_scheduler_tick = None
         self.accounts = Accounts(self.store)
@@ -1002,6 +1003,7 @@ class Service:
                 return
             attempts = 0
             capacity = worker_capacity(available_memory())
+            self.waiting_for_memory = capacity == 0
             while len(self.running) < capacity and attempts < 16:
                 attempts += 1
                 owners = Counter(entry[1] for entry in self.running.values())
@@ -1859,7 +1861,8 @@ def handler(service):
                 token = service.sign(f"jobs:{service.instance_id}:{self.owner}:{revision}")
                 known = parse_qs(url.query).get("revision", [""])[0]
                 live = [service.public(self.owner, job) for job in jobs] if jobs is not None and token == known else None
-                return self.send(200, {"revision": token, "now": now, "jobs": live})
+                return self.send(200, {"revision": token, "now": now, "jobs": live,
+                                       "waitingForMemory": service.waiting_for_memory})
             if path == "/api/process/jobs/revision" and method == "GET":
                 return self.send(200, {"revision": service.store.job_revision(self.owner), "now": time.time()})
             if path == "/api/process/jobs/overview" and method == "GET":

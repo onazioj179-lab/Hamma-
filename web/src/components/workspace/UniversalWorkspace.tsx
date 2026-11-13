@@ -45,6 +45,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, onWorkspace, sp
 
   const [capability, setCapability] = useState<Capability | null>(null);
   const [offline, setOffline] = useState(false);
+  const [waitingForMemory, setWaitingForMemory] = useState(false);
   const [projectId, setProjectId] = useState('default');
   const [projectIds, setProjectIds] = useState(['default']);
   const recovery = useRef(new ProjectRecovery());
@@ -137,6 +138,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, onWorkspace, sp
         const records = unchanged ? null : snapshot?.records ?? await loadJobs(controller.signal, true);
         if (!mounted.current || controller.signal.aborted) return;
         jobHistory.current = snapshot;
+        setWaitingForMemory(snapshot?.waitingForMemory === true);
         refreshFailures.current = 0;
         refreshAfter.current = 0;
         setLoadingJobs(false); setOffline(false);
@@ -282,7 +284,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, onWorkspace, sp
       knownStates.current.clear(); jobHistory.current = null; liveJobPolling.current = false;
       activity.current = false; refreshFailures.current = 0; refreshAfter.current = 0;
       cachedHistory.current = null; supportsJobRevisions.current = false;
-      setJobs([]); setJobSelected(new Set()); setConfirmation(null); setCapability(null); setLoadingJobs(true); setError('');
+      setJobs([]); setWaitingForMemory(false); setJobSelected(new Set()); setConfirmation(null); setCapability(null); setLoadingJobs(true); setError('');
       setUploadStatus(null);
       window.dispatchEvent(new CustomEvent('hamma-job-count', { detail: 0 }));
     };
@@ -860,6 +862,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, onWorkspace, sp
     </div>
     {offline && <div className="processor-notice" role="status"><div><strong>Local processor unavailable</strong><p>Reconnect to check saved jobs.</p></div><button className="button secondary" onClick={() => void connect()}><RefreshCw size={15} /> Reconnect</button></div>}
     {preparingDeletion && <p role="status" className="footnote">Checking stored items…</p>}
+    {!offline && waitingForMemory && combined.some(job => job.state === 'queued') && <p role="status" className="processor-notice">Queued jobs will start when processor memory is available.</p>}
     {error && <div className="processor-notice" role="alert"><span>{error}</span><button className="icon-button" aria-label="Dismiss error" onClick={() => setError('')}><X size={16} /></button></div>}
     {screen === 'workspace' && <>
       <div className="project-toolbar"><label>Project<SelectField aria-label="Current project" value={projectId} disabled={busy || recovering || !!spkBusy || acting || readingFolder} onChange={switchProject}>{projectIds.map((id, index) => <option key={id} value={id}>{id === 'default' ? 'Project 1' : 'Project ' + (index + 1)}</option>)}</SelectField></label><button className="button secondary" disabled={busy || recovering || !!spkBusy || acting || readingFolder || projectIds.length >= 20} onClick={() => void createProject()}>New project</button></div>

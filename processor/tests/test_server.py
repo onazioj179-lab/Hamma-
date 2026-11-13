@@ -1312,8 +1312,11 @@ class ServerTests(unittest.TestCase):
         with patch('processor.server.available_memory', return_value=0):
             self.service.tick()
         self.assertEqual(self.call('/jobs/' + job['id'])['state'], 'queued')
+        stalled = self.call('/jobs/live')
+        self.assertTrue(stalled['waitingForMemory'])
         with patch('processor.server.available_memory', return_value=2 * 1024**3):
             self.service.tick()
+        self.assertFalse(self.call('/jobs/live?revision=' + stalled['revision'])['waitingForMemory'])
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             self.service.tick()
