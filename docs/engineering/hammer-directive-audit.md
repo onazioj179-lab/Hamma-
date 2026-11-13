@@ -10,7 +10,7 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 
 ## HAMMA web backlog
 
-1. **Validate recovery across mixed batches.** Exercise unstarted, interrupted, and completed uploads together after reopening a project on supported browsers.
+1. **Validate recovery across mixed batches.** Browser component tests merge an unstarted selection with 105 processor checkpoints across two pages. A processor test covers 106 checkpoints, including a partial upload removed during recovery. Exercise the combined flow on supported browsers and physical devices.
 2. **Scale browser jobs.** Browser submissions above 100 uploads stage their selection in SQLite pages and submit by reference. The processor still materializes the sealed selection and job input list, and browser folder discovery retains its source list. Extend bounded traversal through the worker and validate multi-owner scheduling and per-file retry under sustained load.
 3. **Validate physical devices.** Test mobile and foldable layouts, folder picking, touch, keyboard access, reduced motion, and recovery on real devices.
 4. **Isolate processing workers.** Enforce filesystem and network isolation, verify tenant boundaries, and expand dependency advisories, SBOM coverage, and fuzz tests.
@@ -51,6 +51,11 @@ before/after baseline. Tracing excludes SQLite, native memory, and OS cache.
 See [the indexed payload report](../../validation/indexed-tar-6000-payload.json).
 
 ## Scheduler scale evidence
+
+The [original scheduler query report](../../validation/scheduler-selection-before.json)
+recorded an 8,130.924 ms median and 9,659.665 ms p95 for 100 selections across
+20 projects. Both variants preserved rotation and FIFO. The two runs overlapped
+other workloads, so the timings describe each run.
 
 Run `python -m processor.scheduler_benchmark --output REPORT.json` for the
 synthetic scheduler workload. With 5,000 retained records and 300 queued jobs

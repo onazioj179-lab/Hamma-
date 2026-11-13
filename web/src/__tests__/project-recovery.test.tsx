@@ -248,3 +248,47 @@ it('refuses an incompatible restored group choice before submitting any work', a
   expect(run.disabled).toBe(true);
   expect(jobAttempts).toBe(0);
 });
+
+it('merges unstarted selections with partial and completed uploads across recovery pages', async () => {
+  caps.draftScope = 'mixed-scale';
+  caps.recoverableUploads = true;
+  saved = { id: 'default', revision: 1, created: 1, updated: 1, settings: defaultProjectSettings };
+  const key = 'hamma-selection:mixed-scale:default';
+  const pending = { id: 'f'.repeat(32), name: 'unstarted.txt', size: 3, directory: false };
+  localStorage.setItem(key, JSON.stringify({
+    expires: Date.now() + 60000,
+    sources: [pending],
+    selected: [pending.id],
+  }));
+  const sources = Array.from({ length: 105 }, (_, index) => ({
+    id: (index + 1).toString(16).padStart(32, '0'),
+    upload: (index + 1000).toString(16).padStart(32, '0'),
+    name: index === 0 ? 'partial.txt' : `complete-${index}.txt`,
+    size: 3,
+    directory: false,
+    uploaded: index === 0 ? 1 : 3,
+  }));
+  const initial = vi.mocked(fetch).getMockImplementation()!;
+  const cursors: string[] = [];
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (!String(url).includes('/projects/default/inputs?')) return initial(url, init);
+    const cursor = new URL(String(url), window.location.href).searchParams.get('after')!;
+    cursors.push(cursor);
+    const page = cursor ? sources.slice(100) : sources.slice(0, 100);
+    return ok({ sources: page, total: 105, scanned: page.length, unavailable: 0,
+      nextCursor: cursor ? null : page[99].id }) as Response;
+  });
+  try {
+    await render();
+    expect(cursors).toEqual(['', sources[99].id]);
+    expect(host.textContent).toContain('Recovered 104 uploaded files.');
+    expect(host.textContent).toContain('Select the original files to continue 2 uploads.');
+    expect(host.querySelector('[aria-label="Select original file for partial.txt"]')).not.toBeNull();
+    expect(host.querySelectorAll('.source-row').length).toBeLessThan(106);
+    await act(async () => compress().click());
+    expect(chunkWrites).toBe(0);
+    expect(jobAttempts).toBe(0);
+  } finally {
+    localStorage.removeItem(key);
+  }
+});

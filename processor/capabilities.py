@@ -73,13 +73,23 @@ def action_registry():
     ]
 
 
+def inspect_formats(formats):
+    registry = action_registry()
+    result = []
+    for detected in formats:
+        extension = {'gzip': 'gz', 'bzip2': 'bz2'}.get(detected, detected)
+        row = next((row for row in registry if extension in row['extensions']), None)
+        result.append({'format': detected, 'conversions': row['conversions'] if row else [],
+                       'extract': bool(row and row['extract'])})
+    return result
+
+
 def inspect_headers(entries):
     """Bounded signature hints, never codec validation or a completion claim."""
     from .engine import detect_header
     if not isinstance(entries, list) or not 1 <= len(entries) <= 32:
         raise ValueError('Inspect between 1 and 32 entries')
-    registry = action_registry()
-    result = []
+    formats = []
     for entry in entries:
         if not isinstance(entry, dict) or not isinstance(entry.get('head'), str) or len(entry['head']) > 1024:
             raise ValueError('Invalid inspection header')
@@ -87,12 +97,8 @@ def inspect_headers(entries):
             head = bytes.fromhex(entry['head'])
         except ValueError:
             raise ValueError('Invalid inspection header') from None
-        detected = detect_header(head)
-        extension = {'gzip': 'gz', 'bzip2': 'bz2'}.get(detected, detected)
-        row = next((row for row in registry if extension in row['extensions']), None)
-        result.append({'format': detected, 'conversions': row['conversions'] if row else [],
-                       'extract': bool(row and row['extract'])})
-    return result
+        formats.append(detect_header(head))
+    return inspect_formats(formats)
 
 
 def single_file_archives():
