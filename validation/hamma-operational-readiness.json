@@ -81,6 +81,37 @@
         "uploadWrites": 2,
         "archiveSha256": "00dd9d8b83ff3c3186ca26bfff2b7dc8270d31826bec04ab4457cc74e31fd769"
       }
+    },
+    {
+      "layoutCases": 112,
+      "widths": [
+        320,
+        375,
+        393,
+        540,
+        768,
+        1024,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "reducedMotion": true,
+      "keyboardSkipAndNavigation": true,
+      "tabReachesSkipLink": false,
+      "browser": "webkit",
+      "browserVersion": "26.0",
+      "reopenedTab": {
+        "verifiedEntries": [
+          "partial.bin",
+          "complete.txt",
+          "unstarted.txt"
+        ],
+        "resumedFromBytes": 4194304,
+        "uploadWrites": 2,
+        "archiveSha256": "769df6aae41a897c42ba397b35df65c46c1f18dfe01d33feeb098bce654e59ae"
+      }
     }
   ],
   "folderPickerFallback": {
