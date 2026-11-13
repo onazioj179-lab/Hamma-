@@ -1,5 +1,20 @@
 # HAMMA release readiness
 
+## Remaining web release acceptance
+
+Use the six areas in the [web backlog](hammer-directive-audit.md) as the
+release checklist. Run the checks against the same candidate build and record
+the revision, platform, fixture, outcome and skipped cases.
+
+| Area | Candidate acceptance |
+| --- | --- |
+| Mixed project recovery | Reopen unstarted, partial and completed inputs, resume from the saved offset, and verify exact outputs. Repeat with concurrent projects and a file-only retry. |
+| Browser job scale | Verify ordered manifest pages and exact outputs at the supported selection limit. Measure browser, worker and disk use with real payloads and check that an interactive job gets a turn during bulk work. |
+| UI and devices | Check every view in both themes, with keyboard navigation, reduced motion, and meaningful empty, running, failed and recovered states. Verify file picking, downloads and recovery on physical phones and foldables. |
+| Worker isolation and dependencies | Run worker boundary and owner checks. Confirm the deployed inventory and test worker filesystem isolation on the target platform. |
+| Formats and fidelity | Check advertised archive round trips with independent tools and compare decoded media with source fixtures. Exercise the outstanding encryption, split/join, and document conversion cases. |
+| Production operations | Check readiness, retention, interrupted uploads and downloads across service recreation. Rehearse backup restoration, migrations and alerting in the target environment. Multi-node recovery requires the intended compute and storage. |
+
 ## Web release evidence — 2026-11-12
 
 The release remains open. The [web engineering audit](hammer-directive-audit.md)

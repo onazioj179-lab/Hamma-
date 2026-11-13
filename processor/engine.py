@@ -7,6 +7,7 @@ from contextlib import contextmanager
 import gzip
 import hashlib
 import io
+from itertools import zip_longest
 import json
 import lzma
 import math
@@ -17,6 +18,7 @@ import shutil
 import stat
 import struct
 import subprocess
+import sys
 import tarfile
 from tempfile import TemporaryDirectory
 import time
@@ -485,19 +487,20 @@ def compress(inputs, output: Path, target: str, ctx: Context, *, zip_profile="ba
                     ctx.bytes += info.size
                     ctx.report(processed=ctx.bytes, entries=ctx.count)
                     manifest.append({"name": name, **digest})
+                archive.members.clear()  # Writers cache TarInfo even in stream mode.
         ctx.report(state="verifying")
-        with tarfile.open(output, "r|*") as archive:
-            seen = []
-            for info in archive:
+        with open_tar_stream(name=output, mode="r|*") as archive:
+            for info, row in zip_longest(archive, manifest):
                 ctx.check()
-                seen.append(info.name.rstrip("/") + ("/" if info.isdir() else ""))
-                row = manifest[len(seen) - 1]
+                if info is None or row is None:
+                    raise ProcessingError("Archive verification failed")
+                name = info.name.rstrip("/") + ("/" if info.isdir() else "")
+                if name != row["name"] or not (info.isdir() if row.get("directory") else info.isfile()):
+                    raise ProcessingError("Archive verification failed")
                 if info.isfile():
                     actual = ctx.copy(archive.extractfile(info), Sink(), progress=False, expected=row["size"])
                     if actual["sha256"] != row["sha256"]:
                         raise ProcessingError("Integrity check failed")
-            if seen != [row["name"] for row in manifest]:
-                raise ProcessingError("Archive verification failed")
     else:
         if len(inputs) != 1 or inputs[0].get("directory"):
             raise ProcessingError("Choose one file for this format")
@@ -575,11 +578,18 @@ def tar_source(path, name, kind):
     return False, None
 
 
+def open_tar_stream(**kwargs):
+    # Python 3.13 can iterate TAR members without retaining every TarInfo.
+    if sys.version_info >= (3, 13):
+        kwargs["stream"] = True
+    return tarfile.open(**kwargs)
+
+
 def read_tar_members(path, ctx, opener, consume):
     validate_tar(path, ctx, opener)
     with (
         (opener(path, "rb") if opener else path.open("rb")) as raw,
-        tarfile.open(fileobj=raw, mode="r|") as archive,
+        open_tar_stream(fileobj=raw, mode="r|") as archive,
     ):
         for item in archive:
             ctx.check()

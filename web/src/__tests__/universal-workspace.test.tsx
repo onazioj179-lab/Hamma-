@@ -325,18 +325,22 @@ it('keeps file deletion distinct from history deletion and exposes retention cho
   expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/files') && init.method === 'DELETE')).toBe(true);
 });
 
-it('shows newly submitted jobs instead of retaining a Completed-only queue filter', async () => {
+it('clears queue filters that could hide a newly submitted job', async () => {
   await render();
   await act(async () => host.querySelector<HTMLButtonElement>('[role=combobox][aria-label="Filter processing history"]')!.click());
   const completed=Array.from(document.querySelectorAll<HTMLElement>('[role=option]')).find(option=>option.textContent==='Completed')!;
   await act(async () => completed.click());
   expect(host.querySelector('[aria-label="Filter processing history"]')?.textContent).toBe('Completed');
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Filter by operation"]')!.click());
+  await act(async () => [...document.querySelectorAll<HTMLElement>('[role=option]')].find(option => option.textContent === 'Conversion')!.click());
+  expect(host.querySelector('[aria-label="Filter by operation"]')?.textContent).toBe('Conversion');
   vi.spyOn(processingClient,'upload').mockResolvedValue('fixture-upload');
   vi.spyOn(processingClient,'requestId').mockResolvedValue('fixture-request');
   vi.spyOn(processingClient,'jsonRequest').mockResolvedValue({ id:'fixture-job' });
   await select([new File(['test'],'queue-check.txt')]);
   await act(async () => button('Compress').click());
   expect(host.querySelector('[aria-label="Filter processing history"]')?.textContent).toBe('All statuses');
+  expect(host.querySelector('[aria-label="Filter by operation"]')?.textContent).toBe('All operations');
   expect(host.querySelector('[aria-label="Sort processing history"]')?.textContent).toBe('Newest first');
 });
 
@@ -751,7 +755,16 @@ it('pauses on queue capacity errors and retains only unsubmitted files', async (
 
 
 it('keeps selections and archive settings independent across projects', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
+    ? { ok: true, json: async () => ({ ...caps, zipComments: true }) } : initial(url));
   await render(); await select([new File(['one'], 'first.txt')]);
+  const setComment = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+  const comment = host.querySelector<HTMLInputElement>('[aria-label="ZIP archive comment"]')!;
+  await act(async () => {
+    setComment.call(comment, 'First project draft');
+    comment.dispatchEvent(new Event('input', { bubbles: true }));
+  });
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Archive format"]')!.click());
   await act(async () => [...document.querySelectorAll<HTMLElement>('[role=option]')].find(option => option.textContent === 'gzip')!.click());
   await act(async () => button('New project').click());
@@ -763,6 +776,9 @@ it('keeps selections and archive settings independent across projects', async ()
   expect(host.textContent).toContain('first.txt');
   expect(host.textContent).not.toContain('second.txt');
   expect(host.querySelector('[aria-label="Archive format"]')?.textContent).toContain('gzip');
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Archive format"]')!.click());
+  await act(async () => [...document.querySelectorAll<HTMLElement>('[role=option]')].find(option => option.textContent === 'zip')!.click());
+  expect(host.querySelector<HTMLInputElement>('[aria-label="ZIP archive comment"]')?.value).toBe('First project draft');
 });
 
 

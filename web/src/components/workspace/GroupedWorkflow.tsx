@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import type { Capability, Source } from '../../processing/client';
 import { capabilityGroups, planGroupedWorkflow, type ExecutionPlan, type WorkflowSettings } from '../../processing/planner';
+import { needsOriginal } from '../../processing/projects';
 import { formatFileSize } from '../../utils/fileHelpers';
 import { SelectField } from '../ui/SelectField';
 
@@ -16,6 +17,7 @@ export function GroupedWorkflow({ sources, capability, settings, selections, onS
   }, [groups, selections, settings.qualityMode, settings.metadataPolicy, settings.recursive, capability]);
   if (!groups.length || groups.length < 2 && (!selections[groups[0].id] || selections[groups[0].id] === 'skip')) return null;
   const plan = result.plan;
+  const missingOriginal = plan?.groups.some(group => group.sources.some(needsOriginal));
   return <details className="processing-options grouped-workflow">
     <summary>Mixed-file workflow</summary>
     <div className="workflow-groups">{groups.map(group => <label key={group.id}>
@@ -33,7 +35,7 @@ export function GroupedWorkflow({ sources, capability, settings, selections, onS
     </label>}
     {(result.error || !!plan?.issues.length) && <p className="footnote" role="status">{result.error || plan!.issues.join(' ')}</p>}
     {plan && <p className="footnote">Planned: {plan.fileCount.toLocaleString()} {plan.fileCount === 1 ? 'file' : 'files'} in {plan.jobCount.toLocaleString()} {plan.jobCount === 1 ? 'job' : 'jobs'} · estimated upload {formatFileSize(plan.remainingUploadBytes)}{plan.skipped ? ` · ${plan.skipped.toLocaleString()} left selected` : ''}.</p>}
-    <button className="button secondary" disabled={busy || !plan?.jobCount || !!plan.issues.length} onClick={() => plan && onRun(plan)}>Run grouped workflow</button>
+    <button className="button secondary" disabled={busy || !plan?.jobCount || !!plan.issues.length || missingOriginal} onClick={() => plan && onRun(plan)}>Run grouped workflow</button>
     {plan && <p className="footnote">Output limit per job: {formatFileSize(plan.outputLimitPerJob)}. Each archive group is kept together. Other files run independently.</p>}
   </details>;
 }
