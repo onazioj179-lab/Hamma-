@@ -67,8 +67,13 @@ def convert_office(source, name, output, ctx):
             finally:
                 if process.poll() is None:
                     process.kill()
-            if check_codec_isolation(process.returncode):
-                raise ProcessingError('Office PDF conversion failed')
+            status = check_codec_isolation(process.returncode)
+            if status:
+                raise ProcessingError({
+                    10: 'Office renderer could not start',
+                    11: 'Office renderer could not open the document',
+                    12: 'Office renderer could not write the PDF',
+                }.get(status, f'Office PDF conversion failed (renderer status {status})'))
         enforce_work_limit(scratch, ctx)
         if (not candidate.is_file() or candidate.is_symlink() or
                 not 0 < candidate.stat().st_size <= ctx.limits['expanded'] or detect(candidate) != 'pdf'):

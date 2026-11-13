@@ -33,6 +33,8 @@ def office_fixture(kind, text='HAMMA verified export', extra=None):
             root: ('spreadsheetml.sheet.main', f'''<workbook xmlns="{SHEET}" xmlns:r="{OFFICE}">
               <sheets><sheet name="Sheet" sheetId="1" r:id="rId1"/></sheets></workbook>'''),
             'xl/worksheets/sheet1.xml': ('spreadsheetml.worksheet', f'''<worksheet xmlns="{SHEET}">
+              <dimension ref="A1"/><sheetViews><sheetView workbookViewId="0"/></sheetViews>
+              <sheetFormatPr defaultRowHeight="15"/>
               <sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>{text}</t></is></c></row></sheetData>
               </worksheet>'''),
         }
