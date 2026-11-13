@@ -155,6 +155,8 @@ class Projects:
             db.execute('BEGIN IMMEDIATE')
             existing = db.execute('SELECT upload_id FROM project_inputs WHERE owner=? AND project_id=? AND source_id=?', (owner, project_id, source_id)).fetchone()
             count = db.execute('SELECT count(*) FROM project_inputs WHERE owner=? AND project_id=?', (owner, project_id)).fetchone()[0]
+            count += db.execute('SELECT count(*) FROM project_selections WHERE owner=? AND project_id=? AND source_id<>?',
+                                (owner, project_id, source_id)).fetchone()[0]
             if not existing and count >= self.limits['files']:
                 raise ProjectError(413, 'Project file limit reached')
             if existing and existing[0] != upload_id:

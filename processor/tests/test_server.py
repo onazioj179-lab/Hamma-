@@ -230,6 +230,33 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(archive.read("original.txt"), b"retained bytes")
         self.assertEqual(self.call("/projects/default/inputs")["sources"], [])
 
+    def test_output_reuse_can_retry_after_link_failure_without_leaking_upload(self):
+        original = self.execute(self.job(self.upload(b"retained bytes", "original.txt")))
+        path = "/jobs/" + original["id"] + "/reuse"
+        self.call("/projects/default", {}, "PUT")
+        body = {"name": original["outputName"]}
+        before = self.service.store.count(kind="upload")
+        with patch("processor.server.os.link", side_effect=OSError("link unavailable")):
+            self.assert_status(507, lambda: self.call(path, body, "POST"))
+        self.assertEqual(self.service.store.count(kind="upload"), before)
+        self.assertEqual(self.call("/projects/default/inputs")["sources"], [])
+        source = self.call(path, body, "POST")
+        self.assertEqual(source, self.call(path, body, "POST"))
+        self.assertEqual(self.service.store.count(kind="upload"), before + 1)
+
+    def test_reuse_respects_project_limit_when_pending_selections_fill_it(self):
+        original = self.execute(self.job(self.upload(b"retained bytes", "original.txt")))
+        self.call("/projects/default", {}, "PUT")
+        selection = {"id": "1" * 32, "name": "pending.txt", "size": 1, "directory": False}
+        path = "/projects/default/inputs"
+        self.call(path, {"selections": [selection]}, "PUT")
+        before = self.service.store.count(kind="upload")
+        with patch.dict(self.service.projects.limits, {"files": 1}):
+            self.assert_status(413, lambda: self.call("/jobs/" + original["id"] + "/reuse",
+                                                       {"name": original["outputName"]}, "POST"))
+        self.assertEqual(self.service.store.count(kind="upload"), before)
+        self.assertEqual(self.call(path + "?includeSelections=1")["sources"][0]["id"], selection["id"])
+
     def test_restart_preparation_is_instance_bound_and_keeps_queued_jobs_intact(self):
         queued = self.job()
         self.assert_status(409, lambda: self.call("/prepare-restart", method="POST", headers={"X-Hamma-Instance": "wrong"}))
