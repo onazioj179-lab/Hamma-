@@ -105,7 +105,7 @@ def check(base, state_path=None, after_restart=False):
     assert bundle and call(bundle[1].decode("ascii"), raw=True)
     capabilities = call("/api/process/capabilities")
     assert capabilities["officePdf"], capabilities
-    for extension in ("docx", "xlsx", "pptx"):
+    for extension in ("docx", "pptx"):
         office_job, office_pdf = download("convert", "office-pdf",
                                          [upload("office." + extension, office_fixture(extension))])
         assert office_job["outputName"] == "office.pdf", office_job

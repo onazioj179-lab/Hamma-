@@ -16,7 +16,7 @@ from .pdf_pages import pdf_page_count
 
 
 TARGET = 'office-pdf'
-SUFFIXES = frozenset(('.docx', '.xlsx', '.pptx'))
+SUFFIXES = frozenset(('.docx', '.pptx'))
 INPUT_LIMIT = 32 * 1024**2
 WORK_LIMIT = 128 * 1024**2
 PROGRAM = '/usr/lib/libreoffice/program'
@@ -27,7 +27,7 @@ def office_tools():
         return None
     helper = shutil.which('hamma-office-pdf')
     pdfinfo = shutil.which('pdfinfo')
-    application_parts = ('libmergedlo.so', 'libswlo.so', 'libsclo.so', 'libsdlo.so')
+    application_parts = ('libmergedlo.so', 'libswlo.so', 'libsdlo.so')
     if helper and pdfinfo and all((Path(PROGRAM) / part).is_file() for part in application_parts):
         return helper, pdfinfo
     return None
@@ -40,7 +40,7 @@ def convert_office(source, name, output, ctx):
     if source.stat().st_size > INPUT_LIMIT:
         raise ProcessingError('Office input size limit reached')
     kind = validate_office_source(source, ctx)
-    if Path(name).suffix.lower() != '.' + kind:
+    if '.' + kind not in SUFFIXES or Path(name).suffix.lower() != '.' + kind:
         raise ProcessingError('Unsupported Office filename for this package')
 
     helper, pdfinfo = tools

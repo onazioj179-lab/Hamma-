@@ -487,7 +487,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     (!singleSource.inspection || singleSource.inspection.error || singleSource.inspection.format === 'zip') &&
     /\.(docx|xlsx|pptx)$/i.test(singleSource.name);
   const canInspectOffice = capability?.officeInspection && officeSource;
-  const canExportOffice = capability?.officePdf && officeSource;
+  const canExportOffice = capability?.officePdf && officeSource && /\.(docx|pptx)$/i.test(singleSource.name);
   const canRenderPdf = capability?.pdfPages && singleSource && !singleSource.directory &&
     (signature === 'pdf' || !signature && /\.pdf$/i.test(singleSource.name));
   const conversionTarget = actions.conversions.includes(conversion) ? conversion : actions.conversions[0];

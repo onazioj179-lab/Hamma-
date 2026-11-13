@@ -1772,7 +1772,7 @@ def handler(service):
                     raise HTTPError(400, "Choose a part size smaller than the file")
                 if target == OFFICE_PDF:
                     if inputs[0]["format"] != "zip" or Path(inputs[0]["name"]).suffix.lower() not in OFFICE_SUFFIXES:
-                        raise HTTPError(400, "Choose a DOCX, XLSX or PPTX file")
+                        raise HTTPError(400, "Choose a DOCX or PPTX file")
                     if inputs[0]["size"] > OFFICE_INPUT_LIMIT:
                         raise HTTPError(413, "Office files must be 32 MiB or smaller")
 

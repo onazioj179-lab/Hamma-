@@ -1,7 +1,6 @@
 """Minimal Office Open XML fixtures with text visible on the exported page."""
 
 from io import BytesIO
-from pathlib import Path
 from zipfile import ZipFile
 
 
@@ -28,9 +27,6 @@ def office_fixture(kind, extra=None):
           <w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>
           </w:body></w:document>''')}
         related = {}
-    elif kind == 'xlsx':
-        # A normal workbook exported by openpyxl, with the marker in Sheet!A1.
-        return Path(__file__).with_name('fixtures').joinpath('export.xlsx').read_bytes()
     elif kind == 'pptx':
         root = 'ppt/presentation.xml'
         parts = {
