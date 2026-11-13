@@ -133,6 +133,21 @@ it('queues Office package inspection through the document action', async () => {
   }), 'POST', { signal: expect.any(AbortSignal) });
 });
 
+it('renders a PDF through the dedicated workspace action', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
+    ? { ok: true, json: async () => ({ ...caps, pdfPages: true }) } : initial(url));
+  vi.spyOn(processingClient, 'upload').mockResolvedValue('uploaded-pdf');
+  vi.spyOn(processingClient, 'requestId').mockResolvedValue('pdf-pages-request');
+  const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({});
+  await render();
+  await select([new File(['%PDF-1.4'], 'sample.pdf', { type: 'application/pdf' })]);
+  await act(async () => button('Render PDF pages').click());
+  expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({
+    operation: 'convert', target: 'pdf-pages', uploads: ['uploaded-pdf'],
+  }), 'POST', { signal: expect.any(AbortSignal) });
+});
+
 it('queues a ZIP integrity report only when the processor advertises verification', async () => {
   const initial = fetchMock.getMockImplementation()!;
   fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')

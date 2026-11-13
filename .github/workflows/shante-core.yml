@@ -56,7 +56,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg libarchive-tools libseccomp2
+          sudo apt-get install -y ffmpeg libarchive-tools libseccomp2 poppler-utils
       - name: Processor integration (Unix)
         if: runner.os != 'Windows'
         run: python3 -m unittest discover -s processor/tests -v

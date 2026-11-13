@@ -49,6 +49,7 @@ from .job_selections import AdmissionInputs, JobSelections, forget_job_uploads, 
 from .accounts import Accounts, AccountError, plan as account_plan
 from .catalog import FileCatalog
 from .capabilities import action_registry, inspect_headers, media_targets, single_file_archives
+from .pdf_pages import TARGET as PDF_PAGES, pdf_tools, render_pdf
 from .media_policy import H264_TARGET
 from .oauth import OAuth
 
@@ -617,6 +618,8 @@ def run_job(root, owner, job_id, limits, isolated=False):
         elif job["operation"] == "inspect":
             from .documents import inspect_office
             manifest = inspect_office(Path(inputs[0]["path"]), output, ctx)
+        elif job["operation"] == "convert" and job["target"] == PDF_PAGES:
+            manifest = render_pdf(Path(inputs[0]["path"]), output, ctx)
         else:
             manifest = convert(Path(inputs[0]["path"]), output, job["target"], ctx,
                                job.get('qualityMode', 'lossless'), job.get('metadataPolicy', 'strip'))
@@ -635,6 +638,8 @@ def run_job(root, owner, job_id, limits, isolated=False):
             stem += ".verification"
         elif job["operation"] == "inspect":
             stem += ".inspection"
+        elif job["target"] == PDF_PAGES:
+            stem += ".pages"
         if job["operation"] == "extract":
             stem = stem + ".repacked" if job["target"] == "zip-deflate" else "extracted"
         output_name = stem + "." + extension
@@ -1385,7 +1390,7 @@ def handler(service):
                                        "draftScope": hashlib.sha256(("hamma-draft:" + self.owner).encode()).hexdigest(),
                                        "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(),
                                        "inspection": True, "zipVerification": True, "tarVerification": True, "streamVerification": True, "zipSelection": True,
-                                       "archiveRepack": True, "officeInspection": True, "zipComments": True, "zipProfiles": list(ZIP_PROFILES),
+                                       "archiveRepack": True, "officeInspection": True, "pdfPages": all(pdf_tools()), "zipComments": True, "zipProfiles": list(ZIP_PROFILES),
                                        "actionRegistry": action_registry(), "conversions": media_targets(),
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
             if path == "/api/process/settings":
@@ -1564,12 +1569,14 @@ def handler(service):
                 if staged is None and (not isinstance(ids, list) or not ids or len(ids) > service.limits["files"] or not all(isinstance(i, str) for i in ids) or len(set(ids)) != len(ids)):
                     raise HTTPError(400, "Invalid file selection")
                 if (operation == "compress" and target not in archive_formats() or operation == "extract" and target not in ("zip", "zip-deflate") or
-                    operation == "convert" and target not in MEDIA or operation in ("verify", "inspect") and target != "json" or
+                    operation == "convert" and target not in (*MEDIA, PDF_PAGES) or operation in ("verify", "inspect") and target != "json" or
                     operation not in ("compress", "extract", "convert", "verify", "inspect")):
                     raise HTTPError(400, "Unsupported operation")
                 count = staged.count if staged else len(ids)
                 if operation != "compress" and count != 1:
                     raise HTTPError(400, "One input per extraction or conversion job")
+                if target == PDF_PAGES and not all(pdf_tools()):
+                    raise HTTPError(400, "PDF rendering requires Poppler")
                 paged_admission = staged is not None and count > 100
                 if paged_admission and target != "zip" and not target.startswith("tar"):
                     raise HTTPError(400, "Choose one file for this format")

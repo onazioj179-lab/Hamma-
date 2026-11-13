@@ -49,6 +49,8 @@ def archive_formats():
 
 
 def archive_working_copies(job):
+    if job["operation"] == "convert" and job["target"] == "pdf-pages":
+        return 2
     if job["operation"] == "compress" and job["target"] == ZSTD_TAR:
         return 2
     if job["operation"] == "extract" and job.get("recursive"):
