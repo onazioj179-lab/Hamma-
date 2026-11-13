@@ -26,11 +26,18 @@ it('loads bounded manifest pages on demand and stops at an exact page boundary',
     expect(fetch.mock.calls[0][0]).toContain('limit=50&after=0');
     expect(host.textContent).toContain('1–50 of 100');
     const next = () => [...host.querySelectorAll('button')].find(button => button.textContent === 'Next files')!;
+    next().focus();
     await act(async () => next().click());
+    expect(document.activeElement).toBe(next());
     expect(fetch.mock.calls[1][0]).toContain('limit=50&after=50');
     expect(host.textContent).toContain('51–100 of 100');
     expect(host.querySelectorAll('li')).toHaveLength(50);
-    expect(next().disabled).toBe(true);
+    expect(next().getAttribute('aria-disabled')).toBe('true');
+    await act(async () => next().click());
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const previous = [...host.querySelectorAll('button')].find(button => button.textContent === 'Previous files')!;
+    await act(async () => previous.click());
+    expect(host.textContent).toContain('1–50 of 100');
   } finally {
     await act(async () => root.unmount());
     host.remove();
