@@ -106,11 +106,15 @@ def available_memory():
             if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
                 return status.available
         elif sys.platform.startswith('linux'):
-            for line in Path('/proc/meminfo').read_text().splitlines():
-                if line.startswith('MemAvailable:'):
-                    host = int(line.split()[1]) * 1024
-                    container = cgroup_available()
-                    return min(host, container) if container is not None else host
+            container = cgroup_available()
+            try:
+                for line in Path('/proc/meminfo').read_text().splitlines():
+                    if line.startswith('MemAvailable:'):
+                        host = int(line.split()[1]) * 1024
+                        return min(host, container) if container is not None else host
+            except (OSError, ValueError, IndexError):
+                pass
+            return container
     except (OSError, ValueError, AttributeError):
         pass
     return None
