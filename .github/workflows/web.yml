@@ -25,7 +25,7 @@ jobs:
       - run: npm audit --audit-level=low
       - run: npm run lint
       - run: npm run typecheck
-      - name: Install libarchive for encrypted ZIP interoperability
-        run: sudo apt-get update && sudo apt-get install -y libarchive-tools
+      - name: Install archive interoperability tools
+        run: sudo apt-get update && sudo apt-get install -y libarchive-tools zip unzip
       - run: npm run test:web
       - run: npm run build
