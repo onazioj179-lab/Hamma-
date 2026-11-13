@@ -540,6 +540,27 @@ it('deletes only the selected operations captured by a confirmed bulk action', a
   expect(deleted).toEqual(['/api/process/jobs/one/files', '/api/process/jobs/two/files']);
 });
 
+it('keeps only unsuccessful jobs selected after a partial bulk action', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  const jobs = ['first', 'second'].map(id => ({ id, name: id + '.zip', state: 'queued',
+    operation: 'compress', target: 'zip', inputSize: 100, outputSize: null, created: 1,
+    fileExpires: 3, fileCount: 1, format: 'zip', downloadAvailable: false }));
+  fetchMock.mockImplementation(async (url: string) => {
+    if (url.includes('/jobs?')) return { ok: true, json: async () => ({ jobs, total: jobs.length }) };
+    if (url.endsWith('/first/pause')) return { ok: true, json: async () => ({}) };
+    if (url.endsWith('/second/pause')) return { ok: false, status: 409, json: async () => ({ error: 'Try this job again.' }) };
+    return initial(url);
+  });
+  await render('history');
+  const pageSelection = host.querySelector<HTMLInputElement>('[aria-label="Select all visible jobs"]')!;
+  await act(async () => pageSelection.click());
+  await act(async () => button('Pause queue').click());
+  expect(host.querySelector<HTMLInputElement>('[aria-label="Select job first.zip"]')!.checked).toBe(false);
+  expect(host.querySelector<HTMLInputElement>('[aria-label="Select job second.zip"]')!.checked).toBe(true);
+  expect(pageSelection.indeterminate).toBe(true);
+  expect(host.querySelector('[role=alert]')?.textContent).toContain('1 job needs attention. Try this job again.');
+});
+
 it('uses deletion preview tokens and leaves browser files intact when the server selection changes', async () => {
   Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
   const entry = { id: 'local', fileName: 'local.txt', originalSize: 10, compressedSize: 5, ratio: .5, date: 1000, type: 'compress' as const, mode: 'auto' as const };

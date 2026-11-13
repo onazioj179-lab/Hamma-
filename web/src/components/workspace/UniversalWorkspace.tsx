@@ -614,8 +614,13 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
         } else await action(job, operation, method);
       })));
       const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
-      if (failed.length) setError(`${failed.length} action(s) failed: ${failed[0].reason instanceof Error ? failed[0].reason.message : 'The action could not finish.'}`);
-      setJobSelected(new Set()); if (!offline) await refresh(true);
+      if (failed.length) {
+        const reason = failed[0].reason instanceof Error ? failed[0].reason.message : 'Try again.';
+        setError(`${failed.length} ${failed.length === 1 ? 'job needs' : 'jobs need'} attention. ${reason}`);
+      }
+      const succeeded = new Set(chosenJobs.filter((_, index) => results[index].status === 'fulfilled').map(job => job.id));
+      setJobSelected(previous => new Set([...previous].filter(id => !succeeded.has(id))));
+      if (!offline) await refresh(true).catch(() => {});
     } finally { mutation.current = false; setActing(false); }
   };
   const confirmBulk = (operation: '' | 'files') => {
