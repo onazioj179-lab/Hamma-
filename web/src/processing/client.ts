@@ -6,6 +6,7 @@ export interface Capability {
   projectRecovery?: boolean;
   recoverableUploads?: boolean;
   projectSelections?: boolean;
+  jobRevisions?: boolean;
   pagedJobSelections?: boolean;
   draftScope?: string;
   inspection?: boolean;

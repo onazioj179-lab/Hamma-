@@ -66,6 +66,23 @@ class StoreQueries(unittest.TestCase):
         self.assertEqual([owner for owner, _ in candidates], [self.other])
         self.assertEqual(len(self.store.queued(limit=1)), 1)
 
+    def test_job_revision_tracks_writes_and_is_scoped_to_one_owner(self):
+        self.assertEqual(self.store.job_revision(self.owner), '')
+        job = self.put(1)
+        created = self.store.job_revision(self.owner)
+        self.assertRegex(created, r'^[a-f0-9]{32}$')
+        self.assertEqual(self.store.job_revision(self.other), '')
+        self.put(2, owner=self.other)
+        self.assertEqual(self.store.job_revision(self.owner), created)
+        self.store.put(self.owner, 'upload', {'id': 'c' * 32, 'created': 1, 'size': 1})
+        self.assertEqual(self.store.job_revision(self.owner), created)
+        self.store.patch(self.owner, 'job', job['id'], state='failed')
+        updated = self.store.job_revision(self.owner)
+        self.assertNotEqual(updated, created)
+        self.assertEqual(Store(self.temp.name).job_revision(self.owner), updated)
+        self.store.delete(self.owner, job['id'])
+        self.assertNotEqual(self.store.job_revision(self.owner), updated)
+
     def test_history_summaries_keep_counts_without_loading_private_manifests(self):
         self.put(1, inputs=[{'id': f'{index:032x}', 'path': 'private-path'} for index in range(1000)],
                  manifest=[{'name': 'private-member'}], filesCleaned=False)

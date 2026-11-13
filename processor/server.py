@@ -112,6 +112,16 @@ class Store:
             )""")
             db.execute("CREATE TABLE IF NOT EXISTS local_index_sources(owner TEXT NOT NULL,job_id TEXT NOT NULL,root TEXT NOT NULL,PRIMARY KEY(owner,job_id))")
             db.execute("CREATE INDEX IF NOT EXISTS job_inputs_upload ON job_inputs(owner,upload_id,job_id)")
+            db.execute("CREATE TABLE IF NOT EXISTS job_revisions (owner TEXT PRIMARY KEY, token TEXT NOT NULL)")
+            for event, row in (("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")):
+                db.execute(f"""
+                    CREATE TRIGGER IF NOT EXISTS job_revision_{event.lower()}
+                    AFTER {event} ON records WHEN {row}.kind='job'
+                    BEGIN
+                        INSERT INTO job_revisions VALUES ({row}.owner, lower(hex(randomblob(16))))
+                        ON CONFLICT(owner) DO UPDATE SET token=excluded.token;
+                    END
+                """)
             db.execute("CREATE TABLE IF NOT EXISTS store_migrations (name TEXT PRIMARY KEY)")
             db.execute("CREATE TABLE IF NOT EXISTS job_history_revisions (owner TEXT PRIMARY KEY, revision INTEGER NOT NULL)")
             # Live progress is fetched separately. A terminal change must invalidate
@@ -279,6 +289,11 @@ class Store:
             where.append("coalesce(json_extract(data,'$.hidden'),0)=0")
         with self.connect() as db:
             return db.execute("SELECT count(*) FROM records WHERE " + " AND ".join(where), parameters).fetchone()[0]
+
+    def job_revision(self, owner):
+        with self.connect() as db:
+            row = db.execute("SELECT token FROM job_revisions WHERE owner=?", (owner,)).fetchone()
+        return row["token"] if row else ""
 
     def history_page(self, owner, *, offset=0, limit=50, search="", state="", sort="newest", summary=False, include_hidden_downloads=False):
         where, parameters = ["owner=?", "kind='job'"], [owner]
@@ -1294,7 +1309,7 @@ def handler(service):
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
                 return self.send(200, {"liveJobPolling": True, "groupedWorkflows": True, "projectRecovery": True, "projectZipProfiles": True, "recoverableUploads": True,
-                                       "projectSelections": True, "pagedJobSelections": True,
+                                       "projectSelections": True, "pagedJobSelections": True, "jobRevisions": True,
                                        "draftScope": hashlib.sha256(("hamma-draft:" + self.owner).encode()).hexdigest(),
                                        "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(),
                                        "inspection": True, "zipVerification": True, "tarVerification": True, "zipSelection": True,
@@ -1633,6 +1648,8 @@ def handler(service):
                 known = parse_qs(url.query).get("revision", [""])[0]
                 live = [service.public(self.owner, job) for job in jobs] if jobs is not None and token == known else None
                 return self.send(200, {"revision": token, "now": now, "jobs": live})
+            if path == "/api/process/jobs/revision" and method == "GET":
+                return self.send(200, {"revision": service.store.job_revision(self.owner), "now": time.time()})
             if path == "/api/process/jobs/overview" and method == "GET":
                 metrics, jobs = service.store.history_overview(self.owner)
                 return self.send(200, {"metrics": metrics, "jobs": [service.public(self.owner, job) for job in jobs]})
