@@ -15,6 +15,19 @@ the revision, platform, fixture, outcome and skipped cases.
 | Formats and fidelity | Check advertised archive round trips with independent tools and compare decoded media with source fixtures. Exercise the outstanding encryption, split/join, and document conversion cases. |
 | Production operations | Check readiness, retention, interrupted uploads and downloads across service recreation. Rehearse backup restoration, migrations and alerting in the target environment. Multi-node recovery requires the intended compute and storage. |
 
+The Windows candidate passed 112 headless Chromium layout cases across eight
+views, seven widths and two themes, and the skip link moved focus to main content
+in both themes. Two unstarted selections reopened at 375 px. The loopback restart
+drill recovered a verified ZIP, the seven-day retention setting and a partial
+upload from its saved byte offset. A one-slot run completed all 11 jobs across
+three projects and two owners, verified 33,751,040 input bytes and rejected all
+11 cross-owner downloads. Windows native CLI and C ABI contracts passed.
+
+On Python 3.13 the standard TAR reader avoids retaining a separate TarInfo
+cache. Output manifests still retain per-member state. Windows bsdtar 3.8.9
+verified TAR.ZST in both directions, including nested paths, an empty file,
+an empty directory and member SHA-256 checks.
+
 ## Web release evidence — 2026-11-12
 
 The release remains open. The [web engineering audit](hammer-directive-audit.md)
