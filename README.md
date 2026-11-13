@@ -35,8 +35,9 @@ Each visitor has a separate session and history.
 To use a retained processor result in another operation, open **Files & History**
 and choose the **Use in workspace** plus button beside its download. HAMMA adds
 the result to the current project without transferring it through the browser.
-The input keeps the original result's expiration time. This works with processor
-outputs on storage that supports hard links.
+The input keeps the original result's expiration time. HAMMA uses a hard link
+where supported and makes a verified local copy when the filesystem cannot link
+the result and has enough free space.
 
 Local HTTP clients can use the same handoff with
 `POST /api/process/jobs/{jobId}/reuse`. Send `X-Hamma-Request: 1`, the same

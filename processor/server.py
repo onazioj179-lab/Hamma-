@@ -823,7 +823,26 @@ class Service:
                 try:
                     os.link(output, destination)
                 except OSError as error:
-                    raise HTTPError(507, "Processor storage could not link this output") from error
+                    if error.errno not in (errno.EXDEV, errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS) and getattr(error, "winerror", None) not in (1, 17, 50):
+                        raise HTTPError(507, "Processor storage could not link this output") from error
+                    if shutil.disk_usage(folder).free < size + 64 * 1024**2:
+                        raise HTTPError(507, "Storage full")
+                    digest = hashlib.sha256()
+                    context = Context(folder, self.limits)
+                    with output.open("rb") as source, destination.open("xb") as copy:
+                        remaining = size
+                        while remaining:
+                            context.check()
+                            block = source.read(min(remaining, BLOCK))
+                            if not block:
+                                break
+                            copy.write(block)
+                            digest.update(block)
+                            remaining -= len(block)
+                        if remaining or source.read(1) or digest.hexdigest() != upload["sha256"]:
+                            raise HTTPError(409, "Output integrity check failed")
+                        copy.flush()
+                        os.fsync(copy.fileno())
                 self.store.put(owner, "upload", upload)
             with destination.open("rb") as stream:
                 inspection = inspect_headers([{"head": stream.read(512).hex()}])[0]

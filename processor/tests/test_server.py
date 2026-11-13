@@ -263,6 +263,25 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.service.store.count(kind="upload"), before)
         self.assertEqual(self.call(path + "?includeSelections=1")["sources"][0]["id"], selection["id"])
 
+    def test_output_reuse_verifies_copy_when_links_are_unsupported(self):
+        original = self.execute(self.job(self.upload(b"copy fixture", "original.txt")))
+        path = "/jobs/" + original["id"] + "/reuse"
+        self.call("/projects/default", {}, "PUT")
+        owner, job = self.service.store.list()[0]
+        output = self.service.store.folder(owner, job["id"]) / job["outputFile"]
+        original_bytes = output.read_bytes()
+        output.write_bytes(b"x" * len(original_bytes))
+        with patch("processor.server.os.link", side_effect=OSError(errno.ENOTSUP, "link unavailable")):
+            before = self.service.store.count(kind="upload")
+            self.assert_status(409, lambda: self.call(path, {}, "POST"))
+            self.assertEqual(self.service.store.count(kind="upload"), before)
+            output.write_bytes(original_bytes)
+            source = self.call(path, {}, "POST")
+        self.call("/jobs/" + original["id"] + "/files", method="DELETE")
+        extracted = self.execute(self.job({"id": source["upload"]}, operation="extract", recoverable=True))
+        with zipfile.ZipFile(io.BytesIO(self.call(extracted["download"].removeprefix("/api/process"), raw=True))) as archive:
+            self.assertEqual(archive.read("original.txt"), b"copy fixture")
+
     def test_restart_preparation_is_instance_bound_and_keeps_queued_jobs_intact(self):
         queued = self.job()
         self.assert_status(409, lambda: self.call("/prepare-restart", method="POST", headers={"X-Hamma-Instance": "wrong"}))
