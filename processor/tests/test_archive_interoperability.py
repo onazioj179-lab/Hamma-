@@ -7,6 +7,7 @@ import subprocess
 import zipfile
 
 from processor.engine import compress, extract, verify_archive
+from processor.native import capability
 from processor.tests.test_engine import EngineFixture
 
 
@@ -16,6 +17,7 @@ FORMAT_OPTIONS = {
     "tar.gz": ("--format", "pax", "-z"),
     "tar.bz2": ("--format", "pax", "-j"),
     "tar.xz": ("--format", "pax", "-J"),
+    "tar.zst": ("--format", "pax", "--zstd"),
 }
 
 
@@ -65,11 +67,16 @@ class ArchiveInteroperabilityTests(EngineFixture):
         else:
             self.assert_bsdtar_succeeded(result)
 
+    def require_native_format(self, target):
+        if target == "tar.zst" and not capability():
+            self.skipTest("The SHANTE Zstandard executable is unavailable")
+
     def test_bsdtar_extracts_hamma_archives(self):
         inputs = [{"name": name, "path": str(self.fixture / name)} for name in self.files]
         inputs.append({"name": self.empty, "directory": True})
         for target in FORMAT_OPTIONS:
             with self.subTest(target=target):
+                self.require_native_format(target)
                 archive = self.root / f"hamma.{target}"
                 restored = self.root / f"bsdtar-restored-{target}"
                 restored.mkdir()
@@ -85,6 +92,7 @@ class ArchiveInteroperabilityTests(EngineFixture):
     def test_hamma_verifies_and_extracts_bsdtar_archives(self):
         for target in FORMAT_OPTIONS:
             with self.subTest(target=target):
+                self.require_native_format(target)
                 archive = self.root / f"bsdtar.{target}"
                 self.create_bsdtar_archive(archive, target)
                 entries = verify_archive(archive, archive.name, self.root / "report.json", self.context())

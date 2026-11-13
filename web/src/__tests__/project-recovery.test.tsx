@@ -341,6 +341,7 @@ it('merges unstarted selections with partial and completed uploads across recove
     expect(host.textContent).toContain('Select the original files to continue 1 upload.');
     expect(host.querySelector('[aria-label="Select original file for partial.txt"]')).not.toBeNull();
     expect(host.querySelectorAll('.source-row').length).toBeLessThan(106);
+    expect(compress().disabled).toBe(true);
     await act(async () => compress().click());
     expect(chunkWrites).toBe(0);
     expect(jobAttempts).toBe(0);

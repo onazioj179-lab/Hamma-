@@ -9,6 +9,9 @@ export interface ProjectSettings {
 export interface SavedProject { id: string; created: number; updated: number; revision: number; settings: ProjectSettings }
 export const defaultProjectSettings: ProjectSettings = { target: 'zip', conversion: 'wav', qualityMode: 'lossless', metadataPolicy: 'strip', recursive: false };
 
+export const needsOriginal = (source: Source) =>
+  !source.directory && !source.file && (!source.upload || source.resume);
+
 export function readSelection(key: string): { sources: Source[]; selected: string[] } {
   try {
     const draft = JSON.parse(localStorage.getItem(key) || 'null');

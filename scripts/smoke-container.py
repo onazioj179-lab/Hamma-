@@ -1,19 +1,25 @@
 """Check a disposable HAMMA container through its public HTTP endpoints."""
 
+import argparse
 import hashlib
-from http.cookiejar import CookieJar
+from http.cookiejar import LWPCookieJar
 from io import BytesIO
 import json
+from pathlib import Path
 import random
 import re
-import sys
 import time
+from urllib.error import HTTPError
 from urllib.request import build_opener, HTTPCookieProcessor, ProxyHandler, Request
 from zipfile import ZipFile
 
 
-def check(base):
-    client = build_opener(ProxyHandler({}), HTTPCookieProcessor(CookieJar()))
+def check(base, state_path=None, after_restart=False):
+    cookie_path = state_path.with_suffix(".cookies") if state_path else None
+    cookies = LWPCookieJar(cookie_path)
+    if after_restart:
+        cookies.load(ignore_discard=True)
+    client = build_opener(ProxyHandler({}), HTTPCookieProcessor(cookies))
 
     def call(path, payload=None, method="GET", headers=None, raw=False):
         request = Request(base + path, data=payload, method=method,
@@ -32,6 +38,16 @@ def check(base):
         assert result["offset"] == len(payload), result
         return source["id"]
 
+    def assert_owner_only(job):
+        stranger = build_opener(ProxyHandler({}))
+        try:
+            stranger.open(base + job["download"], timeout=10).close()
+        except HTTPError as error:
+            assert error.code in (401, 403, 404), error
+            error.close()
+        else:
+            raise AssertionError("A different guest could download the output")
+
     def download(operation, target, uploads):
         job = post("/api/process/jobs", {"operation": operation, "target": target, "uploads": uploads})
         deadline = time.monotonic() + 30
@@ -43,7 +59,29 @@ def check(base):
         assert job["state"] == "completed", job
         data = call(job["download"], raw=True)
         assert hashlib.sha256(data).hexdigest() == job["sha256"]
-        return job["outputName"], data
+        return job, data
+
+    # Readiness is polled by the container and by operators without a session.
+    with build_opener(ProxyHandler({})).open(base + "/api/process/ready", timeout=10) as response:
+        assert json.load(response) == {"ready": True}
+        assert response.headers.get("Set-Cookie") is None
+    if after_restart:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        job = call("/api/process/jobs/" + state["job"])
+        data = call(job["download"], raw=True)
+        assert job["sha256"] == hashlib.sha256(data).hexdigest() == state["sha256"]
+        assert_owner_only(job)
+        assert call("/api/process/settings")["fileRetention"] == "7d"
+        path = "/api/process/uploads/" + state["upload"]
+        checkpoint = call(path)
+        assert checkpoint["offset"] == 5, checkpoint
+        result = call(path, b" after restart", "PUT", {"Upload-Offset": "5"})
+        assert result["offset"] == 19, result
+        _, data = download("compress", "zip", [state["upload"]])
+        with ZipFile(BytesIO(data)) as archive:
+            assert archive.read("resume.txt") == b"start after restart"
+        print("Restart preserved retention, the verified download, and the upload checkpoint.")
+        return
 
     page = call("/", raw=True)
     assert b'id="root"' in page
@@ -53,7 +91,8 @@ def check(base):
     assert capabilities["nativeEngine"]["protocol"] == 1, capabilities
     assert "tar.zst" in capabilities["archives"], capabilities
     files = {"nested/one.txt": b"First member", "two.bin": random.Random(42).randbytes(4096)}
-    packed_name, packed = download("compress", "tar.zst", [upload(name, data) for name, data in files.items()])
+    packed_job, packed = download("compress", "tar.zst", [upload(name, data) for name, data in files.items()])
+    packed_name = packed_job["outputName"]
     assert packed_name.endswith(".tar.zst"), packed_name
     packed_id = upload(packed_name, packed)
     _, report = download("verify", "json", [packed_id])
@@ -62,11 +101,31 @@ def check(base):
     assert {entry["name"]: entry["sha256"] for entry in report["entries"]} == {
         name: hashlib.sha256(data).hexdigest() for name, data in files.items()
     }, report
-    _, restored = download("extract", "zip", [packed_id])
+    restored_job, restored = download("extract", "zip", [packed_id])
     with ZipFile(BytesIO(restored)) as archive:
         assert {name: archive.read(name) for name in archive.namelist()} == files
+    assert_owner_only(restored_job)
+    if state_path:
+        settings = {"historyRetention": "30d", "fileRetention": "7d"}
+        call("/api/process/settings", json.dumps(settings).encode(), "PUT",
+             {"Content-Type": "application/json"})
+        source = post("/api/process/uploads", {"name": "resume.txt", "size": 19})
+        result = call("/api/process/uploads/" + source["id"], b"start", "PUT",
+                      {"Upload-Offset": "0"})
+        assert result["offset"] == 5, result
+        cookies.save(ignore_discard=True)
+        state_path.write_text(json.dumps({"job": restored_job["id"],
+                                          "sha256": restored_job["sha256"],
+                                          "upload": source["id"]}), encoding="utf-8")
     print("Container served the web build and verified an exact TAR.ZST round trip.")
 
 
 if __name__ == "__main__":
-    check(sys.argv[1].rstrip("/"))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("base")
+    parser.add_argument("--state", type=Path)
+    parser.add_argument("--after-restart", action="store_true")
+    args = parser.parse_args()
+    if args.after_restart and not args.state:
+        parser.error("--after-restart requires --state")
+    check(args.base.rstrip("/"), args.state, args.after_restart)

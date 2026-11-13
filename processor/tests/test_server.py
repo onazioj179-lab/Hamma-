@@ -1219,7 +1219,8 @@ class ServerTests(unittest.TestCase):
 
     def test_running_worker_cancellation_stays_final(self):
         job = self.job(self.upload(os.urandom(2 * 1024**2), name="cancel.bin"))
-        self.service.tick()
+        with patch("processor.server.available_memory", return_value=2 * 1024**3):
+            self.service.tick()
         self.assertTrue(self.service.running)
         cancelled = self.call("/jobs/" + job["id"] + "/cancel", {}, "POST")
         self.assertEqual(cancelled["state"], "cancelled")

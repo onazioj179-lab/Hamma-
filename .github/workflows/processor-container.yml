@@ -14,7 +14,11 @@ jobs:
       - name: Start the local deployment
         run: docker compose -f compose.local.yml up --build --detach --wait --wait-timeout 60
       - name: Verify web assets and Zstandard jobs through the deployed service
-        run: python3 scripts/smoke-container.py http://127.0.0.1:5010
+        run: python3 scripts/smoke-container.py http://127.0.0.1:5010 --state "$RUNNER_TEMP/hamma-smoke.json"
+      - name: Recreate the service with its existing volume
+        run: docker compose -f compose.local.yml up --detach --force-recreate --wait --wait-timeout 60
+      - name: Verify the download, retention and upload checkpoint after restart
+        run: python3 scripts/smoke-container.py http://127.0.0.1:5010 --state "$RUNNER_TEMP/hamma-smoke.json" --after-restart
       - name: Record packages and runtimes from the running image
         run: |
           mkdir -p image-inventory
