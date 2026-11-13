@@ -198,34 +198,3 @@ export async function upload(source: Source, signal: AbortSignal, update: (offse
   }
   return id;
 }
-
-export async function droppedSources(transfer: DataTransfer, max = 5000): Promise<Source[]> {
-  const sources: Source[] = [];
-  const append = (name: string, file: File | null) => {
-    sources.push({ id: randomId(), name, file, size: file?.size || 0, directory: file === null });
-    if (sources.length > max) throw new Error(`Choose at most ${max.toLocaleString()} files. Nothing was added.`);
-  };
-  async function walk(entry: FileSystemEntry, depth = 0): Promise<void> {
-    if (depth > 64) throw new Error('Folder nesting limit reached');
-    if (entry.isFile) {
-      const file = await new Promise<File>((resolve, reject) => (entry as FileSystemFileEntry).file(resolve, reject));
-      append(entry.fullPath.slice(1), file);
-    } else if (entry.isDirectory) {
-      const reader = (entry as FileSystemDirectoryEntry).createReader();
-      let any = false;
-      while (true) {
-        const entries = await new Promise<FileSystemEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
-        if (!entries.length) break;
-        any = true;
-        for (const child of entries) await walk(child, depth + 1);
-      }
-      if (!any) append(entry.fullPath.slice(1) + '/', null);
-    }
-  }
-  // Entry handles must be captured before the drop event's data store closes.
-  const entries = Array.from(transfer.items || []).map(item => item.webkitGetAsEntry?.()).filter((entry): entry is FileSystemEntry => !!entry);
-  const files = Array.from(transfer.files);
-  if (entries.length) for (const entry of entries) await walk(entry);
-  else for (const file of files) append(file.webkitRelativePath || file.name, file);
-  return sources;
-}

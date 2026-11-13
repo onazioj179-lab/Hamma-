@@ -191,6 +191,27 @@ it('leaves the selection intact when a folder picker is cancelled', async () => 
   expect(button('Add Folder').disabled).toBe(false);
 });
 
+it('cancels a stalled folder drop and ignores its late entries', async () => {
+  await render(); await select([new File(['keep'], 'keep.txt')]);
+  let release!: (entries: unknown[]) => void;
+  const entry = { isDirectory: true, fullPath: '/cloud', createReader: () => ({
+    readEntries: (callback: (entries: unknown[]) => void) => { release = callback; },
+  }) };
+  const drop = new Event('drop', { bubbles: true, cancelable: true });
+  Object.defineProperty(drop, 'dataTransfer', { value: { items: [{ webkitGetAsEntry: () => entry }] } });
+  await act(async () => host.querySelector('.universal-drop')!.dispatchEvent(drop));
+  expect(host.textContent).toContain('Reading folder');
+  expect(button('Add Folder').disabled).toBe(true);
+  await act(async () => button('Cancel').click());
+  expect(button('Add Folder').disabled).toBe(false);
+  const readFile = vi.fn();
+  await act(async () => release([{ isFile: true, fullPath: '/cloud/late.txt', file: readFile }]));
+  expect(readFile).not.toHaveBeenCalled();
+  expect(host.textContent).toContain('keep.txt');
+  expect(host.textContent).toContain('1 selected');
+  expect(host.querySelector('[role=alert]')).toBeNull();
+});
+
 it('preserves relative paths from directory input and allows the same folder again after removal', async () => {
   await render();
   const directory = host.querySelector<HTMLInputElement>('[aria-label="Add folder to queue"]')!;
@@ -202,6 +223,18 @@ it('preserves relative paths from directory input and allows the same folder aga
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Remove selected files"]')!.click());
   await act(async () => directory.dispatchEvent(new Event('change', { bubbles: true })));
   expect(host.textContent).toContain('Picked/sub/nested.txt');
+});
+
+it('rejects an oversized fallback folder before iterating its file list', async () => {
+  await render(); await select([new File(['keep'], 'keep.txt')]);
+  const directory = host.querySelector<HTMLInputElement>('[aria-label="Add folder to queue"]')!;
+  const iterate = vi.fn();
+  Object.defineProperty(directory, 'files', { value: { length: 5001, [Symbol.iterator]: iterate } });
+  await act(async () => directory.dispatchEvent(new Event('change', { bubbles: true })));
+  expect(iterate).not.toHaveBeenCalled();
+  expect(host.querySelector('[role=alert]')?.textContent).toContain('Nothing was added');
+  expect(host.textContent).toContain('keep.txt');
+  expect(host.textContent).toContain('1 selected');
 });
 
 it('clears previous-owner jobs before auth resolves while preserving selected files', async () => {

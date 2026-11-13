@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { droppedSources, randomId, requestId, upload, request, type Source } from '../processing/client';
+import { randomId, requestId, upload, request, type Source } from '../processing/client';
 
 afterEach(() => vi.unstubAllGlobals());
 const response = (value: unknown, ok = true) => ({ ok, json: async () => value });
@@ -39,19 +39,6 @@ it('keeps an existing upload ID when resuming and honors cancellation', async ()
   await expect(upload(source, controller.signal, () => {})).rejects.toThrow();
   expect(fetch).not.toHaveBeenCalled();
   expect(source.upload).toBe('existing');
-});
-
-it('preserves empty folders in directory drops', async () => {
-  const entry = { isDirectory: true, fullPath: '/folder/empty', createReader: () => ({ readEntries: (resolve: (entries: unknown[]) => void) => resolve([]) }) };
-  const transfer = { items: [{ webkitGetAsEntry: () => entry }], files: [] } as unknown as DataTransfer;
-  const sources = await droppedSources(transfer);
-  expect(sources).toHaveLength(1);
-  expect(sources[0]).toMatchObject({ name: 'folder/empty/', directory: true, file: null, size: 0 });
-});
-
-it('rejects oversized drops instead of silently skipping files', async () => {
-  const transfer = { items: [], files: [new File(['a'], 'a'), new File(['b'], 'b')] } as unknown as DataTransfer;
-  await expect(droppedSources(transfer, 1)).rejects.toThrow('Nothing was added');
 });
 
 it('recreates an expired upload and sends the original bytes from the beginning', async () => {

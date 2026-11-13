@@ -13,10 +13,10 @@ import { SelectField } from '../ui/SelectField';
 import { ConfirmAction, type ConfirmationRequest } from '../ui/ConfirmAction';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowDownToLine, ArrowRightLeft, Check, ChevronLeft, ChevronRight, Download, File, FileArchive, FolderPlus, History, Loader2, Pause, Play, Plus, RefreshCw, Search, ShieldCheck, Trash2, X } from 'lucide-react';
-import { activeJob, droppedSources, jsonRequest, stageJobSelection, ProcessorError, request, requestId, randomId, upload, type Capability, type Job, type Retention, type Source } from '../../processing/client';
+import { activeJob, jsonRequest, stageJobSelection, ProcessorError, request, requestId, randomId, upload, type Capability, type Job, type Retention, type Source } from '../../processing/client';
 import { formatFileSize } from '../../utils/fileHelpers';
 import { accountChanging } from '../../processing/account';
-import { directoryPicker, readFolder } from '../../processing/folders';
+import { directoryPicker, droppedSources, readFolder } from '../../processing/folders';
 import '../../processing/processing.css';
 
 type Props = { visible: boolean; screen: 'workspace' | 'files' | 'history'; onHistory: () => void; spkResult?: { outputName: string; downloadUrl: string | null; historyId?: string; historyCreated?: number; originalSize?: number; resultSize?: number; operation?: 'compress' | 'extract' } | null; onSpkDownload?: () => void; spkReady?: boolean; spkBusy?: boolean; spkStatus?: ReactNode; onSpkSelect?: (files: File[], restore: boolean) => Promise<boolean> };
@@ -337,7 +337,18 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     setSources(previous => [...previous, ...allocated]);
     setSelected(previous => new Set([...previous, ...allocated.map(source => source.id)]));
   };
-  const choose = (files: File[]) => add(files.map(file => ({ id: randomId(), file, name: file.webkitRelativePath || file.name, size: file.size, directory: false })));
+  const choose = (files: FileList, directory = false) => {
+    const maximum = capability?.limits.files || 5000;
+    if (files.length > maximum) {
+      setError(`Choose at most ${maximum.toLocaleString()} files. Nothing was added.`);
+      return;
+    }
+    const incoming = Array.from(files, file => ({
+      id: randomId(), file, name: file.webkitRelativePath || file.name, size: file.size, directory: false,
+    }));
+    add(incoming);
+    setFolderHelp(directory && !incoming.some(source => source.file.webkitRelativePath));
+  };
   const reselect = (source: Source, file: File) => {
     if (busy || recovering || spkBusy || accountChanging()) return;
     if (file.size !== source.size || file.name.normalize('NFC') !== source.name.split('/').pop()?.normalize('NFC')) {
@@ -349,21 +360,14 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     setSources(previous => previous.map(entry => entry.id === source.id ? { ...entry, file, inspection: undefined } : entry));
     setSelected(previous => new Set([...previous, source.id]));
   };
-  const chooseFolder = async () => {
+  const collectFolder = async (read: (signal: AbortSignal) => Promise<Source[]>) => {
     if (busy || recovering || spkBusy || folderController.current || accountChanging()) return;
-    setError(''); setFolderHelp(true);
-    const picker = directoryPicker();
-    if (!picker) {
-      if (folder.current && 'webkitdirectory' in folder.current) folder.current.click();
-      return;
-    }
     const controller = new AbortController(); folderController.current = controller;
     const generation = ownerGeneration.current;
+    setError('');
     setBusy(true); setReadingFolder(true);
     try {
-      // Call directly from the button gesture, before awaiting any other work.
-      const handle = await picker({ mode: 'read', id: 'hamma-add-folder' });
-      const incoming = await readFolder(handle, capability?.limits.files || 5000, controller.signal);
+      const incoming = await read(controller.signal);
       if (mounted.current && generation === ownerGeneration.current && !controller.signal.aborted) {
         add(incoming); setFolderHelp(false);
       }
@@ -375,6 +379,20 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       if (folderController.current === controller) folderController.current = null;
       if (mounted.current) { setBusy(false); setReadingFolder(false); }
     }
+  };
+  const chooseFolder = () => {
+    if (busy || recovering || spkBusy || folderController.current || accountChanging()) return;
+    setFolderHelp(true);
+    const picker = directoryPicker();
+    if (!picker) {
+      setError('');
+      if (folder.current && 'webkitdirectory' in folder.current) folder.current.click();
+      return;
+    }
+    void collectFolder(async signal => {
+      const handle = await picker({ mode: 'read', id: 'hamma-add-folder' });
+      return readFolder(handle, capability?.limits.files, signal);
+    });
   };
   useEffect(() => {
     if (!capability?.inspection) return;
@@ -768,15 +786,19 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       {recoveryNotice && <p className="footnote" role="status">{recoveryNotice} Files stay available until their upload retention expires.</p>}
       {missingSelections > 0 && <p className="footnote" role="status">Select the original files for {missingSelections} {missingSelections === 1 ? 'saved selection' : 'saved selections'}.</p>}
       {incompleteUploads > 0 && <p className="footnote" role="status">Select the original files to continue {incompleteUploads} {incompleteUploads === 1 ? 'upload' : 'uploads'}.</p>}
-      <div className={`surface universal-drop ${dragging ? 'drag-active' : ''}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); if (busy || recovering || spkBusy) return; void droppedSources(event.dataTransfer, capability?.limits.files).then(add).catch(caught => setError(caught.message)); }}>
+      <div className={`surface universal-drop ${dragging ? 'drag-active' : ''}`} onDragOver={event => { event.preventDefault(); setDragging(!busy && !recovering && !spkBusy); }} onDragLeave={() => setDragging(false)} onDrop={event => {
+        event.preventDefault(); setDragging(false);
+        const transfer = event.dataTransfer;
+        void collectFolder(signal => droppedSources(transfer, capability?.limits.files, signal));
+      }}>
         <div className="universal-drop-icon" aria-hidden="true"><FileArchive size={30} strokeWidth={1.2} /></div>
         <p>Drop files or folders here</p>
         <div className="button-row">
           <button className="button primary" disabled={busy || recovering || spkBusy} onClick={() => input.current?.click()}><Plus size={16} /> Add Files</button>
           <button className="button secondary" disabled={busy || recovering || spkBusy} onClick={() => void chooseFolder()}><FolderPlus size={16} /> Add Folder</button>
         </div>
-        <input type="file" multiple className="file-picker-input" tabIndex={-1} ref={input} aria-label="Add files to queue" onChange={event => { const files = Array.from(event.target.files || []); choose(files); if (files.length) setFolderHelp(false); event.target.value = ''; }} />
-        <input type="file" multiple className="file-picker-input" tabIndex={-1} ref={folder} {...{ webkitdirectory: '' }} aria-label="Add folder to queue" onChange={event => { const files = Array.from(event.target.files || []); if (files.length) { choose(files); setFolderHelp(!files.some(file => file.webkitRelativePath)); } else setError('No files were selected from this folder. Select its files instead.'); event.target.value = ''; }} />
+        <input type="file" multiple className="file-picker-input" tabIndex={-1} ref={input} aria-label="Add files to queue" onChange={event => { const files = event.target.files; if (files?.length) choose(files); event.target.value = ''; }} />
+        <input type="file" multiple className="file-picker-input" tabIndex={-1} ref={folder} {...{ webkitdirectory: '' }} aria-label="Add folder to queue" onChange={event => { const files = event.target.files; if (files?.length) choose(files, true); else setError('No files were selected from this folder. Select its files instead.'); event.target.value = ''; }} />
       </div>
       {folderHelp && !readingFolder && <div className="processor-notice folder-selection-help" role="status"><span>Can’t select the folder? Select the files inside it instead, or add a ZIP.</span><button className="button secondary" disabled={busy || recovering || spkBusy} onClick={() => input.current?.click()}>Select files instead</button><button className="icon-button" aria-label="Dismiss folder help" onClick={() => setFolderHelp(false)}><X size={16} /></button></div>}
       {readingFolder && <div className="upload-status" role="status"><Loader2 size={16} className="animate-spin" /><span>Reading folder…</span><button className="button secondary" onClick={() => folderController.current?.abort()}>Cancel</button></div>}
