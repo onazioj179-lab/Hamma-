@@ -372,7 +372,10 @@ class ServerTests(unittest.TestCase):
         stranger = build_opener(HTTPCookieProcessor(CookieJar()))
         self.assert_status(404, lambda: self.call('/jobs', request, 'POST', client=stranger))
 
-        job = self.call('/jobs', request, 'POST')
+        with patch.object(self.service.store, 'get_uploads', wraps=self.service.store.get_uploads) as reads:
+            job = self.call('/jobs', request, 'POST')
+        self.assertEqual([len(call.args[1]) for call in reads.call_args_list], [100, 100, 1])
+        self.assertEqual(job['inputMode'], 'upload-pages')
         self.assertEqual(self.call('/jobs', request, 'POST')['id'], job['id'])
         self.assert_status(409, lambda: self.call(path, {'offset': 201, 'uploads': ['f' * 32]}, 'PUT'))
         self.assertEqual(self.call('/jobs')['total'], 1)
@@ -390,6 +393,70 @@ class ServerTests(unittest.TestCase):
         self.service.job_selections.cleanup()
         with self.service.store.connect() as db:
             self.assertEqual(db.execute('SELECT count(*) FROM job_selection_items').fetchone()[0], 0)
+
+    def test_staged_recovery_matches_existing_request_identity_and_rechecks_file_changes(self):
+        first = self.upload(b'abc', 'first.txt')
+        owner = self.service.store.list(kind='upload')[0][0]
+        uploads = [first['id']]
+        for number in range(1, 101):
+            upload = f'{number:032x}'
+            folder = self.service.store.folder(owner, upload)
+            folder.mkdir(parents=True)
+            (folder / 'input').write_bytes(b'abc')
+            self.service.store.put(owner, 'upload', {'id': upload, 'created': time.time(),
+                'name': f'input-{number}.txt', 'size': 3, 'directory': False, 'expires': time.time() + 300})
+            uploads.append(upload)
+        project = 'default'
+        self.call('/projects/' + project, {'revision': 0}, 'PUT')
+        selection = 'b' * 32
+        path = '/job-selections/' + selection
+        ordered = list(reversed(uploads))
+        for offset in (0, 100):
+            self.call(path, {'offset': offset, 'uploads': ordered[offset:offset + 100]}, 'PUT')
+        request = {'selectionId': selection, 'selectionCount': len(uploads), 'operation': 'compress',
+                   'target': 'zip', 'zipProfile': 'maximum', 'zipComment': 'test', 'recoverable': True}
+        source = self.service.store.folder(owner, first['id']) / 'input'
+        from processor.job_selections import AdmissionInputs
+        check = AdmissionInputs.check_files
+
+        def changed_file(admission, store, upload_owner):
+            source.write_bytes(b'xyz')
+            changed = source.stat()
+            os.utime(source, ns=(changed.st_atime_ns, changed.st_mtime_ns + 2_000_000_000))
+            return check(admission, store, upload_owner)
+
+        with patch.object(AdmissionInputs, 'check_files', changed_file):
+            self.assert_status(409, lambda: self.call('/jobs', request, 'POST'))
+        self.assertEqual(self.call('/jobs')['total'], 0)
+        self.assertNotIn('sha256', self.service.store.get(owner, 'upload', first['id']))
+        with self.service.store.connect() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM job_input_pages').fetchone()[0], 0)
+            db.execute("INSERT INTO project_inputs VALUES (?,?,?,?,?)",
+                       (owner, project, 'a' * 32, first['id'], time.time()))
+            db.execute("""CREATE TRIGGER reject_last_input BEFORE INSERT ON job_input_pages
+                          WHEN NEW.position=100 BEGIN SELECT RAISE(ABORT, 'injected failure'); END""")
+
+        self.assert_status(500, lambda: self.call('/jobs', request, 'POST'))
+        self.assertEqual(self.call('/jobs')['total'], 0)
+        self.assertNotIn('sha256', self.service.store.get(owner, 'upload', first['id']))
+        with self.service.store.connect() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM job_input_pages').fetchone()[0], 0)
+            self.assertEqual(db.execute('SELECT count(*) FROM job_inputs').fetchone()[0], 0)
+            self.assertEqual(db.execute('SELECT count(*) FROM project_inputs WHERE owner=?', (owner,)).fetchone()[0], 1)
+            db.execute('DROP TRIGGER reject_last_input')
+
+        job = self.call('/jobs', request, 'POST')
+        identity = ['project-recovery-v1', project, sorted(uploads), 'compress', 'zip', False,
+                    'lossless', 'strip', 'maximum', ['zipComment', 'test']]
+        request_id = hashlib.sha256(json.dumps(identity, separators=(',', ':')).encode()).hexdigest()
+        expected_job = hashlib.sha256((owner + request_id).encode()).hexdigest()[:32]
+        self.assertEqual(job['id'], expected_job)
+        inline = {key: value for key, value in request.items() if key not in ('selectionId', 'selectionCount')}
+        self.assertEqual(self.call('/jobs', {**inline, 'uploads': uploads}, 'POST')['id'], expected_job)
+        self.assertEqual(self.call('/jobs', request, 'POST')['id'], expected_job)
+        with self.service.store.connect() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM project_inputs WHERE owner=?', (owner,)).fetchone()[0], 0)
+            self.assertEqual(db.execute('SELECT count(*) FROM job_input_pages').fetchone()[0], 101)
 
     def test_batch_admission_keeps_other_requests_responsive_during_hashing(self):
         from processor.server import file_digest

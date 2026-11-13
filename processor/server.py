@@ -7,13 +7,14 @@ from __future__ import annotations
 
 import argparse
 import errno
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 import hashlib
 import gzip
 import hmac
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import ipaddress
+from itertools import zip_longest
 import json
 import logging
 import lzma
@@ -41,7 +42,7 @@ from .worker_limits import apply_windows_worker_limits, apply_worker_limits
 from .resources import available_memory, worker_capacity
 from .errors import describe_failure
 from .projects import Projects, ProjectError
-from .job_selections import JobSelections
+from .job_selections import AdmissionInputs, JobSelections, forget_job_uploads, recovery_request_id
 from .accounts import Accounts, AccountError, plan as account_plan
 from .catalog import FileCatalog
 from .capabilities import action_registry, inspect_headers, media_targets, single_file_archives
@@ -1041,6 +1042,25 @@ def handler(service):
                 raise HTTPError(410, "Upload expired or unavailable")
             return record, source
 
+        def verify_job_input(self, upload_id, upload):
+            if not upload or upload["expires"] <= time.time():
+                raise HTTPError(404, "File unavailable")
+            source = service.store.folder(self.owner, upload_id) / "input"
+            try:
+                info = source.stat()
+                if not stat.S_ISREG(info.st_mode):
+                    raise HTTPError(410, "Upload expired or unavailable")
+                if info.st_size != upload["size"]:
+                    raise HTTPError(409, "Upload incomplete")
+                item = {key: value for key, value in upload.items() if key != "writerHash"}
+                needs_digest = not item.get("sha256")
+                if needs_digest:
+                    ctx = Context(source.parent, service.limits)
+                    item.update(file_digest(source, ctx), format=detect(source))
+            except FileNotFoundError as error:
+                raise HTTPError(410, "Upload expired or unavailable") from error
+            return item, info, needs_digest
+
         def check_upload_writer(self, record):
             expected = record.get("writerHash")
             if expected and not secrets.compare_digest(expected, hashlib.sha256(self.headers.get("Upload-Writer", "").encode()).hexdigest()):
@@ -1345,21 +1365,28 @@ def handler(service):
             if path == "/api/process/jobs" and method == "POST":
                 body = self.json_body()
                 ids = body.get("uploads")
+                staged = None
                 if "selectionId" in body or "selectionCount" in body:
                     if "uploads" in body:
                         raise HTTPError(400, "Choose either uploads or a job selection")
                     project = Projects.identifier(body.get('projectId', 'default'))
-                    ids = service.job_selections.seal(
+                    staged = service.job_selections.seal(
                         self.owner, body.get("selectionId"), project, body.get("selectionCount"))
                 operation, target = body.get("operation"), body.get("target")
-                if not isinstance(ids, list) or not ids or len(ids) > service.limits["files"] or not all(isinstance(i, str) for i in ids) or len(set(ids)) != len(ids):
+                if staged is None and (not isinstance(ids, list) or not ids or len(ids) > service.limits["files"] or not all(isinstance(i, str) for i in ids) or len(set(ids)) != len(ids)):
                     raise HTTPError(400, "Invalid file selection")
                 if (operation == "compress" and target not in archive_formats() or operation == "extract" and target not in ("zip", "zip-deflate") or
                     operation == "convert" and target not in MEDIA or operation in ("verify", "inspect") and target != "json" or
                     operation not in ("compress", "extract", "convert", "verify", "inspect")):
                     raise HTTPError(400, "Unsupported operation")
-                if operation != "compress" and len(ids) != 1:
+                count = staged.count if staged else len(ids)
+                if operation != "compress" and count != 1:
                     raise HTTPError(400, "One input per extraction or conversion job")
+                paged_admission = staged is not None and count > 100
+                if paged_admission and target != "zip" and not target.startswith("tar"):
+                    raise HTTPError(400, "Choose one file for this format")
+                if staged and not paged_admission:
+                    ids = list(staged.ids())
                 zip_profile = body.get("zipProfile", "balanced")
                 if "zipProfile" in body and (operation != "compress" or target != "zip" or
                                               not isinstance(zip_profile, str) or zip_profile not in ZIP_PROFILES):
@@ -1395,25 +1422,41 @@ def handler(service):
                     raise HTTPError(400, 'Invalid recovery mode')
                 if recoverable:
                     service.projects.get(self.owner, project_id)
-                    identity = ['project-recovery-v1', project_id, sorted(ids), operation, target, bool(body.get('recursive')), quality_mode, metadata_policy]
+                    options = [operation, target, bool(body.get('recursive')), quality_mode, metadata_policy]
                     if zip_indexes is not None:
-                        identity.append(zip_indexes)
+                        options.append(zip_indexes)
                     if zip_profile != "balanced":
-                        identity.append(zip_profile)
+                        options.append(zip_profile)
                     if zip_comment:
-                        identity.append(["zipComment", zip_comment])
-                    request_id = hashlib.sha256(json.dumps(identity, separators=(',', ':')).encode()).hexdigest()
+                        options.append(["zipComment", zip_comment])
+                    sorted_ids = staged.ids(by_id=True) if paged_admission else sorted(ids)
+                    request_id = recovery_request_id(project_id, sorted_ids, *options)
                 if request_id is not None and (not isinstance(request_id, str) or not re.fullmatch(r"[a-f0-9]{64}", request_id)):
                     raise HTTPError(400, "Invalid request identifier")
                 job_id = hashlib.sha256((self.owner + request_id).encode()).hexdigest()[:32] if request_id else secrets.token_hex(16)
                 def existing_job():
                     existing = service.store.get(self.owner, "job", job_id)
                     if existing:
-                        existing_ids = [i['id'] for i in service.store.iter_job_inputs(self.owner, existing)]
-                        if ((sorted(existing_ids) != sorted(ids) if recoverable else existing_ids != ids) or existing["operation"] != operation or existing["target"] != target or existing["recursive"] != bool(body.get("recursive")) or
+                        if (existing["operation"] != operation or existing["target"] != target or existing["recursive"] != bool(body.get("recursive")) or
                             existing.get('projectId', 'default') != project_id or existing.get('qualityMode', 'lossless') != quality_mode or existing.get('metadataPolicy', 'strip') != metadata_policy or existing.get('zipIndexes') != zip_indexes or existing.get('zipProfile', 'balanced') != zip_profile or existing.get('zipComment', '') != zip_comment):
                             raise HTTPError(409, "Request identifier already used")
-                        if recoverable:
+                        if paged_admission:
+                            with service.store.connect() as db:
+                                if recoverable:
+                                    previous = (row[0] for row in db.execute(
+                                        "SELECT upload_id FROM job_inputs WHERE owner=? AND job_id=? ORDER BY upload_id",
+                                        (self.owner, job_id)))
+                                else:
+                                    previous = (item['id'] for item in service.store.iter_job_inputs(self.owner, existing))
+                                if any(left != right for left, right in zip_longest(previous, staged.ids(by_id=recoverable))):
+                                    raise HTTPError(409, "Request identifier already used")
+                                if recoverable:
+                                    forget_job_uploads(db, self.owner, project_id, job_id)
+                        else:
+                            previous = [i['id'] for i in service.store.iter_job_inputs(self.owner, existing)]
+                            if (sorted(previous) != sorted(ids) if recoverable else previous != ids):
+                                raise HTTPError(409, "Request identifier already used")
+                        if recoverable and not paged_admission:
                             service.projects.forget_uploads(self.owner, project_id, ids)
                     return existing
 
@@ -1423,36 +1466,76 @@ def handler(service):
                     if service.store.count(kind='job', states=(*ACTIVE, 'paused')) >= service.max_queued_jobs:
                         raise HTTPError(429, 'Processor queue full')
 
+                def make_record(name, size, format_hint, now):
+                    settings = service.defaults(self.owner)
+                    retention = RETENTION[settings["historyRetention"]]
+                    record = {"id": job_id, "projectId": project_id, "created": now, "name": name,
+                              "operation": operation, "target": target, "recursive": bool(body.get("recursive")),
+                              'qualityMode': quality_mode, 'metadataPolicy': metadata_policy,
+                              "state": "queued", "inputSize": size, "outputSize": None,
+                              "format": format_hint, "processed": 0, "entries": 0,
+                              "fileExpires": now + RETENTION[settings["fileRetention"]],
+                              "historyExpires": now + retention if retention else None,
+                              "downloadAvailable": False, "error": None}
+                    if zip_indexes is not None:
+                        record["zipIndexes"] = zip_indexes
+                    if zip_profile != "balanced":
+                        record["zipProfile"] = zip_profile
+                    if zip_comment:
+                        record["zipComment"] = zip_comment
+                    return record
+
                 with service.lock:
                     existing = existing_job()
                     if existing:
                         return self.send(200, service.public(self.owner, existing))
                     check_queue_capacity()
+
+                if paged_admission:
+                    with tempfile.TemporaryDirectory(prefix='hamma-admission-') as temp:
+                        spool = Path(temp) / 'inputs.sqlite3'
+                        with closing(sqlite3.connect(spool)) as db:
+                            admission = AdmissionInputs(db, spool)
+                            for page in staged.pages():
+                                uploads = service.store.get_uploads(self.owner, page)
+                                for upload_id in page:
+                                    upload, info, needs_digest = self.verify_job_input(upload_id, uploads.get(upload_id))
+                                    admission.append(upload, info, needs_digest)
+                            with service.lock:
+                                existing = existing_job()
+                                if existing:
+                                    return self.send(200, service.public(self.owner, existing))
+                                check_queue_capacity()
+                                admission.check_files(service.store, self.owner)
+                                record = make_record(f"{count} files", admission.size, "batch", time.time())
+                                record.update(inputMode="upload-pages", fileCount=count)
+                                directory = service.store.folder(self.owner, job_id)
+                                directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+                                try:
+                                    admission.promote(service.store, self.owner, record, recoverable)
+                                except BaseException:
+                                    # It remains empty until the scheduler can see the committed job.
+                                    try:
+                                        directory.rmdir()
+                                    except OSError:
+                                        LOG.warning("Could not remove unused job directory: %s", job_id)
+                                    raise
+                                service.store.trim_history(self.owner, limit=self.plan['historyRecords'])
+                    LOG.info("Job queued: %s %s", job_id, operation)
+                    return self.send(202, service.public(self.owner, record))
                 uploads = service.store.get_uploads(self.owner, ids)
 
                 inputs, verified_uploads, seen = [], [], set()
                 for upload_id in ids:
-                    upload = uploads.get(upload_id)
-                    if not upload or upload["expires"] <= time.time():
-                        raise HTTPError(404, "File unavailable")
-                    source = service.store.folder(self.owner, upload_id) / "input"
-                    try:
-                        info = source.stat()
-                        if not stat.S_ISREG(info.st_mode):
-                            raise HTTPError(410, "Upload expired or unavailable")
-                        if info.st_size != upload["size"]:
-                            raise HTTPError(409, "Upload incomplete")
-                        name_key = upload["name"].casefold()
-                        if name_key in seen:
-                            raise HTTPError(400, "Duplicate filename")
-                        seen.add(name_key)
-                        if not upload.get("sha256"):
-                            ctx = Context(source.parent, service.limits)
-                            upload.update(file_digest(source, ctx), format=detect(source))
-                            verified_uploads.append(upload)
-                    except FileNotFoundError as error:
-                        raise HTTPError(410, "Upload expired or unavailable") from error
-                    inputs.append({key: value for key, value in upload.items() if key != "writerHash"})
+                    upload, _, needs_digest = self.verify_job_input(upload_id, uploads.get(upload_id))
+                    name_key = upload["name"].casefold()
+                    if name_key in seen:
+                        raise HTTPError(400, "Duplicate filename")
+                    seen.add(name_key)
+                    if needs_digest:
+                        # Preserve the upload's writer claim in the legacy update.
+                        verified_uploads.append({**uploads[upload_id], **upload})
+                    inputs.append(upload)
                 if operation != "compress" and inputs[0].get("directory"):
                     raise HTTPError(400, "Choose a file")
 
@@ -1465,21 +1548,10 @@ def handler(service):
                     now = time.time()
                     if service.store.count_available_uploads(self.owner, ids, now) != len(ids):
                         raise HTTPError(410, "Upload expired or unavailable")
-                    settings = service.defaults(self.owner)
-                    retention = RETENTION[settings["historyRetention"]]
-                    record = {"id": job_id, "projectId": project_id, "created": now, "name": inputs[0]["name"] if len(inputs) == 1 else f"{len(inputs)} files",
-                              "operation": operation, "target": target, "inputs": inputs, "recursive": bool(body.get("recursive")),
-                              'qualityMode': quality_mode, 'metadataPolicy': metadata_policy,
-                              "state": "queued", "inputSize": sum(i["size"] for i in inputs), "outputSize": None,
-                              "format": inputs[0]["format"] if len(inputs) == 1 else "batch", "processed": 0, "entries": 0,
-                              "fileExpires": now + RETENTION[settings["fileRetention"]], "historyExpires": now + retention if retention else None,
-                              "downloadAvailable": False, "error": None}
-                    if zip_indexes is not None:
-                        record["zipIndexes"] = zip_indexes
-                    if zip_profile != "balanced":
-                        record["zipProfile"] = zip_profile
-                    if zip_comment:
-                        record["zipComment"] = zip_comment
+                    record = make_record(inputs[0]["name"] if count == 1 else f"{count} files",
+                                         sum(i["size"] for i in inputs),
+                                         inputs[0]["format"] if count == 1 else "batch", now)
+                    record["inputs"] = inputs
                     service.store.folder(self.owner, record["id"]).mkdir(mode=0o700, parents=True)
                     input_rows = None
                     if operation == "compress" and len(inputs) > 100 and (target == "zip" or target.startswith("tar")):

@@ -85,6 +85,24 @@ it('reports unreadable processor responses without displaying server HTML', asyn
   await expect(request('/jobs')).rejects.toThrow('unreadable response');
 });
 
+it('allows a staged submission to outlast the ordinary request timeout', async () => {
+  vi.useFakeTimers();
+  const fetch = vi.fn((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+    init.signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+  }));
+  vi.stubGlobal('fetch', fetch);
+  try {
+    const pending = request('/jobs', { method: 'POST', timeoutMs: 120000 });
+    const failed = expect(pending).rejects.toThrow('took too long');
+    await vi.advanceTimersByTimeAsync(30001);
+    expect(fetch.mock.calls[0][1].signal?.aborted).toBe(false);
+    expect(fetch.mock.calls[0][1]).not.toHaveProperty('timeoutMs');
+    await vi.advanceTimersByTimeAsync(90000);
+    await failed;
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { vi.useRealTimers(); }
+});
+
 it('exposes the server retry interval without automatically resubmitting work', async () => {
   const fetch = vi.fn(async () => ({ ok: false, status: 429, headers: { get: () => '12' }, json: async () => ({ error: 'Too many requests' }) }));
   vi.stubGlobal('fetch', fetch);
