@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Start the local deployment
         run: docker compose -f compose.local.yml up --build --detach --wait --wait-timeout 60
-      - name: Verify web assets and Zstandard jobs through the deployed service
+      - name: Verify web assets and file operations through the deployed service
         run: python3 scripts/smoke-container.py http://127.0.0.1:5010 --state "$RUNNER_TEMP/hamma-smoke.json"
       - name: Recreate the service with its existing volume
         run: docker compose -f compose.local.yml up --detach --force-recreate --wait --wait-timeout 60
