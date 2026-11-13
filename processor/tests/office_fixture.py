@@ -1,13 +1,13 @@
 """Minimal Office Open XML fixtures with text visible on the exported page."""
 
 from io import BytesIO
+from pathlib import Path
 from zipfile import ZipFile
 
 
 OFFICE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 PACKAGE = 'http://schemas.openxmlformats.org/package/2006'
 WORD = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
-SHEET = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 SLIDES = 'http://schemas.openxmlformats.org/presentationml/2006/main'
 DRAW = 'http://schemas.openxmlformats.org/drawingml/2006/main'
 
@@ -19,7 +19,8 @@ def relationships(*links):
     ) + '</Relationships>'
 
 
-def office_fixture(kind, text='HAMMA verified export', extra=None):
+def office_fixture(kind, extra=None):
+    text = 'HAMMA verified export'
     if kind == 'docx':
         root = 'word/document.xml'
         parts = {root: ('wordprocessingml.document.main', f'''<w:document xmlns:w="{WORD}"><w:body>
@@ -28,17 +29,8 @@ def office_fixture(kind, text='HAMMA verified export', extra=None):
           </w:body></w:document>''')}
         related = {}
     elif kind == 'xlsx':
-        root = 'xl/workbook.xml'
-        parts = {
-            root: ('spreadsheetml.sheet.main', f'''<workbook xmlns="{SHEET}" xmlns:r="{OFFICE}">
-              <sheets><sheet name="Sheet" sheetId="1" r:id="rId1"/></sheets></workbook>'''),
-            'xl/worksheets/sheet1.xml': ('spreadsheetml.worksheet', f'''<worksheet xmlns="{SHEET}">
-              <dimension ref="A1"/><sheetViews><sheetView workbookViewId="0"/></sheetViews>
-              <sheetFormatPr defaultRowHeight="15"/>
-              <sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>{text}</t></is></c></row></sheetData>
-              </worksheet>'''),
-        }
-        related = {'xl/_rels/workbook.xml.rels': relationships(('worksheet', 'worksheets/sheet1.xml'))}
+        # A normal workbook exported by openpyxl, with the marker in Sheet!A1.
+        return Path(__file__).with_name('fixtures').joinpath('export.xlsx').read_bytes()
     elif kind == 'pptx':
         root = 'ppt/presentation.xml'
         parts = {
@@ -66,6 +58,7 @@ def office_fixture(kind, text='HAMMA verified export', extra=None):
                         for name, (content, _) in parts.items())
         archive.writestr('[Content_Types].xml', f'<Types xmlns="{PACKAGE}/content-types">'
                          '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                         '<Default Extension="xml" ContentType="application/xml"/>'
                          + types + '</Types>')
         archive.writestr('_rels/.rels', relationships(('officeDocument', root)))
         for name, (_, xml) in parts.items():
