@@ -1,0 +1,23 @@
+name: Processor container
+on:
+  pull_request:
+    paths: ['native/**', 'processor/**', 'web/**', 'package.json', 'package-lock.json', '.dockerignore', 'compose.local.yml', 'scripts/smoke-container.py', '.github/workflows/processor-container.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Start the local deployment
+        run: docker compose -f compose.local.yml up --build --detach --wait --wait-timeout 60
+      - name: Verify web assets and Zstandard jobs through the deployed service
+        run: python3 scripts/smoke-container.py http://127.0.0.1:5010
+      - name: Show service logs on failure
+        if: failure()
+        run: docker compose -f compose.local.yml logs
+      - name: Remove the disposable deployment
+        if: always()
+        run: docker compose -f compose.local.yml down --volumes

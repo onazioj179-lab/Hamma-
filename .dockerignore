@@ -10,5 +10,6 @@ target
 .env*
 **/__pycache__
 web/dist
+native/build*
 validation
 .conda
