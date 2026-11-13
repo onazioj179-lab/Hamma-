@@ -218,6 +218,11 @@ class ServerTests(unittest.TestCase):
         source = self.call(path, {}, "POST")
         self.assertEqual(source["name"], original["outputName"])
         self.assertEqual(self.call(path, body, "POST"), source)
+        upload_path = "/uploads/" + source["upload"]
+        self.assert_status(409, lambda: self.call(upload_path, b"x", "PUT",
+                                                   {"Upload-Offset": str(source["size"])}, raw=True))
+        retained = self.call(original["download"].removeprefix("/api/process"), raw=True)
+        self.assertEqual(hashlib.sha256(retained).hexdigest(), original["sha256"])
         self.assertEqual(self.call("/projects/default/inputs")["sources"][0]["id"], source["id"])
         other = build_opener(HTTPCookieProcessor(CookieJar()))
         self.call("/projects/default", {}, "PUT", client=other)
