@@ -91,11 +91,16 @@ class Store:
             db.execute("CREATE INDEX IF NOT EXISTS records_visible ON records(owner,kind,coalesce(json_extract(data,'$.hidden'),0),created DESC)")
             db.execute("CREATE INDEX IF NOT EXISTS records_state ON records(kind,json_extract(data,'$.state'),created,id,owner)")
             db.execute("CREATE INDEX IF NOT EXISTS records_owner_state ON records(owner,kind,json_extract(data,'$.state'))")
-            db.execute("CREATE INDEX IF NOT EXISTS job_owner_dispatch ON records(owner,json_extract(data,'$.scheduled') DESC) WHERE kind='job' AND json_extract(data,'$.scheduled') IS NOT NULL")
+            db.execute("DROP INDEX IF EXISTS job_owner_dispatch")
             db.execute("""
                 CREATE INDEX IF NOT EXISTS records_project_dispatch
                 ON records(owner,coalesce(json_extract(data,'$.projectId'),'default'),
                            json_extract(data,'$.scheduled') DESC)
+                WHERE kind='job' AND json_extract(data,'$.scheduled') IS NOT NULL
+            """)
+            db.execute("""
+                CREATE INDEX IF NOT EXISTS records_owner_dispatch
+                ON records(owner,json_extract(data,'$.scheduled') DESC)
                 WHERE kind='job' AND json_extract(data,'$.scheduled') IS NOT NULL
             """)
             db.execute("CREATE INDEX IF NOT EXISTS records_upload_bytes ON records(kind,json_extract(data,'$.size'))")

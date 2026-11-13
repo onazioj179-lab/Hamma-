@@ -742,7 +742,9 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   };
 
   return <section hidden={!visible} className="universal-workspace" aria-label="Universal file processing">
-    <div className="page-heading universal-heading"><div><p className="eyebrow">HAMMA</p><h1>{screen === 'workspace' ? <>Files, simplified.</> : screen === 'history' ? 'Files & History' : 'Your downloads'}</h1><p className="page-description">{screen === 'workspace' ? 'Compress. Extract. Convert.' : screen === 'history' ? 'Every operation, in one place. Search by file, type, or unique ID.' : 'Download completed jobs saved on this device.'}</p></div><span className="subtle-label"><ShieldCheck size={14} /> {location.hostname === 'localhost' || location.hostname === '127.0.0.1' ? 'On this device' : 'Private server'}</span></div>
+    <div className="page-heading universal-heading">
+      <h1>{screen === 'workspace' ? 'Workspace' : screen === 'history' ? 'Files & History' : 'Downloads'}</h1>
+    </div>
     {offline && <div className="processor-notice" role="status"><div><strong>Local processor unavailable</strong><p>Reconnect to check saved jobs.</p></div><button className="button secondary" onClick={() => void connect()}><RefreshCw size={15} /> Reconnect</button></div>}
     {preparingDeletion && <p role="status" className="footnote">Checking stored items…</p>}
     {error && <div className="processor-notice" role="alert"><span>{error}</span><button className="icon-button" aria-label="Dismiss error" onClick={() => setError('')}><X size={16} /></button></div>}
@@ -753,8 +755,12 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       {missingSelections > 0 && <p className="footnote" role="status">Select the original files for {missingSelections} {missingSelections === 1 ? 'saved selection' : 'saved selections'}.</p>}
       {incompleteUploads > 0 && <p className="footnote" role="status">Select the original files to continue {incompleteUploads} {incompleteUploads === 1 ? 'upload' : 'uploads'}.</p>}
       <div className={`surface universal-drop ${dragging ? 'drag-active' : ''}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); if (busy || recovering || spkBusy) return; void droppedSources(event.dataTransfer, capability?.limits.files).then(add).catch(caught => setError(caught.message)); }}>
-        <div className="universal-drop-icon"><FileArchive size={30} strokeWidth={1.2} /></div><h2>Add your files</h2><p>Drop files or folders</p>
-        <details className="universal-picker"><summary className="button primary">+ Add Files or Folders</summary><div className="button-row"><button className="button secondary" disabled={busy || recovering || spkBusy} onClick={() => input.current?.click()}><Plus size={16} /> Add Files</button><button className="button secondary" disabled={busy || recovering || spkBusy} onClick={() => void chooseFolder()}><FolderPlus size={16} /> Add Folder</button></div></details>
+        <div className="universal-drop-icon" aria-hidden="true"><FileArchive size={30} strokeWidth={1.2} /></div>
+        <p>Drop files or folders here</p>
+        <div className="button-row">
+          <button className="button primary" disabled={busy || recovering || spkBusy} onClick={() => input.current?.click()}><Plus size={16} /> Add Files</button>
+          <button className="button secondary" disabled={busy || recovering || spkBusy} onClick={() => void chooseFolder()}><FolderPlus size={16} /> Add Folder</button>
+        </div>
         <input type="file" multiple className="file-picker-input" tabIndex={-1} ref={input} aria-label="Add files to queue" onChange={event => { const files = Array.from(event.target.files || []); choose(files); if (files.length) setFolderHelp(false); event.target.value = ''; }} />
         <input type="file" multiple className="file-picker-input" tabIndex={-1} ref={folder} {...{ webkitdirectory: '' }} aria-label="Add folder to queue" onChange={event => { const files = Array.from(event.target.files || []); if (files.length) { choose(files); setFolderHelp(!files.some(file => file.webkitRelativePath)); } else setError('No files were selected from this folder. Select its files instead.'); event.target.value = ''; }} />
       </div>

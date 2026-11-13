@@ -66,6 +66,36 @@ class ServerTests(unittest.TestCase):
                     self.assertIn("error", json.loads(caught.exception.read()))
         self.assertIn("id", self.upload())
 
+    def test_disconnected_clients_close_without_a_false_storage_error(self):
+        request = object.__new__(self.server.RequestHandlerClass)
+        for failure in (ConnectionAbortedError(), BrokenPipeError(), ConnectionResetError()):
+            with self.subTest(failure=type(failure).__name__):
+                request.close_connection = False
+                with patch.object(request, 'route', side_effect=failure), patch.object(request, 'send') as send, \
+                        patch('processor.server.LOG.exception') as log:
+                    request.handle_request()
+                self.assertTrue(request.close_connection)
+                send.assert_not_called()
+                log.assert_not_called()
+
+        request.close_connection = False
+        with patch.object(request, 'route', side_effect=ValueError), \
+                patch.object(request, 'send', side_effect=ConnectionAbortedError) as send:
+            request.handle_request()
+        self.assertTrue(request.close_connection)
+        send.assert_called_once_with(400, {"error": "Invalid request"}, None)
+
+    def test_failure_after_response_headers_does_not_send_another_response(self):
+        request = object.__new__(self.server.RequestHandlerClass)
+        request.close_connection = False
+        request.response_started = True
+        with patch.object(request, 'route', side_effect=OSError(errno.EIO, 'injected read failure')), \
+                patch.object(request, 'send') as send, patch('processor.server.LOG.exception') as log:
+            request.handle_request()
+        self.assertTrue(request.close_connection)
+        send.assert_not_called()
+        log.assert_called_once_with('Storage operation failed')
+
     def test_upload_retries_at_last_acknowledged_offset_after_disk_fills(self):
         source = self.call("/uploads", {"name": "resume.txt", "size": 6}, "POST")
         path = "/uploads/" + source["id"]

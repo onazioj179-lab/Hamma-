@@ -1,8 +1,8 @@
 import { providerWindow } from '../../processing/provider-sdk';
 import { ProviderSignIn } from './ProviderSignIn';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { changeAccount, loadAccount, type AccountSession } from '../../processing/account';
-import { Eye, EyeOff, LockKeyhole, ShieldCheck, UserRound } from 'lucide-react';
+import { changeAccount, loadAccount, type AccountSession, type IdentityProvider } from '../../processing/account';
+import { Eye, EyeOff, ShieldCheck } from 'lucide-react';
 import './AccountPanel.css';
 
 function PasswordField({ label, name, autoComplete, disabled, minimum }: { label: string; name: string; autoComplete: string; disabled: boolean; minimum?: number }) {
@@ -45,14 +45,17 @@ export function AccountPanel() {
     try {
       const next = await changeAccount(action, fields);
       if (action === 'logout') { try { providerWindow().google?.accounts?.id.disableAutoSelect?.(); } catch { /* Application sign-out already succeeded. */ } }
-      if (mounted.current) { setSession(next); setNotice(action === 'password-change' ? 'Password changed. Other sessions have been signed out.' : action === 'logout' ? 'Signed out.' : 'Signed in. Your workspace is ready.'); }
+      if (mounted.current) { setSession(next); setNotice(action === 'password-change' ? 'Password changed. Other sessions have been signed out.' : action === 'logout' ? 'Signed out.' : 'Signed in.'); }
     } catch (reason) { if (mounted.current) { setError(reason instanceof Error ? reason.message : 'Account request failed.'); setAttempt(value => value + 1); } }
     finally { form.querySelectorAll<HTMLInputElement>('input[autocomplete*=password]').forEach(input => { input.value = ''; }); running.current = false; if (mounted.current) setBusy(false); }
   }
-  const providers = session?.providers || [];
+  const providers = session?.providers?.filter(
+    (provider): provider is IdentityProvider & { id: 'google' | 'apple' } =>
+      provider.available && (provider.id === 'google' || provider.id === 'apple'),
+  ) ?? [];
   const disabled = busy || !session?.credentialsAllowed;
   return <section className="account-panel" aria-labelledby="account-title">
-    <header className="account-heading"><span className="account-emblem" aria-hidden="true"><UserRound size={25} /></span><div><p className="account-eyebrow">YOUR WORKSPACE</p><h1 id="account-title">Account</h1><p>{session?.authenticated ? 'Manage your profile and account security.' : 'A place for your files. A sign-in that stays simple.'}</p></div></header>
+    <header className="account-heading"><h1 id="account-title">Account</h1></header>
     {error && <p className="account-feedback account-feedback-error" role="alert">{error}</p>}
     {notice && <p className="account-feedback" role="status">{notice}</p>}
     {!session ? <div><p>{error ? 'Account details could not be loaded.' : 'Loading account details…'}</p>{error && <button className="button secondary" onClick={() => { setError(''); setAttempt(value => value + 1); }}>Retry</button>}</div> : <>
@@ -75,9 +78,26 @@ export function AccountPanel() {
           <p className="footnote">Signing in opens a separate workspace. Files already here stay here.</p>
           <button className="button primary" disabled={disabled}>{busy ? 'Working…' : mode === 'login' ? 'Sign in to account' : 'Create account'}</button>
         </form>
-        {providers.length > 0 && <section className="account-providers" aria-labelledby="account-providers-title"><h3 id="account-providers-title">Other ways to sign in</h3><div className="account-provider-grid">{providers.map(provider => provider.available && (provider.id === 'google' || provider.id === 'apple') ? <ProviderSignIn key={provider.id} provider={provider.id} name={provider.name} disabled={disabled} onBusy={setBusy} onError={setError} onSuccess={next => { setSession(next); setBusy(false); setNotice('Signed in. Your workspace is ready.'); }} /> : <div className="account-provider" key={provider.id}><strong>{provider.name}</strong><span>Not available yet</span></div>)}</div><p>{providers.some(provider => provider.available) ? 'Provider sign-in opens only when you choose it. Your files are not part of the sign-in request. Provider accounts are separate from username accounts.' : 'Google and Apple sign-in are not configured. You can use your username and password today.'}</p></section>}
+        {providers.length > 0 && (
+          <section className="account-providers" aria-labelledby="account-providers-title">
+            <h3 id="account-providers-title">Other ways to sign in</h3>
+            <div className="account-provider-grid">
+              {providers.map(provider => (
+                <ProviderSignIn
+                  key={provider.id}
+                  provider={provider.id}
+                  name={provider.name}
+                  disabled={disabled}
+                  onBusy={setBusy}
+                  onError={setError}
+                  onSuccess={next => { setSession(next); setBusy(false); setNotice('Signed in.'); }}
+                />
+              ))}
+            </div>
+            <p>Provider accounts are separate from username accounts.</p>
+          </section>
+        )}
       </section>}
     </>}
-    <p className="account-security-note"><LockKeyhole size={15} aria-hidden="true" /> Password fields are cleared after sign-in requests.</p>
   </section>;
 }
