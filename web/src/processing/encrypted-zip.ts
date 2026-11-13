@@ -1,4 +1,5 @@
-import { BlobReader, BlobWriter, ZipReader, ZipWriter } from '@zip.js/zip.js';
+import { BlobReader, BlobWriter, ZipReader, ZipWriter, ERR_INVALID_AUTHENTICATION_CODE,
+  ERR_INVALID_PASSWORD } from '@zip.js/zip.js';
 import { archivePath } from '../utils/archiveFiles';
 import { inspectZip } from './zip-inspection';
 
@@ -14,7 +15,7 @@ function checkNames(names: string[]) {
     const path = archivePath(directory ? name.slice(0, -1) : name);
     const key = path.normalize('NFC').toLowerCase();
     if (name.includes('\\') || path.length > 1024 || seen.has(key) ||
-        path.split('/').some(part => /[\u0000-\u001f\u007f:<>"|?*]|[ .]$/.test(part)
+        path.split('/').some(part => /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069:<>"|?*]|[ .]$/.test(part)
           || /^(con|prn|aux|nul|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3])$/i.test(part.split('.')[0].trimEnd()))) {
       throw new Error('The ZIP contains an unsafe or duplicate path.');
     }
@@ -51,6 +52,7 @@ export async function createEncryptedZip(inputs: Input[], password: string, sign
     });
   }
   const archive = await writer.close();
+  signal.throwIfAborted();
   if (archive.size > encryptedZipLimit + 4 * 1024 * 1024) throw new Error('Encrypted ZIP size limit reached.');
   const reader = new ZipReader(new BlobReader(archive), { useWebWorkers: false });
   try {
@@ -63,7 +65,8 @@ export async function createEncryptedZip(inputs: Input[], password: string, sign
         throw new Error('Could not verify the encrypted ZIP.');
       }
       if (entry.directory || !input) continue;
-      if (!entry.encrypted || entry.zipCrypto || entry.uncompressedSize !== input.size) {
+      if (!entry.encrypted || entry.zipCrypto || entry.extraFieldAES?.strength !== 3 ||
+          entry.uncompressedSize !== input.size) {
         throw new Error('Could not verify the encrypted ZIP.');
       }
       let offset = 0;
@@ -88,6 +91,7 @@ export async function createEncryptedZip(inputs: Input[], password: string, sign
 export async function unlockEncryptedZip(input: Blob, password: string, signal: AbortSignal) {
   if (input.size > encryptedZipLimit + 4 * 1024 * 1024) throw new Error('Encrypted ZIP size limit reached.');
   const directory = await inspectZip(input);
+  signal.throwIfAborted();
   checkLimits(directory.members.map(entry => entry.size));
   const reader = new ZipReader(new BlobReader(input), { useWebWorkers: false });
   try {
@@ -95,9 +99,10 @@ export async function unlockEncryptedZip(input: Blob, password: string, signal: 
     if (entries.length !== directory.members.length || !entries.some(entry => entry.encrypted)) {
       throw new Error('Choose a password-protected ZIP.');
     }
-    if (entries.some(entry => entry.encrypted && (entry.zipCrypto || entry.directory))) {
+    if (entries.some(entry => entry.encrypted && (entry.zipCrypto || entry.directory || !entry.extraFieldAES))) {
       throw new Error('This ZIP uses unsupported encryption. Use an AES-encrypted ZIP.');
     }
+    if (entries.some(entry => entry.symlink)) throw new Error('The ZIP contains a symbolic link.');
     checkLimits(entries.map(entry => entry.uncompressedSize));
     checkNames(entries.map(entry => entry.filename));
     const writer = new ZipWriter(new BlobWriter('application/zip'), { useWebWorkers: false });
@@ -121,7 +126,29 @@ export async function unlockEncryptedZip(input: Blob, password: string, signal: 
       if (written !== entry.uncompressedSize) throw new Error('Invalid ZIP entry size.');
       await writer.add(entry.filename, new BlobReader(new Blob(chunks)), { level: 0, signal });
     }
-    return await writer.close();
+    const output = await writer.close();
+    const restored = new ZipReader(new BlobReader(output), { useWebWorkers: false });
+    try {
+      const members = await restored.getEntries();
+      if (members.length !== entries.length) throw new Error('Could not verify the unlocked ZIP.');
+      for (const [index, member] of members.entries()) {
+        signal.throwIfAborted();
+        const original = entries[index];
+        if (member.filename !== original.filename || member.encrypted ||
+            member.directory !== original.directory || member.uncompressedSize !== original.uncompressedSize) {
+          throw new Error('Could not verify the unlocked ZIP.');
+        }
+        if (!member.directory) await member.getData(new WritableStream<Uint8Array>(), { checkCrc32: true, signal });
+      }
+    } finally {
+      await restored.close();
+    }
+    return output;
+  } catch (error) {
+    if (error instanceof Error && [ERR_INVALID_PASSWORD, ERR_INVALID_AUTHENTICATION_CODE].includes(error.message)) {
+      throw new Error('The password is incorrect or the ZIP data is damaged.');
+    }
+    throw error;
   } finally {
     await reader.close();
   }
