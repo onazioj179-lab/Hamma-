@@ -181,5 +181,18 @@
     "windowsProcessorTestsRun": 193,
     "windowsProcessorTestsSkipped": 27,
     "linuxSanitizersPassed": true
+  },
+  "archiveInteroperability": {
+    "tool": "bsdtar 3.8.9",
+    "formats": [
+      "zip",
+      "tar",
+      "tar.gz",
+      "tar.bz2",
+      "tar.xz"
+    ],
+    "directionsVerified": 2,
+    "fixturesPerArchive": 3,
+    "exactPayloads": true
   }
 }
