@@ -2,7 +2,7 @@
 
 **Make space. Keep everything.**
 
-A free web app to compress, extract, convert, and download files locally.
+A web app to compress, extract, convert, and download files locally.
 Created by **Onazi Treasure OJ**. SHANTE is HAMMA's internal processing engine.
 
 Optional Google/Apple sign-in setup and verification limits: [account providers](docs/account-providers.md).
