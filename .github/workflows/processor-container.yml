@@ -36,6 +36,32 @@ jobs:
       - name: Show service logs on failure
         if: failure()
         run: docker compose -f compose.local.yml logs
+      - name: Diagnose the synthetic Office fixtures
+        if: failure()
+        run: |
+          docker compose -f compose.local.yml exec -T hamma python - <<'PY'
+          import os
+          from pathlib import Path
+          import subprocess
+          from tempfile import TemporaryDirectory
+          from processor.codec_sandbox import codec_command
+          from processor.tests.office_fixture import office_fixture
+          from processor.worker_limits import restrict_worker_sockets
+          for ext in ('xlsx', 'pptx'):
+              for sandboxed in (False, True):
+                  with TemporaryDirectory() as folder:
+                      root = Path(folder)
+                      source = root / f'document.{ext}'
+                      source.write_bytes(office_fixture(ext))
+                      args = ['/usr/local/bin/hamma-office-pdf', '/usr/lib/libreoffice/program',
+                              (root / 'profile').as_uri(), source.as_uri(), (root / 'result.pdf').as_uri()]
+                      if sandboxed:
+                          args = codec_command(args, source, root)
+                      env = {**os.environ, 'SAL_USE_VCLPLUGIN': 'svp', 'HOME': folder, 'TMPDIR': folder}
+                      result = subprocess.run(args, env=env, cwd=root, capture_output=True, text=True, timeout=10,
+                                              preexec_fn=restrict_worker_sockets if sandboxed else None)
+                      print(ext, sandboxed, result.returncode, result.stderr)
+          PY
       - name: Remove the disposable deployment
         if: always()
         run: docker compose -f compose.local.yml down --volumes
