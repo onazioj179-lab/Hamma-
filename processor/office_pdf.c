@@ -1,4 +1,5 @@
 /* Single-document LibreOfficeKit export, launched inside the codec sandbox. */
+#include <stdbool.h>
 #include <LibreOfficeKit/LibreOfficeKitInit.h>
 #include <stdio.h>
 

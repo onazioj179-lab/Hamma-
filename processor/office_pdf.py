@@ -49,7 +49,7 @@ def convert_office(source, name, output, ctx):
         # The renderer needs the canonical extension for selecting its importer.
         staged = scratch / ('document.' + kind)
         with source.open('rb') as stream, staged.open('wb') as target:
-            ctx.copy(stream, target)
+            ctx.copy(stream, target, maximum=INPUT_LIMIT)
         work = scratch / 'work'
         work.mkdir()
         profile = work / 'profile'
