@@ -2,6 +2,12 @@
 
 ## Remaining web release acceptance
 
+The output handoff passed in Chromium at 375 px. A retained ZIP was selected
+from Files & History, recovered after a browser reload, and extracted. A
+Windows loopback restart using the container smoke script also recovered the
+project input and verified every member hash after deleting the original job's
+files. The container workflow runs the same restart check against its volume.
+
 Use the six areas in the [web backlog](hammer-directive-audit.md) as the
 release checklist. Run the checks against the same candidate build and record
 the revision, platform, fixture, outcome and skipped cases.
