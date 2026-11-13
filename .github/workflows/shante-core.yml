@@ -52,6 +52,11 @@ jobs:
         if: runner.os != 'Windows'
       - run: ctest --test-dir native/build -C Release --output-on-failure
         if: runner.os != 'Windows'
+      - name: Install bsdtar for archive interoperability
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
       - name: Processor integration (Unix)
         if: runner.os != 'Windows'
         run: python3 -m unittest discover -s processor/tests -v

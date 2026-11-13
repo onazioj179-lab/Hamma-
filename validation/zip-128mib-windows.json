@@ -1,0 +1,50 @@
+{
+  "platform": "Windows-10-10.0.26300-SP0",
+  "processor": "Intel64 Family 6 Model 142 Stepping 12, GenuineIntel",
+  "python": "3.11.14",
+  "inputBytes": 134217728,
+  "entries": 128,
+  "fixtureSeed": 2027,
+  "results": {
+    "bsdtar": {
+      "version": "bsdtar 3.8.9 - libarchive 3.8.9 zlib/1.2.13.1-motley liblzma/5.8.3 bz2lib/1.0.8 libzstd/1.5.7 cng/2.0 libb2/bundled",
+      "settings": "ZIP Deflate level 6",
+      "runs": [
+        {
+          "secondsIncludingVerification": 12.999129500007257,
+          "outputBytes": 67317718
+        },
+        {
+          "secondsIncludingVerification": 10.570787899996503,
+          "outputBytes": 67317718
+        },
+        {
+          "secondsIncludingVerification": 9.755801200008136,
+          "outputBytes": 67317718
+        }
+      ],
+      "medianSeconds": 10.570787899996503,
+      "verified": true
+    },
+    "SHANTE": {
+      "version": "a8b1fdcf70e19027b4e1715bbd6e18ccbffad8aa",
+      "settings": "ZIP Deflate level 6",
+      "runs": [
+        {
+          "secondsIncludingVerification": 18.449544300005073,
+          "outputBytes": 67311062
+        },
+        {
+          "secondsIncludingVerification": 10.957001300004777,
+          "outputBytes": 67311062
+        },
+        {
+          "secondsIncludingVerification": 10.31358960000216,
+          "outputBytes": 67311062
+        }
+      ],
+      "medianSeconds": 10.957001300004777,
+      "verified": true
+    }
+  }
+}

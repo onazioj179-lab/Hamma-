@@ -28,6 +28,16 @@ Reproduce the two-owner worker test with
 `python -m processor.scheduler_benchmark --multiple-owners --output report.json`.
 The one-slot fixture checks dispatch order, owner boundaries and exact bytes.
 
+Run the two-way ZIP and TAR interoperability fixtures with
+`python -m unittest processor.tests.test_archive_interoperability -v`. The
+suite uses bsdtar to check nested paths, long names, empty directories and
+byte-for-byte extraction for ZIP, TAR, TAR.GZ, TAR.BZ2, and TAR.XZ. It also
+checks selective ZIP extraction and verifies digests from bsdtar archives.
+Unix fixtures include a Unicode filename. The Windows fixture uses an ASCII
+filename because inbox tar could not round-trip the Unicode name under the
+tested Windows code page. When inbox tar lacks the XZ write filter, the fixture
+compresses its PAX archive with Python XZ before HAMMA verifies and extracts it.
+
 ## Historical baseline — 2026-11-04
 
 Status: PARTIAL. SHANTE is not production complete.
