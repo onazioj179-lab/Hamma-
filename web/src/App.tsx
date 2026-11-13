@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import {
-  ArrowUpRight,
-  ChevronRight,
   HelpCircle,
   FileArchive,
   Files,
@@ -10,7 +8,6 @@ import {
   LayoutGrid,
   Loader2,
   Settings2,
-  ShieldCheck,
   UserRound,
 } from 'lucide-react';
 import { useCompression } from './hooks/useCompression';
@@ -24,8 +21,6 @@ import {
 import { LocalOverview } from './components/workspace/LocalOverview';
 import { UniversalWorkspace } from './components/workspace/UniversalWorkspace';
 import { AccountPanel } from './components/ui/AccountPanel';
-
-const remoteServer = !['localhost', '127.0.0.1', '::1'].includes(location.hostname);
 
 type View = 'process' | 'files' | 'overview' | 'settings' | 'account';
 type Route = { view: View; section: SettingsSection };
@@ -160,10 +155,6 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKey);
   }, [view, isProcessing, result, cancel, download, navigate]);
 
-  const selectedTitle =
-    view === 'settings'
-      ? 'Settings'
-      : navigation.find((item) => item.key === view)?.label;
   return (
     <div
       className="hamma-shell"
@@ -180,12 +171,8 @@ export default function App() {
           <span className="brand-symbol">
             <FileArchive size={21} strokeWidth={1.6} />
           </span>
-          <span>
-            <strong>HAMMA</strong>
-            <small>Space, simplified.</small>
-          </span>
+          <strong>HAMMA</strong>
         </button>
-        <div className="sidebar-caption">WORKSPACE</div>
         <nav className="primary-navigation" aria-label="Main navigation">
           {navigation.map(({ key, label, icon: Icon }) => (
             <button
@@ -205,13 +192,6 @@ export default function App() {
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <div className="local-note">
-            <ShieldCheck size={17} />
-            <span>
-              <strong>{remoteServer ? 'Private server session' : 'Yours. On your device.'}</strong>
-              <small>Ready when you are.</small>
-            </span>
-          </div>
           <button
             className={`sidebar-utility ${view === 'settings' && section !== 'about' ? 'selected' : ''}`}
             onClick={() => openSettings('general')}
@@ -227,26 +207,21 @@ export default function App() {
           >
             <HelpCircle size={17} />
             <span>About HAMMA</span>
-            <ArrowUpRight size={13} />
           </button>
           <div className="watermark">
-            <strong>HAMMA</strong>
             <span>By Onazi Treasure Oj</span>
           </div>
         </div>
       </aside>
       <div className="workspace-body">
         <header className="workspace-header">
-          <div className="breadcrumbs">
-            <span>Personal workspace</span>
-            <ChevronRight size={12} />
-            <strong>{selectedTitle}</strong>
-          </div>
-          <span className="engine-status">
+          <span className="mobile-brand">HAMMA</span>
+          <span className="engine-status" role="status">
             <span
               className={processorStatus === 'ready' ? 'status-dot' : 'status-dot pending'}
+              aria-hidden="true"
             />
-            {isProcessing ? 'Processing' : processorStatus === 'ready' ? 'Connected' : processorStatus === 'offline' ? 'Disconnected' : 'Connecting'}
+            {processorStatus === 'ready' ? 'Processor connected' : processorStatus === 'offline' ? 'Processor offline' : 'Connecting to processor'}
           </span>
         </header>
         <main
@@ -281,12 +256,6 @@ export default function App() {
                   onHistory={() => navigate('files')}
                 />
               )}
-          <footer className="workspace-footer">
-            <span>Made to make room.</span>
-            <span>
-              HAMMA <span aria-hidden="true">/</span> Onazi Treasure Oj
-            </span>
-          </footer>
         </main>
       </div>
       {notice && <aside className="job-toast" aria-label="Job update"><span key={notice.message} className={notice.success ? "job-toast-success" : undefined}>{notice.message}</span><button className="button secondary" onClick={() => { navigate('files'); setNotice(null); }}>View files</button><button className="text-button" aria-label="Dismiss job update" onClick={() => setNotice(null)}>Dismiss</button></aside>}

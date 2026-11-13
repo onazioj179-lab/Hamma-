@@ -18,5 +18,5 @@ USER hamma
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HAMMA_DATA=/data
 VOLUME ["/data"]
 # Linux host networking intentionally retains the loopback-only bind.
-HEALTHCHECK --interval=30s --timeout=5s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5010/api/process/capabilities',timeout=3)"
+HEALTHCHECK --interval=30s --timeout=5s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5010/api/process/ready',timeout=3)"
 CMD ["python", "-m", "processor.server"]

@@ -1,14 +1,141 @@
 """Short-lived, owner-scoped upload selections for paged job admission."""
+from dataclasses import dataclass
+import hashlib
+import json
 import re
 import sqlite3
 import time
+from typing import TYPE_CHECKING
 
 from .projects import ProjectError, Projects
+
+if TYPE_CHECKING:
+    from .server import Store
 
 PAGE_SIZE = 100
 LEASE_SECONDS = 900
 MAX_OWNER_SELECTIONS = 64
 MAX_SELECTIONS = 512
+
+
+def upload_stamp(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def recovery_request_id(project, sorted_ids, *options):
+    """Hash the existing v1 JSON identity without building its upload array."""
+    prefix = json.dumps(['project-recovery-v1', project], separators=(',', ':'))
+    digest = hashlib.sha256((prefix[:-1] + ',[').encode())
+    separator = b''
+    for upload_id in sorted_ids:
+        digest.update(separator + json.dumps(upload_id).encode())
+        separator = b','
+    suffix = json.dumps(options, separators=(',', ':'))
+    digest.update(('],' + suffix[1:]).encode())
+    return digest.hexdigest()
+
+
+@dataclass(frozen=True)
+class SealedSelection:
+    store: 'Store'
+    owner: str
+    id: str
+    count: int
+    lease: float
+
+    def pages(self, *, by_id=False):
+        key = 'upload_id' if by_id else 'position'
+        after = '' if by_id else -1
+        scanned = 0
+        while scanned < self.count:
+            with self.store.connect() as db:
+                rows = db.execute(f"""
+                    SELECT item.{key},item.upload_id FROM job_selection_items AS item
+                    JOIN job_selections AS selection ON selection.owner=item.owner AND selection.id=item.selection_id
+                    WHERE item.owner=? AND item.selection_id=? AND item.{key}>?
+                        AND selection.expires=? AND selection.sealed=1
+                    ORDER BY item.{key} LIMIT ?
+                """, (self.owner, self.id, after, self.lease, min(PAGE_SIZE, self.count - scanned))).fetchall()
+            if not rows or not by_id and rows[-1][0] != scanned + len(rows) - 1:
+                raise ProjectError(409, 'Job selection is incomplete')
+            scanned += len(rows)
+            after = rows[-1][0]
+            yield [row[1] for row in rows]
+
+    def ids(self, *, by_id=False):
+        for page in self.pages(by_id=by_id):
+            yield from page
+
+
+class AdmissionInputs:
+    """Private SQLite spool. The scheduler sees the job only after promotion."""
+
+    def __init__(self, db, path):
+        self.db = db
+        self.path = path
+        db.execute("""CREATE TABLE inputs (
+            position INTEGER PRIMARY KEY, upload_id TEXT UNIQUE NOT NULL,
+            name_key TEXT UNIQUE NOT NULL, data TEXT NOT NULL,
+            fingerprint TEXT NOT NULL, needs_digest INTEGER NOT NULL
+        )""")
+        self.count = 0
+        self.size = 0
+
+    def append(self, upload, info, needs_digest):
+        try:
+            self.db.execute('INSERT INTO inputs VALUES (?,?,?,?,?,?)', (
+                self.count, upload['id'], upload['name'].casefold(), json.dumps(upload),
+                json.dumps(upload_stamp(info)), needs_digest,
+            ))
+        except sqlite3.IntegrityError as error:
+            raise ProjectError(400, 'Duplicate filename') from error
+        self.count += 1
+        self.size += upload['size']
+
+    def check_files(self, store, owner):
+        for upload_id, fingerprint in self.db.execute('SELECT upload_id,fingerprint FROM inputs'):
+            source = store.folder(owner, upload_id) / 'input'
+            try:
+                current = json.dumps(upload_stamp(source.stat()))
+            except FileNotFoundError as error:
+                raise ProjectError(410, 'Upload expired or unavailable') from error
+            if current != fingerprint:
+                raise ProjectError(409, 'Upload changed during verification')
+
+    def promote(self, store, owner, record, recoverable):
+        self.db.commit()
+        with store.connect() as db:
+            db.execute('ATTACH DATABASE ? AS admission', (str(self.path),))
+            db.execute('BEGIN IMMEDIATE')
+            available = db.execute("""
+                SELECT count(*) FROM admission.inputs AS item
+                JOIN records ON records.owner=? AND records.kind='upload' AND records.id=item.upload_id
+                WHERE json_extract(records.data,'$.expires')>?
+            """, (owner, record['created'])).fetchone()[0]
+            if available != self.count:
+                raise ProjectError(410, 'Upload expired or unavailable')
+            db.execute("""
+                UPDATE records AS upload SET data=json_set(upload.data,
+                    '$.sha256', json_extract(item.data,'$.sha256'),
+                    '$.format', json_extract(item.data,'$.format'))
+                FROM admission.inputs AS item
+                WHERE item.needs_digest AND upload.owner=? AND upload.kind='upload'
+                    AND upload.id=item.upload_id
+            """, (owner,))
+            job_id = record['id']
+            db.execute('INSERT INTO records VALUES (?,?,?,?,?)',
+                       (job_id, owner, 'job', record['created'], json.dumps(record)))
+            db.execute('INSERT INTO job_input_pages SELECT ?,?,position,data FROM admission.inputs',
+                       (owner, job_id))
+            db.execute('INSERT INTO job_inputs SELECT ?,?,upload_id FROM admission.inputs', (owner, job_id))
+            if recoverable:
+                forget_job_uploads(db, owner, record['projectId'], job_id)
+
+
+def forget_job_uploads(db, owner, project, job_id):
+    db.execute("""DELETE FROM project_inputs WHERE owner=? AND project_id=? AND upload_id IN (
+        SELECT upload_id FROM job_inputs WHERE owner=? AND job_id=?
+    )""", (owner, project, owner, job_id))
 
 
 class JobSelections:
@@ -90,13 +217,9 @@ class JobSelections:
                 raise ProjectError(410, 'Job selection expired')
             if selection['count'] != count:
                 raise ProjectError(409, 'Job selection is incomplete')
-            rows = db.execute('SELECT upload_id FROM job_selection_items WHERE owner=? AND selection_id=? ORDER BY position',
-                              key).fetchall()
-            if len(rows) != count:
-                raise ProjectError(409, 'Job selection is incomplete')
             if not selection['sealed']:
                 db.execute('UPDATE job_selections SET sealed=1 WHERE owner=? AND id=?', key)
-            return [row[0] for row in rows]
+        return SealedSelection(self.store, owner, selection_id, count, selection['expires'])
 
     def cleanup(self):
         with self.store.connect() as db:
