@@ -9,23 +9,65 @@ jobs:
   container:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      COMPOSE_PROJECT_NAME: hamma-ci
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Start the local deployment
         run: docker compose -f compose.local.yml up --build --detach --wait --wait-timeout 60
       - name: Verify web assets and file operations through the deployed service
         run: python3 scripts/smoke-container.py http://127.0.0.1:5010 --state "$RUNNER_TEMP/hamma-smoke.json"
+      - name: Back up the stopped service volume
+        run: |
+          set -euo pipefail
+          container=$(docker compose -f compose.local.yml ps -q hamma)
+          image=$(docker inspect --format '{{.Image}}' "$container")
+          volume=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$container")
+          test -n "$volume"
+          docker compose -f compose.local.yml stop hamma
+          docker image tag "$image" hamma-ci-backup-test:local
+          umask 077
+          cd "$RUNNER_TEMP"
+          docker run --rm --network none --read-only --user 0:0 \
+            --mount "type=volume,src=$volume,dst=/snapshot,readonly" \
+            --entrypoint tar hamma-ci-backup-test:local --numeric-owner -cpf - -C /snapshot . > hamma-data.tar
+          sha256sum hamma-data.tar > hamma-data.tar.sha256
       - name: Recreate the service with its existing volume
         run: docker compose -f compose.local.yml up --detach --force-recreate --wait --wait-timeout 60
       - name: Verify the download, retention and upload checkpoint after restart
         run: python3 scripts/smoke-container.py http://127.0.0.1:5010 --state "$RUNNER_TEMP/hamma-smoke.json" --after-restart
+      - name: Restore the backup into a fresh volume
+        run: |
+          set -euo pipefail
+          docker compose -f compose.local.yml stop hamma
+          cat > "$RUNNER_TEMP/hamma-restore.yml" <<'YAML'
+          services:
+            hamma:
+              image: hamma-ci-backup-test:local
+          YAML
+          restore=(docker compose -p hamma-restore-ci -f compose.local.yml -f "$RUNNER_TEMP/hamma-restore.yml")
+          "${restore[@]}" create --no-build hamma
+          container=$("${restore[@]}" ps -aq hamma)
+          volume=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$container")
+          test "$volume" = hamma-restore-ci_hamma-data
+          (cd "$RUNNER_TEMP" && sha256sum -c hamma-data.tar.sha256)
+          docker run --rm --network none --read-only --user 0:0 \
+            --mount "type=volume,src=$volume,dst=/snapshot" \
+            --entrypoint sh hamma-ci-backup-test:local -ec \
+            'test -z "$(ls -A /snapshot)"; tar --numeric-owner -xpf - -C /snapshot' < "$RUNNER_TEMP/hamma-data.tar"
+          "${restore[@]}" run --rm --no-deps -T hamma python -c \
+            'import sqlite3; db = sqlite3.connect("file:/data/metadata.sqlite3?mode=ro", uri=True); assert db.execute("PRAGMA quick_check").fetchall() == [("ok",)]'
+          "${restore[@]}" up --no-build --detach --wait --wait-timeout 60
+      - name: Verify data and ownership after backup restore
+        run: python3 scripts/smoke-container.py http://127.0.0.1:5010 --state "$RUNNER_TEMP/hamma-smoke.json" --after-restore
       - name: Record packages and runtimes from the running image
         run: |
           mkdir -p image-inventory
-          docker compose -f compose.local.yml images --format json > image-inventory/images.json
-          docker compose -f compose.local.yml exec -T hamma dpkg-query -W -f='${binary:Package}\t${Version}\t${Architecture}\n' > image-inventory/debian-packages.tsv
-          docker compose -f compose.local.yml exec -T hamma python --version > image-inventory/python.txt
-          docker compose -f compose.local.yml exec -T hamma /opt/shante/bin/shante-core probe > image-inventory/shante.json
+          restore=(docker compose -p hamma-restore-ci -f compose.local.yml -f "$RUNNER_TEMP/hamma-restore.yml")
+          "${restore[@]}" images --format json > image-inventory/images.json
+          "${restore[@]}" exec -T hamma dpkg-query -W -f='${binary:Package}\t${Version}\t${Architecture}\n' > image-inventory/debian-packages.tsv
+          "${restore[@]}" exec -T hamma python --version > image-inventory/python.txt
+          "${restore[@]}" exec -T hamma /opt/shante/bin/shante-core probe > image-inventory/shante.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: processor-image-inventory
@@ -33,7 +75,11 @@ jobs:
           if-no-files-found: error
       - name: Show service logs on failure
         if: failure()
-        run: docker compose -f compose.local.yml logs
+        run: |
+          docker compose -f compose.local.yml logs
+          docker compose -p hamma-restore-ci -f compose.local.yml logs
       - name: Remove the disposable deployment
         if: always()
-        run: docker compose -f compose.local.yml down --volumes
+        run: |
+          docker compose -p hamma-restore-ci -f compose.local.yml down --volumes
+          docker compose -f compose.local.yml down --volumes

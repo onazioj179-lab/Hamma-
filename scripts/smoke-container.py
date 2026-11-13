@@ -18,10 +18,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from processor.tests.pdf_fixture import two_page_pdf
 
 
-def check(base, state_path=None, after_restart=False):
+def check(base, state_path=None, after_restart=False, after_restore=False):
     cookie_path = state_path.with_suffix(".cookies") if state_path else None
     cookies = LWPCookieJar(cookie_path)
-    if after_restart:
+    if after_restart or after_restore:
         cookies.load(ignore_discard=True)
     client = build_opener(ProxyHandler({}), HTTPCookieProcessor(cookies))
 
@@ -78,10 +78,11 @@ def check(base, state_path=None, after_restart=False):
     with build_opener(ProxyHandler({})).open(base + "/api/process/ready", timeout=10) as response:
         assert json.load(response) == {"ready": True}
         assert response.headers.get("Set-Cookie") is None
-    if after_restart:
+    if after_restart or after_restore:
         state = json.loads(state_path.read_text(encoding="utf-8"))
+        assert call("/api/process/health")["instance"] != state["instance"]
         job = call("/api/process/jobs/" + state["job"])
-        data = call(job["download"], raw=True)
+        data = call(state["download"], raw=True)
         assert job["sha256"] == hashlib.sha256(data).hexdigest() == state["sha256"]
         assert_owner_only(job)
         assert check_manifest(job) == [tuple(entry) for entry in state["manifest"]]
@@ -94,7 +95,8 @@ def check(base, state_path=None, after_restart=False):
         _, data = download("compress", "zip", [state["upload"]])
         with ZipFile(BytesIO(data)) as archive:
             assert archive.read("resume.txt") == b"start after restart"
-        print("Restart preserved retention, the verified download, and the upload checkpoint.")
+        operation = "Backup restore" if after_restore else "Restart"
+        print(f"{operation} preserved retention, the signed download, and the upload checkpoint.")
         return
 
     page = call("/", raw=True)
@@ -146,8 +148,17 @@ def check(base, state_path=None, after_restart=False):
         result = call("/api/process/uploads/" + source["id"], b"start", "PUT",
                       {"Upload-Offset": "0"})
         assert result["offset"] == 5, result
+        deadline = time.monotonic() + 10
+        while True:
+            health = call("/api/process/health")
+            if not health["activeJobs"]:
+                break
+            assert time.monotonic() < deadline, "Worker did not finish before backup"
+            time.sleep(.2)
         cookies.save(ignore_discard=True)
         state_path.write_text(json.dumps({"job": restored_job["id"],
+                                          "instance": health["instance"],
+                                          "download": restored_job["download"],
                                           "sha256": restored_job["sha256"],
                                           "manifest": manifest,
                                           "upload": source["id"]}), encoding="utf-8")
@@ -158,8 +169,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("base")
     parser.add_argument("--state", type=Path)
-    parser.add_argument("--after-restart", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--after-restart", action="store_true")
+    mode.add_argument("--after-restore", action="store_true")
     args = parser.parse_args()
-    if args.after_restart and not args.state:
-        parser.error("--after-restart requires --state")
-    check(args.base.rstrip("/"), args.state, args.after_restart)
+    if (args.after_restart or args.after_restore) and not args.state:
+        parser.error("Restart and restore checks require --state")
+    check(args.base.rstrip("/"), args.state, args.after_restart, args.after_restore)
