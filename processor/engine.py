@@ -54,8 +54,8 @@ def archive_working_copies(job):
         # Nested compressed members, a decoded TAR, and the output ZIP can
         # coexist while the current member is read.
         return 3
-    if (job["operation"] in ("extract", "verify") and job.get("format") == "zstd"
-            and named_zstd_tar(job["name"])):
+    if (job.get("format") == "zstd" and
+            (job["operation"] == "verify" or job["operation"] == "extract" and named_zstd_tar(job["name"]))):
         return 2
     return 1
 
@@ -175,7 +175,7 @@ class Context:
         self.count += 1
         return name
 
-    def copy(self, source, target, *, expanding=False, progress=True, expected=None):
+    def copy(self, source, target, *, expanding=False, progress=True, expected=None, maximum=None):
         digest = hashlib.sha256()
         size = 0
         while True:
@@ -184,6 +184,8 @@ class Context:
             if not data:
                 break
             size += len(data)
+            if maximum is not None and size > maximum:
+                raise ProcessingError("Expanded size limit reached")
             if expanding:
                 self.expanded += len(data)
                 if self.expanded > self.limits["expanded"]:
@@ -629,7 +631,11 @@ def verify_archive(source: Path, original_name: str, output: Path, ctx: Context)
     zstd_tar = kind == "zstd" and named_zstd_tar(original_name)
     is_tar, opener = tar_source(source, original_name, kind)
     if not is_tar and not zstd_tar:
-        raise ProcessingError("Unsupported archive for integrity verification")
+        if kind not in (*TAR_CODECS, "zstd"):
+            raise ProcessingError("Unsupported archive for integrity verification")
+        if kind in TAR_CODECS and original_name.lower().endswith(TAR_CODECS[kind][1]):
+            raise ProcessingError("Invalid archive: expected TAR content")
+        return verify_compressed_stream(source, original_name, output, ctx, kind, opener)
     manifest = []
 
     def verify_member(name, stream, size, directory=False):
@@ -647,6 +653,31 @@ def verify_archive(source: Path, original_name: str, output: Path, ctx: Context)
     return write_archive_report(output, ctx, {
         "format": {"gzip": "tar.gz", "bzip2": "tar.bz2", "xz": "tar.xz", "zstd": ZSTD_TAR}.get(kind, "tar"),
         "verified": True, "scope": "structure-and-observed-member-digests", "entries": manifest,
+    })
+
+
+def verify_compressed_stream(source, original_name, output, ctx, kind, opener):
+    suffix = r"\.(gz|gzip|bz2|xz|zst|zstd)$"
+    name = Path(original_name).name
+    decoded_name = re.sub(suffix, "", name, flags=re.I)
+    if not decoded_name or decoded_name == name:
+        decoded_name = name + ".out"
+    maximum = min(ctx.limits["expanded"], max(1, source.stat().st_size) * ctx.limits["ratio"])
+    if kind == "zstd":
+        from .native import run
+        with TemporaryDirectory(prefix="verify-zstd-", dir=ctx.root) as folder:
+            decoded = Path(folder) / "decoded"
+            run("decompress", source, decoded, ctx, output_limit=maximum, progress=False)
+            record = file_digest(decoded, ctx)
+        ctx.expanded = record["size"]
+    else:
+        with opener(source, "rb") as stream:
+            record = ctx.copy(stream, Sink(), expanding=True, progress=False, maximum=maximum)
+    entry = {"name": ctx.register(decoded_name), "directory": False, **record}
+    ctx.report(entries=ctx.count, expanded=ctx.expanded)
+    return write_archive_report(output, ctx, {
+        "format": kind, "verified": True, "scope": "decoded-stream-and-observed-digest",
+        "entries": [entry],
     })
 
 

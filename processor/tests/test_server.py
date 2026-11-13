@@ -897,6 +897,45 @@ class ServerTests(unittest.TestCase):
         self.assertFalse(failed["downloadAvailable"])
         self.assertFalse(failed.get("download"))
 
+    def test_stream_integrity_reports_decoded_hashes_and_checks_trailers(self):
+        import bz2
+        import gzip
+        import lzma
+
+        payload = bytes(range(256)) * 4
+        self.assertTrue(self.call('/capabilities')['streamVerification'])
+        for kind, extension, encode in (('gzip', 'gz', gzip.compress),
+                                         ('bzip2', 'bz2', bz2.compress),
+                                         ('xz', 'xz', lzma.compress)):
+            with self.subTest(kind=kind):
+                encoded = encode(payload)
+                upload = self.upload(encoded, f'payload.bin.{extension}')
+                job = self.execute(self.job(upload, operation='verify', target='json'))
+                self.assertEqual(job['state'], 'completed', job)
+                report = self.call(job['download'].removeprefix('/api/process'))
+                self.assertEqual(report, {'format': kind, 'verified': True,
+                    'scope': 'decoded-stream-and-observed-digest',
+                    'entries': [{'name': 'payload.bin', 'directory': False, 'size': len(payload),
+                                 'sha256': hashlib.sha256(payload).hexdigest()}]})
+                upload = self.upload(encoded[:-6], f'truncated.bin.{extension}')
+                job = self.execute(self.job(upload, operation='verify', target='json'))
+                self.assertEqual(job['state'], 'failed', job)
+                self.assertFalse(job['downloadAvailable'])
+
+        upload = self.upload(gzip.compress(payload), 'not-a-tar.tar.gz')
+        job = self.execute(self.job(upload, operation='verify', target='json'))
+        self.assertEqual(job['state'], 'failed', job)
+        self.assertFalse(job['downloadAvailable'])
+
+        expanded = 4 * 1024 * 1024
+        encoded = gzip.compress(b'0' * expanded)
+        self.assertGreater(expanded, len(encoded) * LIMITS['ratio'])
+        compressed = self.upload(encoded, 'expansion.gz')
+        rejected = self.execute(self.job(compressed, operation='verify', target='json'))
+        self.assertEqual(rejected['state'], 'failed', rejected)
+        self.assertEqual(rejected['errorInfo']['category'], 'resource_limit')
+        self.assertFalse(rejected['downloadAvailable'])
+
     def test_tar_integrity_job_supports_compressed_tar_and_withholds_invalid_reports(self):
         payload = b"member contents"
 
@@ -1183,6 +1222,15 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(packed).hexdigest(), current['sha256'])
         self.assertEqual(packed[:4], b'\x28\xb5\x2f\xfd')
         source = self.upload(packed, current['outputName'])
+        verified = self.execute(self.job(source, operation='verify', target='json'))
+        self.assertEqual(verified['state'], 'completed', verified)
+        report = self.call(verified['download'].removeprefix('/api/process'))
+        self.assertEqual(report['format'], 'zstd')
+        self.assertEqual(report['entries'][0]['sha256'], hashlib.sha256(data).hexdigest())
+        damaged = self.upload(packed[:-1], current['outputName'])
+        rejected = self.execute(self.job(damaged, operation='verify', target='json'))
+        self.assertEqual(rejected['state'], 'failed', rejected)
+        self.assertFalse(rejected['downloadAvailable'])
         restored = self.execute(self.job(source, operation='extract', target='zip'))
         output = self.call(restored['download'].removeprefix('/api/process'), raw=True)
         with zipfile.ZipFile(io.BytesIO(output)) as archive:
