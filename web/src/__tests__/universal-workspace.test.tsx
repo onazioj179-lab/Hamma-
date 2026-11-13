@@ -833,7 +833,7 @@ it('opens a standard job manifest lazily and requests the next page by cursor', 
       const after = new URL(url, window.location.href).searchParams.get('after');
       const files = after === '0'
         ? Array.from({ length: 50 }, (_, index) => ({ id: index + 1, name: `entry-${index + 1}.txt`, size: 10 }))
-        : [{ id: 51, name: 'last.txt', size: 20 }];
+        : [{ id: 51, name: 'empty/', directory: true, size: 0 }];
       return { ok: true, json: async () => ({ files, total: 51, nextCursor: after === '0' ? '50' : null }) };
     }
     if (url.includes('/jobs?')) {
@@ -855,8 +855,7 @@ it('opens a standard job manifest lazily and requests the next page by cursor', 
   expect(details.querySelectorAll('li')).toHaveLength(50);
   expect(details.textContent).toContain('of 51');
   await act(async () => button('Next files').click());
-  expect(details.textContent).toContain('last.txt');
-  expect(details.textContent).toContain('20 bytes');
+  expect(details.querySelector('li')?.textContent).toBe('empty/');
   expect(manifestRequests.map(url => new URL(url, window.location.href).searchParams.get('after'))).toEqual(['0', '50']);
 });
 

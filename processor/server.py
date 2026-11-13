@@ -113,6 +113,10 @@ class Store:
                 owner TEXT NOT NULL, job_id TEXT NOT NULL, position INTEGER NOT NULL,
                 data TEXT NOT NULL, PRIMARY KEY(owner,job_id,position)
             )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS job_manifest_entries (
+                owner TEXT NOT NULL, job_id TEXT NOT NULL, position INTEGER NOT NULL,
+                data TEXT NOT NULL, PRIMARY KEY(owner,job_id,position)
+            ) WITHOUT ROWID""")
             db.execute("CREATE TABLE IF NOT EXISTS local_index_sources(owner TEXT NOT NULL,job_id TEXT NOT NULL,root TEXT NOT NULL,PRIMARY KEY(owner,job_id))")
             db.execute("CREATE INDEX IF NOT EXISTS job_inputs_upload ON job_inputs(owner,upload_id,job_id)")
             db.execute("CREATE TABLE IF NOT EXISTS job_revisions (owner TEXT PRIMARY KEY, token TEXT NOT NULL)")
@@ -236,7 +240,7 @@ class Store:
                 WHERE json_extract(records.data,'$.expires')>?
             """, (json.dumps(ids), owner, now)).fetchone()[0]
 
-    def patch(self, owner, kind, record_id, *, expected_states=None, **updates):
+    def patch(self, owner, kind, record_id, *, expected_states=None, manifest_entries=None, **updates):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT data FROM records WHERE id=? AND owner=? AND kind=?", (record_id, owner, kind)).fetchone()
@@ -250,6 +254,16 @@ class Store:
             if updates.get("state") == "completed" and previous.get("state") == "cancelled":
                 return previous
             record = {**previous, **updates}
+            if manifest_entries:
+                db.executemany("INSERT INTO job_manifest_entries VALUES (?,?,?,?)",
+                               ((owner, record_id, index, json.dumps(entry))
+                                for index, entry in enumerate(manifest_entries, 1)))
+                record.update(manifestStorage="paged", manifestCount=len(manifest_entries))
+                record.pop("manifest", None)
+            if kind == "job" and updates.get("filesCleaned") and record.get("manifestStorage") == "paged":
+                db.execute("DELETE FROM job_manifest_entries WHERE owner=? AND job_id=?", (owner, record_id))
+                record.pop("manifestStorage")
+                record.pop("manifestCount")
             db.execute("UPDATE records SET data=? WHERE id=? AND owner=? AND kind=?", (json.dumps(record), record_id, owner, kind))
             if kind == "job" and "inputs" in updates:
                 self._sync_inputs(db, owner, record)
@@ -268,6 +282,7 @@ class Store:
             db.execute("DELETE FROM records WHERE owner=? AND id=?", (owner, record_id))
             db.execute("DELETE FROM job_inputs WHERE owner=? AND job_id=?", (owner, record_id))
             db.execute("DELETE FROM job_input_pages WHERE owner=? AND job_id=?", (owner, record_id))
+            db.execute("DELETE FROM job_manifest_entries WHERE owner=? AND job_id=?", (owner, record_id))
             db.execute("DELETE FROM local_index_sources WHERE owner=? AND job_id=?", (owner, record_id))
 
     def local_source(self, owner, job_id):
@@ -347,12 +362,13 @@ class Store:
             db.execute("BEGIN")
             metadata = db.execute("""
                 SELECT json_extract(data,'$.inputMode') AS mode,
+                       json_extract(data,'$.manifestStorage') AS storage,
                        json_extract(data,'$.sha256') AS sha256,
                        json_extract(data,'$.downloadAvailable') AS available,
                        json_extract(data,'$.fileExpires') AS expires,
                        CASE WHEN json_extract(data,'$.inputMode')='directory-index'
                             THEN json_extract(data,'$.fileCount')
-                            ELSE coalesce(json_array_length(data,'$.manifest'),0)
+                            ELSE coalesce(json_extract(data,'$.manifestCount'),json_array_length(data,'$.manifest'),0)
                        END AS total
                 FROM records WHERE owner=? AND kind='job' AND id=?
             """, (owner, job_id)).fetchone()
@@ -362,6 +378,13 @@ class Store:
                 return metadata, []
             if metadata['mode'] == 'directory-index':
                 return metadata, []
+            if metadata['storage'] == 'paged':
+                rows = db.execute("""
+                    SELECT position, data FROM job_manifest_entries
+                    WHERE owner=? AND job_id=? AND position>?
+                    ORDER BY position LIMIT ?
+                """, (owner, job_id, after, limit)).fetchall()
+                return metadata, [{**json.loads(row['data']), 'id': row['position']} for row in rows]
             rows = db.execute("""
                 SELECT member.key AS position, member.value AS entry
                 FROM records, json_each(records.data,'$.manifest') AS member
@@ -369,6 +392,12 @@ class Store:
                 ORDER BY member.key
             """, (owner, job_id, after, after + limit)).fetchall()
         return metadata, [{**json.loads(row['entry']), 'id': row['position'] + 1} for row in rows]
+
+    def full_paged_manifest(self, owner, job_id):
+        with self.connect() as db:
+            rows = db.execute("""SELECT data FROM job_manifest_entries
+                WHERE owner=? AND job_id=? ORDER BY position""", (owner, job_id))
+            return [json.loads(row['data']) for row in rows]
 
     def history_overview(self, owner):
         condition = "owner=? AND kind='job' AND coalesce(json_extract(data,'$.hidden'),0)=0"
@@ -612,7 +641,7 @@ def run_job(root, owner, job_id, limits, isolated=False):
         ctx.check()
         store.patch(owner, "job", job_id, expected_states=ACTIVE, state="completed", processed=job["inputSize"],
                     error=None,
-                    outputSize=digest["size"], sha256=digest["sha256"], manifest=manifest,
+                    outputSize=digest["size"], sha256=digest["sha256"], manifest_entries=manifest,
                     outputFile=output.name, outputName=output_name, finished=time.time(),
                     duration=time.time() - started, downloadAvailable=True,
                     **({'manifestStorage': 'index', 'fileCount': indexed['entries'], 'entries': indexed['entries'], 'inputSize': indexed['inputBytes'], 'phase': 'completed'} if indexed else {}))
@@ -725,7 +754,7 @@ class Service:
                 "filesToken": self.sign(f"delete:{owner}:files:{files}")}
 
     def public(self, owner, record):
-        result = {k: v for k, v in record.items() if k not in ("inputs", "outputFile", "manifest", "filesCleaned")}
+        result = {k: v for k, v in record.items() if k not in ("inputs", "outputFile", "manifest", "manifestCount", "filesCleaned")}
         result["downloadAvailable"] = bool(record.get("downloadAvailable") and record["fileExpires"] > time.time())
         if result["downloadAvailable"]:
             expiry = min(int(time.time()) + 3600, int(record["fileExpires"]))
@@ -1801,7 +1830,9 @@ def handler(service):
                         rows = manifest_page(directory / 'discovery.sqlite3', int(query.get('after', [0])[0]), limit)
                         return self.send(200, {'id': job_id, 'sha256': record.get('sha256'), 'files': rows,
                                                'total': record['fileCount'], 'nextCursor': str(rows[-1]['id']) if len(rows) == limit else None})
-                    return self.send(200, {"id": job_id, "sha256": record.get("sha256"), "files": record.get("manifest", [])})
+                    files = (service.store.full_paged_manifest(self.owner, job_id)
+                             if record.get("manifestStorage") == "paged" else record.get("manifest", []))
+                    return self.send(200, {"id": job_id, "sha256": record.get("sha256"), "files": files})
                 if action is None and method == "GET":
                     return self.send(200, service.public(self.owner, record))
                 if method == "DELETE" and action in (None, "files"):

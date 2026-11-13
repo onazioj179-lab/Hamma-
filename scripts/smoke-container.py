@@ -48,6 +48,15 @@ def check(base, state_path=None, after_restart=False):
         else:
             raise AssertionError("A different guest could download the output")
 
+    def check_manifest(job):
+        url = "/api/process/jobs/" + job["id"] + "/manifest"
+        first = call(url + "?limit=1")
+        last = call(url + "?limit=1&after=" + first["nextCursor"])
+        assert first["total"] == last["total"] == 2
+        assert first["sha256"] == last["sha256"] == job["sha256"]
+        assert last["nextCursor"] is None
+        return [(entry["name"], entry["sha256"]) for entry in first["files"] + last["files"]]
+
     def download(operation, target, uploads):
         job = post("/api/process/jobs", {"operation": operation, "target": target, "uploads": uploads})
         deadline = time.monotonic() + 30
@@ -71,6 +80,7 @@ def check(base, state_path=None, after_restart=False):
         data = call(job["download"], raw=True)
         assert job["sha256"] == hashlib.sha256(data).hexdigest() == state["sha256"]
         assert_owner_only(job)
+        assert check_manifest(job) == [tuple(entry) for entry in state["manifest"]]
         assert call("/api/process/settings")["fileRetention"] == "7d"
         path = "/api/process/uploads/" + state["upload"]
         checkpoint = call(path)
@@ -105,6 +115,8 @@ def check(base, state_path=None, after_restart=False):
     with ZipFile(BytesIO(restored)) as archive:
         assert {name: archive.read(name) for name in archive.namelist()} == files
     assert_owner_only(restored_job)
+    manifest = check_manifest(restored_job)
+    assert manifest == [(name, hashlib.sha256(data).hexdigest()) for name, data in files.items()]
     if state_path:
         settings = {"historyRetention": "30d", "fileRetention": "7d"}
         call("/api/process/settings", json.dumps(settings).encode(), "PUT",
@@ -116,6 +128,7 @@ def check(base, state_path=None, after_restart=False):
         cookies.save(ignore_discard=True)
         state_path.write_text(json.dumps({"job": restored_job["id"],
                                           "sha256": restored_job["sha256"],
+                                          "manifest": manifest,
                                           "upload": source["id"]}), encoding="utf-8")
     print("Container served the web build and verified an exact TAR.ZST round trip.")
 
