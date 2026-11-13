@@ -40,3 +40,19 @@ JSON reports in validation/index-*.json are authoritative for each run.
 Tracemalloc excludes SQLite/native allocations and OS caches. Real discovery
 fixtures are 29 bytes each; timings exclude fixture creation and cleanup.
 These results do not establish conversion throughput or large-payload capacity.
+
+## Verified 128 MiB ZIP workload — 2026-11-12
+
+The local Windows benchmark used 128 seeded 1 MiB files, evenly split between
+repeated text and deterministic random bytes. Each tool ran three times with
+ZIP Deflate level 6. All six archives passed size and SHA-256 checks for every
+entry. The timed runs include archive creation and integrity verification.
+
+| Tool | Median seconds | Output bytes |
+| --- | ---: | ---: |
+| HAMMA (SHANTE processor) | 10.96 | 67,311,062 |
+| bsdtar 3.8.9 | 10.57 | 67,317,718 |
+
+See the [raw benchmark results](../../validation/zip-128mib-windows.json). This
+workload used the local compression engine. Browser uploads, concurrent jobs,
+and worker memory were outside the measurement.
