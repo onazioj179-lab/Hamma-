@@ -599,6 +599,7 @@ class Service:
         self.running = {}
         self.restart_until = 0
         self.stop = threading.Event()
+        self.last_scheduler_tick = None
         self.accounts = Accounts(self.store)
         self.oauth = OAuth(self.store)
         self.catalog = FileCatalog(self.store)
@@ -826,6 +827,7 @@ class Service:
                 self.tick()
                 if time.monotonic() - last_cleanup > 30:
                     last_cleanup = 0 if self.cleanup() else time.monotonic()
+                self.last_scheduler_tick = time.monotonic()
             except Exception:
                 LOG.exception("Scheduler error")
 
@@ -935,12 +937,10 @@ def handler(service):
             if getattr(self, 'oauth_cookie', None):
                 self.send_header('Set-Cookie', self.oauth_cookie)
 
-        def identity(self):
+        def validate_origin(self):
             self.new_cookie = None
             self.account_cookie = None
             self.oauth_cookie = None
-            self.account = None
-            self.account_token = None
             peer = ipaddress.ip_address(self.client_address[0])
             self.credentials_allowed = peer.is_loopback or getattr(self.server, 'transport_secure', False)
             if service.lan_hosts and not (peer.is_private or peer.is_loopback):
@@ -954,6 +954,11 @@ def handler(service):
                 raise HTTPError(403, "Invalid origin")
             if self.headers.get("Sec-Fetch-Site") == "cross-site":
                 raise HTTPError(403, "Invalid origin")
+
+        def identity(self):
+            self.validate_origin()
+            self.account = None
+            self.account_token = None
             jar = cookies.SimpleCookie()
             try:
                 jar.load(self.headers.get("Cookie", ""))
@@ -1090,9 +1095,17 @@ def handler(service):
 
         def route(self):
             self.connection.settimeout(30)
-            self.identity()
             url = urlsplit(self.path)
             path, method = url.path, self.command
+            if path == "/api/process/ready" and method == "GET":
+                self.validate_origin()
+                tick = service.last_scheduler_tick
+                if service.stop.is_set() or tick is None or time.monotonic() - tick > 30:
+                    return self.send(503, {"ready": False, "reason": "scheduler"})
+                if service.web is not None and not (service.web / "index.html").is_file():
+                    return self.send(503, {"ready": False, "reason": "web-build"})
+                return self.send(200, {"ready": True})
+            self.identity()
             if path.startswith("/api/process"):
                 with service.lock:
                     now = time.time()

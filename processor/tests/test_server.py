@@ -299,6 +299,43 @@ class ServerTests(unittest.TestCase):
         self.assertNotIn(str(self.service.store.root), json.dumps(first))
         self.assertNotIn("files", first)
 
+    def test_readiness_reports_scheduler_and_configured_web_build_without_session(self):
+        ready = self.base + '/ready'
+        with self.assertRaises(HTTPError) as waiting:
+            self.client.open(ready)
+        with waiting.exception as response:
+            self.assertEqual(response.code, 503)
+            self.assertEqual(json.load(response), {'ready': False, 'reason': 'scheduler'})
+            self.assertIsNone(response.headers.get('Set-Cookie'))
+
+        worker = threading.Thread(target=self.service.loop)
+        worker.start()
+        try:
+            deadline = time.monotonic() + 10
+            while self.service.last_scheduler_tick is None and time.monotonic() < deadline:
+                time.sleep(.02)
+            with self.client.open(ready) as response:
+                self.assertEqual(json.load(response), {'ready': True})
+                self.assertIsNone(response.headers.get('Set-Cookie'))
+            self.service.web = Path(self.temp.name) / 'dist'
+            self.service.web.mkdir()
+            with self.assertRaises(HTTPError) as missing:
+                self.client.open(ready)
+            with missing.exception as response:
+                self.assertEqual(response.code, 503)
+                self.assertEqual(json.load(response), {'ready': False, 'reason': 'web-build'})
+            (self.service.web / 'index.html').write_text('<main>Fixture</main>', encoding='utf-8')
+            self.assertEqual(self.call('/ready'), {'ready': True})
+            self.assert_status(403, lambda: self.call('/ready', headers={'Origin': 'https://example.invalid'}))
+        finally:
+            self.service.stop.set()
+            worker.join(timeout=10)
+        self.assertFalse(worker.is_alive())
+        self.service.stop.clear()
+        self.service.last_scheduler_tick = time.monotonic() - 31
+        self.assert_status(503, lambda: self.call('/ready'))
+        self.assertEqual(self.call('/health')['processing'], 'local')
+
     def test_resumable_chunks_real_job_hash_download_and_ranges(self):
         source = self.upload(b"Real content" * 100, split=True)
         job = self.execute(self.job(source))
