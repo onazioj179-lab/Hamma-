@@ -23,6 +23,12 @@ upload from its saved byte offset. A one-slot run completed all 11 jobs across
 three projects and two owners, verified 33,751,040 input bytes and rejected all
 11 cross-owner downloads. Windows native CLI and C ABI contracts passed.
 
+An eight-session Windows HTTP run completed 24 jobs in 22.36 seconds, with
+16 exact-byte downloads and eight expected corrupt-input failures. Earlier
+runs on the same host hit the request rate limit while memory admission held
+the queue. The 16-session run still needs a fresh pass after connection resets
+during upload.
+
 On Python 3.13 the standard TAR reader avoids retaining a separate TarInfo
 cache. Output manifests still retain per-member state. Windows bsdtar 3.8.9
 verified TAR.ZST in both directions, including nested paths, an empty file,
