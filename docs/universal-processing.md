@@ -39,14 +39,20 @@ not executed on this Windows workstation. Rebuild regularly for codec fixes.
 
 | Operation | Actual behavior |
 | --- | --- |
-| Compress | ZIP/ZIP64, TAR, TAR.GZ, TAR.BZ2, TAR.XZ; single-file GZIP, BZIP2, XZ |
-| Extract | Signature-detected ZIP/ZIP64, TAR, compressed TAR, GZIP, BZIP2, XZ; portable ZIP output |
+| Compress | ZIP/ZIP64, TAR, TAR.GZ, TAR.BZ2, TAR.XZ; single-file GZIP, BZIP2, XZ. The native SHANTE engine adds TAR.ZST and single-file Zstandard. |
+| Extract | Signature-detected ZIP/ZIP64, TAR, compressed TAR, GZIP, BZIP2, XZ; portable ZIP output. Native Zstandard supports raw frames and named Zstandard TAR archives. |
 | Recursive extract | Bounded nesting; original archives kept alongside `archive.contents/` |
 | Audio | WAV, FLAC, MP3, AAC, M4A, OGG via FFmpeg; every audio track retained as a separate output; multiple tracks packaged as ZIP |
 | Video | Stream-preserving MP4/MKV/WebM remux when codecs fit the container; incompatible streams fail visibly |
 | Images | Still-image PNG, WEBP, JPG via FFmpeg; animation frames are never silently discarded |
 | Selection | Multiple files, folders, recursive folder drops, Unicode names, collision rejection; empty directories through folder drops |
 | Jobs | Two worker processes; independent extraction/conversion jobs; compression consolidates selections |
+
+With the native engine installed, `.tar.zst`, `.tar.zstd`, and `.tzst`
+archives support extraction, repacking as ZIP, and TAR integrity reports. The
+processor uses a bounded temporary TAR file for native encoding and decoding.
+The archive must fit the configured expansion and ratio limits. Files named
+`.zst` or `.zstd` keep the existing single-file restoration behavior.
 | Recovery | SQLite manifests; crashed workers become Interrupted; queued jobs resume; retry reuses retained inputs |
 | Upload | 4 MiB browser chunks; committed offsets reconciled on retry; immutable after consumption |
 | Download | Verified output only; session-bound signed links, one-hour maximum validity, ETags, HEAD, byte ranges |

@@ -43,7 +43,7 @@ def capability():
         return None
 
 
-def run(operation, source, output, context, *, output_limit=None, progress=True):
+def run(operation, source, output, context, *, input_limit=None, output_limit=None, progress=True):
     from .engine import ProcessingError
     info = capability()
     if not info:
@@ -51,10 +51,11 @@ def run(operation, source, output, context, *, output_limit=None, progress=True)
     if output.exists() or output.is_symlink():
         raise ProcessingError('Output already exists')
     maximum = context.limits['expanded'] if output_limit is None else output_limit
+    input_limit = context.limits['input'] if input_limit is None else input_limit
     memory = 128 * 1024**2
     if info.get('availableMemory', 0):
         memory = max(16 * 1024**2, min(memory, info['availableMemory'] // 8))
-    command = [str(binary()), operation, str(source), str(output), str(context.limits['input']),
+    command = [str(binary()), operation, str(source), str(output), str(input_limit),
                str(maximum), str(memory), str(info['workers']), str(context.root / 'cancel')]
     state = {}
     base = context.bytes
@@ -83,7 +84,7 @@ def run(operation, source, output, context, *, output_limit=None, progress=True)
                 raise ProcessingError('Invalid native engine response')
             event = state.get('progress')
             if event is not None and event != reported:
-                if type(event.get('inputBytes')) is not int or not 0 <= event['inputBytes'] <= context.limits['input']:
+                if type(event.get('inputBytes')) is not int or not 0 <= event['inputBytes'] <= input_limit:
                     raise ProcessingError('Invalid native progress')
                 if progress:
                     context.bytes = base + event['inputBytes']
@@ -100,7 +101,7 @@ def run(operation, source, output, context, *, output_limit=None, progress=True)
             raise ProcessingError({'cancelled': 'Cancelled', 'limit': 'Native resource limit reached',
                                    'integrity': 'Corrupted archive', 'codec': 'Corrupted archive or native memory limit reached',
                                    'memory': 'Native memory limit reached'}.get(code, 'Native processing failed'))
-        if (type(result.get('inputBytes')) is not int or not 0 <= result['inputBytes'] <= context.limits['input'] or
+        if (type(result.get('inputBytes')) is not int or not 0 <= result['inputBytes'] <= input_limit or
             type(result.get('outputBytes')) is not int or result['outputBytes'] != output.stat().st_size or result['outputBytes'] > maximum):
             raise ProcessingError('Native output verification failed')
         if progress:

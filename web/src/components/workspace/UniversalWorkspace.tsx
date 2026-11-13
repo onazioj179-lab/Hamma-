@@ -385,7 +385,8 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     || (signature === 'file' || !signature) && /\.tar$/i.test(tarName)
     || (!signature || signature === 'gzip') && /\.(tar\.gz|tgz)$/i.test(tarName)
     || (!signature || signature === 'bzip2') && /\.(tar\.bz2|tbz2?)$/i.test(tarName)
-    || (!signature || signature === 'xz') && /\.(tar\.xz|txz)$/i.test(tarName));
+    || (!signature || signature === 'xz') && /\.(tar\.xz|txz)$/i.test(tarName)
+    || capability?.archives.includes('tar.zst') && (!signature || signature === 'zstd') && /\.(tar\.zst(?:d)?|tzst)$/i.test(tarName));
   const verificationLabel = zipSource && capability?.zipVerification ? 'Test ZIP integrity'
     : tarSource && capability?.tarVerification ? 'Test TAR integrity' : '';
   const archiveTargets = resolveArchiveTargets(chosen, capability);

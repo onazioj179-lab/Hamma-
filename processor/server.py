@@ -38,7 +38,7 @@ import time
 from urllib.parse import parse_qs, urlsplit, quote
 import zipfile
 
-from .engine import ARCHIVES, MEDIA, BLOCK, ZIP_PROFILES, Context, ProcessingError, archive_formats, compress, convert, detect, encode_zip_comment, extract, file_digest, safe_path, verify_archive
+from .engine import ARCHIVES, MEDIA, BLOCK, ZIP_PROFILES, ZSTD_TAR, Context, ProcessingError, archive_formats, archive_working_copies, compress, convert, detect, encode_zip_comment, extract, file_digest, safe_path, verify_archive
 from .worker_limits import apply_windows_worker_limits, apply_worker_limits
 from .resources import available_memory, worker_capacity
 from .errors import describe_failure
@@ -864,7 +864,7 @@ class Service:
                         if expired:
                             self.interrupt_job(owner, record, "Processing time limit reached", "processing_timeout")
                         elif (cleaned and not record.get("crashRetries") and record.get("operation") == "compress"
-                                and record.get("target") in ARCHIVES and record.get("inputMode") != "directory-index"
+                                and record.get("target") in (*ARCHIVES, ZSTD_TAR) and record.get("inputMode") != "directory-index"
                                 and record.get("fileExpires", 0) > time.time()
                                 and not (self.store.folder(owner, job_id) / "cancel").exists()):
                             LOG.warning("Restarting interrupted job %s (worker exit %s)", job_id, process.exitcode)
@@ -886,8 +886,12 @@ class Service:
                 if not candidates:
                     break
                 owner, job = candidates[0]
-                disk_required = self.limits['expanded'] * (len(self.running) + 1) + 64 * 1024**2
-                if self.reserved() + self.limits["expanded"] > self.limits["storage"] or shutil.disk_usage(self.store.root).free < disk_required:
+                copies = archive_working_copies(job)
+                for running_id, (_, running_owner, _) in self.running.items():
+                    active = self.store.get(running_owner, "job", running_id)
+                    copies += archive_working_copies(active) if active else 1
+                working_bytes = self.limits["expanded"] * copies
+                if self.reserved() + working_bytes > self.limits["storage"] or shutil.disk_usage(self.store.root).free < working_bytes + 64 * 1024**2:
                     self.store.patch(owner, "job", job["id"], state="failed", error="Storage full", finished=time.time(),
                                      errorInfo={'category': 'insufficient_storage', 'retryEligible': True, 'stage': 'queued',
                                                 'jobId': job['id'], 'fileIds': self.store.job_input_ids(owner, job)}, downloadAvailable=False)
