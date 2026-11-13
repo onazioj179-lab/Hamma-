@@ -1,6 +1,5 @@
 import { inspectSources } from '../../processing/inspection';
 import { allocateSourcePaths } from '../../processing/selection';
-import { ErrorCenter } from './ErrorCenter';
 import { ZipInspection } from './ZipInspection';
 import { VerifiedFiles } from './VerifiedFiles';
 import { ProjectRecovery, defaultProjectSettings, readSelection, saveSelection } from '../../processing/projects';
@@ -9,7 +8,7 @@ import { summarizePlan, type ExecutionPlan, type TaskGroup } from '../../process
 import { executeWorkflow } from '../../processing/workflow';
 import { GroupedWorkflow } from './GroupedWorkflow';
 import { useAppStore } from '../../store/app';
-import { combineActivity, filterActivity, loadJobs, type ActivityJob } from '../../processing/activity';
+import { combineActivity, filterActivity, loadJobs, refreshJobHistory, type ActivityJob, type JobHistorySnapshot } from '../../processing/activity';
 import { SelectField } from '../ui/SelectField';
 import { ConfirmAction, type ConfirmationRequest } from '../ui/ConfirmAction';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -22,6 +21,7 @@ import '../../processing/processing.css';
 
 type Props = { visible: boolean; screen: 'workspace' | 'files' | 'history'; onHistory: () => void; spkResult?: { outputName: string; downloadUrl: string | null; historyId?: string; historyCreated?: number; originalSize?: number; resultSize?: number; operation?: 'compress' | 'extract' } | null; onSpkDownload?: () => void; spkReady?: boolean; spkBusy?: boolean; spkStatus?: ReactNode; onSpkSelect?: (files: File[], restore: boolean) => Promise<boolean> };
 const terminal = (job: Job) => !activeJob(job);
+const canRetry = (job: Job) => ['failed', 'interrupted', 'cancelled'].includes(job.state) && job.errorInfo?.retryEligible !== false;
 type SourceFailure = { message: string; retry?: Omit<TaskGroup, 'sources'> };
 
 const label = (state: string) => ({ queued: 'Waiting', paused: 'Paused', processing: 'Processing', verifying: 'Verifying', completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted' }[state] || state);
@@ -86,6 +86,10 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const abort = useRef<AbortController | null>(null);
   const submitting = useRef(false);
   const activity = useRef(false);
+  const refreshFailures = useRef(0);
+  const refreshAfter = useRef(0);
+  const liveJobPolling = useRef(false);
+  const jobHistory = useRef<JobHistorySnapshot | null>(null);
   const knownStates = useRef(new Map<string, string>());
   const [loadingJobs, setLoadingJobs] = useState(true);
 
@@ -106,20 +110,34 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     const controller = new AbortController(); refreshController.current = controller;
     const task = (async () => {
       try {
-        const records = await loadJobs(controller.signal, true);
+        const previous = jobHistory.current;
+        const snapshot = liveJobPolling.current ? await refreshJobHistory(force ? null : previous, controller.signal) : null;
+        const records = snapshot?.records ?? await loadJobs(controller.signal, true);
         if (!mounted.current || controller.signal.aborted) return;
-        const finished = records.filter(job => knownStates.current.has(job.id) && knownStates.current.get(job.id) !== job.state && ['completed', 'failed'].includes(job.state));
-        for (const job of finished) window.dispatchEvent(new CustomEvent('hamma-job-notice', { detail: { success: job.state === 'completed', message: `${job.outputName || job.name}: ${job.state === 'completed' ? 'Ready to download' : 'Could not finish. Open history to retry.'}` } }));
+        jobHistory.current = snapshot;
+        refreshFailures.current = 0;
+        refreshAfter.current = 0;
+        setLoadingJobs(false); setOffline(false);
+        window.dispatchEvent(new CustomEvent('hamma-processor-status', { detail: 'ready' }));
+        if (snapshot && snapshot === previous) return;
+        const finished = records.filter(job => knownStates.current.has(job.id) && knownStates.current.get(job.id) !== 'completed' && job.state === 'completed');
+        for (const job of finished) window.dispatchEvent(new CustomEvent('hamma-job-notice', { detail: { success: true, message: `${job.outputName || job.name}: Ready to download` } }));
         knownStates.current = new Map(records.map(job => [job.id, job.state]));
-        setLoadingJobs(false); setOffline(false); setJobs(records);
+        setJobs(records);
         setProjectIds(previous => [...new Set([...previous, ...records.map(job => job.projectId || 'default')])]);
         window.dispatchEvent(new CustomEvent('hamma-job-count', { detail: records.filter(job => !job.hidden).length }));
-        window.dispatchEvent(new CustomEvent('hamma-processor-status', { detail: 'ready' }));
-        activity.current = records.some(activeJob);
+        activity.current = records.some(job => activeJob(job) && job.state !== 'paused');
       } catch (caught) {
         if (controller.signal.aborted || !mounted.current) return;
-        setLoadingJobs(false); setOffline(true);
-        window.dispatchEvent(new CustomEvent('hamma-processor-status', { detail: 'offline' }));
+        const retryAfter = caught instanceof ProcessorError ? caught.retryAfterSeconds : undefined;
+        const throttled = caught instanceof ProcessorError && (caught.status === 429 || caught.status === 503);
+        const delay = Math.min(30000, 1000 * 2 ** Math.min(refreshFailures.current++, 5));
+        refreshAfter.current = Date.now() + Math.max(delay, (retryAfter || 0) * 1000);
+        setLoadingJobs(false);
+        if (!throttled && (force || refreshFailures.current >= 2)) {
+          setOffline(true);
+          window.dispatchEvent(new CustomEvent('hamma-processor-status', { detail: 'offline' }));
+        }
         throw caught;
       }
     })();
@@ -175,6 +193,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       const caps = await request<Capability>('/capabilities');
       if (generation !== ownerGeneration.current || accountChanging()) return;
       if (caps.processing !== 'local' || caps.version !== 1) throw new Error('Unavailable');
+      liveJobPolling.current = caps.liveJobPolling === true;
       setCapability(caps); setOffline(false);
       const settings = await request<Retention>('/settings');
       if (generation !== ownerGeneration.current || accountChanging()) return;
@@ -192,7 +211,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
           throw caught;
         } finally { if (generation === ownerGeneration.current && mounted.current) setRecovering(false); }
       }
-      await refresh(true);
+      await refresh(true).catch(() => {});
     } catch { if (mounted.current && generation === ownerGeneration.current && !accountChanging()) { setOffline(true); setLoadingJobs(false); window.dispatchEvent(new CustomEvent('hamma-processor-status', { detail: 'offline' })); } }
   }, [refresh, restoreProject]);
   useEffect(() => {
@@ -225,7 +244,8 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       abort.current?.abort(); folderController.current?.abort(); setFolderHelp(false);
       refreshController.current?.abort(); refreshFlight.current = null;
       deletionPreviewController.current?.abort();
-      knownStates.current.clear(); activity.current = false;
+      knownStates.current.clear(); jobHistory.current = null; liveJobPolling.current = false;
+      activity.current = false; refreshFailures.current = 0; refreshAfter.current = 0;
       setJobs([]); setJobSelected(new Set()); setConfirmation(null); setCapability(null); setLoadingJobs(true); setError('');
       setUploadStatus(null);
       window.dispatchEvent(new CustomEvent('hamma-job-count', { detail: 0 }));
@@ -252,10 +272,15 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
-      try { await refresh(); } catch { /* Refresh exposes the disconnected state. */ }
-      if (!disposed) timer = setTimeout(poll, activity.current ? 1000 : 10000);
+      if (document.visibilityState !== 'hidden' && Date.now() >= refreshAfter.current) {
+        try { await refresh(); } catch { /* Refresh tracks connection status and retry timing. */ }
+      }
+      if (!disposed) {
+        const interval = activity.current && document.visibilityState !== 'hidden' ? 1000 : 10000;
+        timer = setTimeout(poll, Math.min(2 ** 31 - 1, Math.max(interval, refreshAfter.current - Date.now())));
+      }
     };
-    void poll();
+    timer = setTimeout(poll, 1000);
     return () => { disposed = true; clearTimeout(timer); };
   }, [capability, refresh]);
 
@@ -741,14 +766,13 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     </>}
     {screen === 'workspace' && spkStatus}
     <section className="processing-history" aria-label="Processing jobs">
-      <ErrorCenter jobs={combined} busy={acting} retry={records => void bulk('retry', 'POST', records).catch(caught => setError(caught.message))} />
       <div className="section-line"><h2>{screen === 'workspace' ? 'Processing queue' : screen === 'files' ? 'Available files' : 'All operations'}</h2><div className="button-row">{screen === 'workspace' && <button className="text-button" onClick={onHistory}><History size={14} /> History</button>}<button className="text-button" onClick={() => void exportHistory()} disabled={!combined.length}><Download size={14} /> Export</button></div></div>
-      {screen === 'workspace' && combined.length > 0 && <div className="project-summary" role="status"><span>{combined.filter(job => job.state === 'completed').length} completed  -  {combined.filter(job => ['failed', 'interrupted'].includes(job.state)).length} failed  -  {combined.filter(activeJob).length} remaining jobs</span><div className="button-row"><button className="button secondary" disabled={acting || !combined.some(job => job.state === 'queued')} onClick={() => void bulk('pause', 'POST', combined.filter(job => job.state === 'queued')).catch(caught => setError(caught.message))}>Pause waiting</button><button className="button secondary" disabled={acting || !combined.some(job => job.state === 'paused')} onClick={() => void bulk('resume', 'POST', combined.filter(job => job.state === 'paused')).catch(caught => setError(caught.message))}>Resume waiting</button><button className="button secondary" disabled={acting || !combined.some(activeJob)} onClick={() => void bulk('cancel', 'POST', combined.filter(activeJob)).catch(caught => setError(caught.message))}>Cancel project jobs</button><button className="button secondary" disabled={acting || !combined.some(job => ['failed', 'interrupted'].includes(job.state))} onClick={() => void bulk('retry', 'POST', combined.filter(job => ['failed', 'interrupted'].includes(job.state))).catch(caught => setError(caught.message))}>Retry failed</button><button className="button secondary" disabled={!combined.some(job => job.downloadAvailable)} onClick={() => combined.filter(job => job.downloadAvailable).forEach(download)}>Download completed</button></div><small>Progress counts verified jobs. File selections stay in this tab; queued jobs survive a server restart.</small></div>}
+      {screen === 'workspace' && combined.length > 0 && <div className="project-summary" role="status"><span>{combined.filter(job => job.state === 'completed').length} completed  -  {combined.filter(job => ['failed', 'interrupted'].includes(job.state)).length} failed  -  {combined.filter(activeJob).length} remaining jobs</span><div className="button-row"><button className="button secondary" disabled={acting || !combined.some(job => job.state === 'queued')} onClick={() => void bulk('pause', 'POST', combined.filter(job => job.state === 'queued')).catch(caught => setError(caught.message))}>Pause waiting</button><button className="button secondary" disabled={acting || !combined.some(job => job.state === 'paused')} onClick={() => void bulk('resume', 'POST', combined.filter(job => job.state === 'paused')).catch(caught => setError(caught.message))}>Resume waiting</button><button className="button secondary" disabled={acting || !combined.some(activeJob)} onClick={() => void bulk('cancel', 'POST', combined.filter(activeJob)).catch(caught => setError(caught.message))}>Cancel project jobs</button><button className="button secondary" disabled={acting || !combined.some(job => job.state !== 'cancelled' && canRetry(job))} onClick={() => void bulk('retry', 'POST', combined.filter(job => job.state !== 'cancelled' && canRetry(job))).catch(caught => setError(caught.message))}>Retry failed</button><button className="button secondary" disabled={!combined.some(job => job.downloadAvailable)} onClick={() => combined.filter(job => job.downloadAvailable).forEach(download)}>Download completed</button></div><small>Progress counts verified jobs. File selections stay in this tab; queued jobs survive a server restart.</small></div>}
       <div className="history-tools universal-search"><label className="search-field"><Search size={16} /><input aria-label="Search processing history" placeholder="Search files" value={query} onChange={event => { setQuery(event.target.value); setPage(0); setJobSelected(new Set()); }} /></label><SelectField aria-label="Filter processing history" value={filter} onChange={value => { setFilter(value); setPage(0); setJobSelected(new Set()); }}><option value="">All statuses</option>{['queued', 'processing', 'verifying', 'completed', 'failed', 'cancelled', 'interrupted', 'paused'].map(state => <option value={state} key={state}>{label(state)}</option>)}</SelectField><SelectField aria-label="Filter by operation" value={operationFilter} onChange={value => { setOperationFilter(value); setPage(0); setJobSelected(new Set()); }}><option value="">All operations</option><option value="compress">Compression</option><option value="extract">Extraction</option><option value="convert">Conversion</option><option value="downloads">Available downloads</option></SelectField><SelectField aria-label="Sort processing history" value={sort} onChange={value => { setSort(value); setPage(0); setJobSelected(new Set()); }}><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="name">Name</option><option value="size">Largest first</option></SelectField></div>
       {visibleJobs.length > 0 && <div className="job-bulk"><label className="selection-label"><input aria-label="Select all visible jobs" type="checkbox" checked={visibleJobs.every(j => jobSelected.has(j.id))} onChange={event => setJobSelected(event.target.checked ? new Set(visibleJobs.map(j => j.id)) : new Set())} />Select all</label><span>{visibleJobs.filter(j => j.state === 'completed').length} completed · {visibleJobs.filter(j => ['failed', 'interrupted'].includes(j.state)).length} failed · {visibleJobs.filter(activeJob).length} remaining on this page</span></div>}
-      {jobSelected.size > 0 && <div className="processing-actions bulk-actions"><button className="button secondary" disabled={!selectedJobs.some(j => j.downloadAvailable)} onClick={() => selectedJobs.filter(j => j.downloadAvailable).forEach(download)}><Download size={14} /> Download</button><button className="button secondary" disabled={!selectedJobs.every(j => j.state === 'queued')} onClick={() => void bulk('pause').catch(e => setError(e.message))}><Pause size={14} /> Pause queue</button><button className="button secondary" disabled={!selectedJobs.every(j => j.state === 'paused')} onClick={() => void bulk('resume').catch(e => setError(e.message))}><Play size={14} /> Resume</button><button className="button secondary" disabled={!selectedJobs.every(activeJob)} onClick={() => void bulk('cancel').catch(e => setError(e.message))}><X size={14} /> Cancel</button><button className="button secondary" disabled={!selectedJobs.every(j => ['failed', 'interrupted', 'cancelled'].includes(j.state))} onClick={() => void bulk('retry').catch(e => setError(e.message))}><RefreshCw size={14} /> Retry</button><button className="button secondary" disabled={busy || recovering || spkBusy || acting || preparingDeletion || !selectedJobs.every(terminal)} onClick={() => confirmBulk('')}><Trash2 size={14} /> Delete history</button><button className="button secondary" disabled={busy || recovering || spkBusy || acting || preparingDeletion || !selectedJobs.length || !selectedJobs.every(job => terminal(job) && (!job.localId || job.downloadAvailable))} onClick={() => confirmBulk('files')}><Trash2 size={14} /> Delete files</button></div>}
+      {jobSelected.size > 0 && <div className="processing-actions bulk-actions"><button className="button secondary" disabled={!selectedJobs.some(j => j.downloadAvailable)} onClick={() => selectedJobs.filter(j => j.downloadAvailable).forEach(download)}><Download size={14} /> Download</button><button className="button secondary" disabled={!selectedJobs.every(j => j.state === 'queued')} onClick={() => void bulk('pause').catch(e => setError(e.message))}><Pause size={14} /> Pause queue</button><button className="button secondary" disabled={!selectedJobs.every(j => j.state === 'paused')} onClick={() => void bulk('resume').catch(e => setError(e.message))}><Play size={14} /> Resume</button><button className="button secondary" disabled={!selectedJobs.every(activeJob)} onClick={() => void bulk('cancel').catch(e => setError(e.message))}><X size={14} /> Cancel</button><button className="button secondary" disabled={!selectedJobs.every(canRetry)} onClick={() => void bulk('retry').catch(e => setError(e.message))}><RefreshCw size={14} /> Retry</button><button className="button secondary" disabled={busy || recovering || spkBusy || acting || preparingDeletion || !selectedJobs.every(terminal)} onClick={() => confirmBulk('')}><Trash2 size={14} /> Delete history</button><button className="button secondary" disabled={busy || recovering || spkBusy || acting || preparingDeletion || !selectedJobs.length || !selectedJobs.every(job => terminal(job) && (!job.localId || job.downloadAvailable))} onClick={() => confirmBulk('files')}><Trash2 size={14} /> Delete files</button></div>}
       <div className="surface job-list" aria-busy={loadingJobs && !offline}>{loadingJobs && !offline && <p className="queue-loading" role="status"><Loader2 size={16} className="animate-spin" /> Loading your jobs</p>}{visibleJobs.length ? visibleJobs.map(job => <article className="processing-job" key={job.id}>
-        <div className="processing-job-line"><input type="checkbox" aria-label={`Select job ${job.name}`} checked={jobSelected.has(job.id)} onChange={() => setJobSelected(previous => { const next = new Set(previous); next.has(job.id) ? next.delete(job.id) : next.add(job.id); return next; })} /><span className="job-glyph" data-state={job.state === 'completed' ? 'done' : activeJob(job) && job.state !== 'queued' && job.state !== 'paused' ? 'working' : 'idle'} aria-hidden="true"><Check size={18} className="job-icon-done" /><span className="job-icon-working"><Loader2 size={18} className="animate-spin" /></span><FileArchive size={18} className="job-icon-idle" /></span><div className="processing-job-name"><strong title={job.name}>{job.outputName || job.name}</strong><span><b className={`operation-tag tag-${job.operation}`}>{job.localId ? 'SPK' : (job.target || job.format || 'file').toUpperCase()} / {job.operation}</b> · {formatFileSize(job.inputSize)}{job.outputSize !== null ? ` → ${formatFileSize(job.outputSize)}` : ''}{job.operation === 'compress' && job.outputSize !== null && job.inputSize > 0 ? ` · ${savings(job)}` : ''}</span></div><span className={`file-state state-${job.state}`} role="status">{label(job.state)}</span>{job.downloadAvailable && (job.localId ? <a className="icon-button" href={job.download} download={job.outputName} aria-label={`Download ${job.outputName}`} title="Download"><Download size={17} /><span className="sr-only">Download</span></a> : <button className="icon-button" aria-label={`Download ${job.outputName}`} title="Download" onClick={() => download(job)}><Download size={17} /><span className="sr-only">Download</span></button>)}{activeJob(job) && <button className="icon-button" aria-label={`Cancel ${job.name}`} onClick={() => runAction(job, 'cancel')}><X size={16} /></button>}{['failed', 'interrupted', 'cancelled'].includes(job.state) && <button className="icon-button" aria-label={`Retry ${job.name}`} onClick={() => runAction(job, 'retry')}><RefreshCw size={16} /></button>}</div>
+        <div className="processing-job-line"><input type="checkbox" aria-label={`Select job ${job.name}`} checked={jobSelected.has(job.id)} onChange={() => setJobSelected(previous => { const next = new Set(previous); next.has(job.id) ? next.delete(job.id) : next.add(job.id); return next; })} /><span className="job-glyph" data-state={job.state === 'completed' ? 'done' : activeJob(job) && job.state !== 'queued' && job.state !== 'paused' ? 'working' : 'idle'} aria-hidden="true"><Check size={18} className="job-icon-done" /><span className="job-icon-working"><Loader2 size={18} className="animate-spin" /></span><FileArchive size={18} className="job-icon-idle" /></span><div className="processing-job-name"><strong title={job.name}>{job.outputName || job.name}</strong><span><b className={`operation-tag tag-${job.operation}`}>{job.localId ? 'SPK' : (job.target || job.format || 'file').toUpperCase()} / {job.operation}</b> · {formatFileSize(job.inputSize)}{job.outputSize !== null ? ` → ${formatFileSize(job.outputSize)}` : ''}{job.operation === 'compress' && job.outputSize !== null && job.inputSize > 0 ? ` · ${savings(job)}` : ''}</span></div><span className={`file-state state-${job.state}`} role="status">{label(job.state)}</span>{job.downloadAvailable && (job.localId ? <a className="icon-button" href={job.download} download={job.outputName} aria-label={`Download ${job.outputName}`} title="Download"><Download size={17} /><span className="sr-only">Download</span></a> : <button className="icon-button" aria-label={`Download ${job.outputName}`} title="Download" onClick={() => download(job)}><Download size={17} /><span className="sr-only">Download</span></button>)}{activeJob(job) && <button className="icon-button" aria-label={`Cancel ${job.name}`} onClick={() => runAction(job, 'cancel')}><X size={16} /></button>}{canRetry(job) && <button className="icon-button" aria-label={`Retry ${job.name}`} onClick={() => runAction(job, 'retry')}><RefreshCw size={16} /></button>}</div>
         {activeJob(job) && <div className="job-measurement">{job.operation === 'compress' && job.state === 'processing' ? <><progress aria-label={`Progress for ${job.name}`} max={Math.max(1, job.inputSize)} value={Math.min(job.inputSize, job.processed)} /><span>{formatFileSize(job.processed)} / {formatFileSize(job.inputSize)}</span></> : <span>{job.state === 'verifying' ? 'Checking output' : job.expanded ? `${job.entries} entries · ${formatFileSize(job.expanded)} expanded` : job.mediaSeconds ? `${job.mediaSeconds.toFixed(1)}s converted · track ${job.track}/${job.tracks}` : label(job.state)}</span>}</div>}
         {job.error && <p className="job-error">{job.error}</p>}
         {job.manifestStorage && job.downloadAvailable && <VerifiedFiles jobId={job.id} />}

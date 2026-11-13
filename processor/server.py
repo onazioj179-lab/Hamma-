@@ -6,6 +6,7 @@ requires an authenticated gateway and stronger per-worker OS sandboxing.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import errno
 from contextlib import contextmanager
 import hashlib
@@ -29,6 +30,7 @@ import subprocess
 import shutil
 import stat
 import sqlite3
+import stat
 import tempfile
 import threading
 import tarfile
@@ -52,9 +54,18 @@ LOG = logging.getLogger("hamma.processor")
 TERMINAL = ("completed", "failed", "cancelled", "interrupted")
 
 ACTIVE = ("queued", "processing", "verifying")
+LIVE_STATES = (*ACTIVE, "paused")
+JOB_SUMMARY = ("json_remove(data,'$.inputs','$.manifest','$.outputFile','$.filesCleaned','$.errorInfo.fileIds') AS data,"
+               "coalesce(json_extract(data,'$.fileCount'),json_array_length(data,'$.inputs')) AS file_count")
 PROCESSOR_REVISION = ":".join(hashlib.sha256(path.read_bytes()).hexdigest() for path in
                               sorted(Path(__file__).parent.glob("*.py"), key=lambda path: path.name))
 RETENTION = {"24h": 86400, "7d": 604800, "30d": 2592000, "never": None}
+JOB_PROGRESS_RESET = dict(processed=0, entries=0, expanded=0, mediaSeconds=0, track=None, tracks=None,
+                          phase=None, duration=None, started=None, finished=None, error=None, errorInfo=None)
+
+
+def upload_stamp(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
 class Store:
@@ -80,6 +91,7 @@ class Store:
             db.execute("CREATE INDEX IF NOT EXISTS records_visible ON records(owner,kind,coalesce(json_extract(data,'$.hidden'),0),created DESC)")
             db.execute("CREATE INDEX IF NOT EXISTS records_state ON records(kind,json_extract(data,'$.state'),created,id,owner)")
             db.execute("CREATE INDEX IF NOT EXISTS records_owner_state ON records(owner,kind,json_extract(data,'$.state'))")
+            db.execute("CREATE INDEX IF NOT EXISTS job_owner_dispatch ON records(owner,json_extract(data,'$.scheduled') DESC) WHERE kind='job' AND json_extract(data,'$.scheduled') IS NOT NULL")
             db.execute("""
                 CREATE INDEX IF NOT EXISTS records_project_dispatch
                 ON records(owner,coalesce(json_extract(data,'$.projectId'),'default'),
@@ -101,6 +113,23 @@ class Store:
             db.execute("CREATE TABLE IF NOT EXISTS local_index_sources(owner TEXT NOT NULL,job_id TEXT NOT NULL,root TEXT NOT NULL,PRIMARY KEY(owner,job_id))")
             db.execute("CREATE INDEX IF NOT EXISTS job_inputs_upload ON job_inputs(owner,upload_id,job_id)")
             db.execute("CREATE TABLE IF NOT EXISTS store_migrations (name TEXT PRIMARY KEY)")
+            db.execute("CREATE TABLE IF NOT EXISTS job_history_revisions (owner TEXT PRIMARY KEY, revision INTEGER NOT NULL)")
+            # Live progress is fetched separately. A terminal change must invalidate
+            # history even when it came from another request or worker process.
+            live_states = ",".join(repr(state) for state in LIVE_STATES)
+            for event, row, condition in (
+                ("INSERT", "NEW", ""),
+                ("DELETE", "OLD", ""),
+                ("UPDATE", "NEW", " AND NOT (" + " AND ".join(
+                    f"coalesce(json_extract({version}.data,'$.state'),'') IN ({live_states})"
+                    for version in ("OLD", "NEW")) + ")"),
+            ):
+                db.execute(f"""CREATE TRIGGER IF NOT EXISTS job_history_{event.lower()}
+                    AFTER {event} ON records WHEN {row}.kind='job'{condition}
+                    BEGIN
+                        INSERT INTO job_history_revisions VALUES ({row}.owner,1)
+                        ON CONFLICT(owner) DO UPDATE SET revision=revision+1;
+                    END""")
             if not db.execute("SELECT 1 FROM store_migrations WHERE name='job-inputs-v1'").fetchone():
                 db.execute("INSERT OR IGNORE INTO job_inputs SELECT records.owner,records.id,json_extract(member.value,'$.id') FROM records,json_each(records.data,'$.inputs') AS member WHERE records.kind='job' AND json_type(member.value,'$.id')='text'")
                 db.execute("INSERT INTO store_migrations VALUES ('job-inputs-v1')")
@@ -120,8 +149,8 @@ class Store:
         with self.connect() as db:
             db.execute("INSERT OR REPLACE INTO records VALUES (?,?,?,?,?)", (record["id"], owner, kind, record["created"], json.dumps(record)))
             if verified_uploads:
-                db.executemany("UPDATE records SET data=? WHERE owner=? AND kind='upload' AND id=?",
-                               [(json.dumps(upload), owner, upload["id"]) for upload in verified_uploads])
+                db.executemany("UPDATE records SET data=json_set(data,'$.sha256',?,'$.format',?) WHERE owner=? AND kind='upload' AND id=?",
+                               ((upload["sha256"], upload["format"], owner, upload["id"]) for upload in verified_uploads))
             if kind == "job":
                 if input_rows is None:
                     if record.get("inputMode") != "upload-pages":
@@ -268,7 +297,7 @@ class Store:
         with self.connect() as db:
             db.execute("BEGIN")
             total = db.execute("SELECT count(*) FROM records WHERE " + condition, parameters).fetchone()[0]
-            projection = "json_remove(data,'$.inputs','$.manifest','$.outputFile','$.filesCleaned','$.errorInfo.fileIds') AS data,coalesce(json_extract(data,'$.fileCount'),json_array_length(data,'$.inputs')) AS file_count,coalesce(json_array_length(data,'$.manifest'),0) AS manifest_count" if summary else "data"
+            projection = JOB_SUMMARY + ",coalesce(json_array_length(data,'$.manifest'),0) AS manifest_count" if summary else "data"
             rows = db.execute("SELECT " + projection + " FROM records WHERE " + condition + " ORDER BY " + ordering + " LIMIT ? OFFSET ?",
                               [*parameters, min(100, max(1, limit)), min(2**63 - 1, max(0, offset))]).fetchall()
         records = [json.loads(row["data"]) for row in rows]
@@ -278,6 +307,21 @@ class Store:
                 if row["manifest_count"] and not record.get("manifestStorage"):
                     record["manifestStorage"] = "inline"
         return total, records
+
+    def live_jobs(self, owner, now):
+        with self.connect() as db:
+            db.execute("BEGIN")
+            revision = db.execute("SELECT revision FROM job_history_revisions WHERE owner=?", (owner,)).fetchone()
+            placeholders = ",".join("?" for _ in LIVE_STATES)
+            rows = db.execute(f"""SELECT {JOB_SUMMARY} FROM records
+                WHERE owner=? AND kind='job' AND json_extract(data,'$.state') IN ({placeholders})
+                AND (coalesce(json_extract(data,'$.hidden'),0)=0
+                     OR (json_extract(data,'$.downloadAvailable')=1 AND json_extract(data,'$.fileExpires')>?))
+                LIMIT 201""", (owner, *LIVE_STATES, now)).fetchall()
+        # Normal account admission caps the live queue at 200. Fall back to the
+        # paged endpoint if an older database contains more.
+        jobs = [dict(json.loads(row["data"]), fileCount=row["file_count"] or 0) for row in rows] if len(rows) <= 200 else None
+        return revision[0] if revision else 0, jobs
 
     def manifest_slice(self, owner, job_id, after, limit):
         with self.connect() as db:
@@ -369,7 +413,7 @@ class Store:
             for row in rows:
                 yield row["owner"], json.loads(row["data"])
 
-    def queued(self, limit=1, excluded_owners=(), fair=False):
+    def queued(self, limit=1, excluded_owners=(), fair=False, busy_owners=()):
         where, parameters = ["kind='job'", "json_extract(data,'$.state')='queued'"], []
         if excluded_owners:
             where.append("owner NOT IN (" + ",".join("?" for _ in excluded_owners) + ")")
@@ -377,15 +421,14 @@ class Store:
         with self.connect() as db:
             ordering = "created,id,owner"
             if fair:
-                ordering = """coalesce((
-                    SELECT json_extract(previous.data,'$.scheduled')
-                    FROM records AS previous
-                    WHERE previous.owner=records.owner AND previous.kind='job'
-                      AND json_extract(previous.data,'$.scheduled') IS NOT NULL
-                      AND coalesce(json_extract(previous.data,'$.projectId'),'default')=
-                          coalesce(json_extract(records.data,'$.projectId'),'default')
-                    ORDER BY json_extract(previous.data,'$.scheduled') DESC LIMIT 1
-                ),0),created,id,owner"""
+                scheduled = ("SELECT json_extract(previous.data,'$.scheduled') FROM records AS previous "
+                             "WHERE previous.owner=records.owner AND previous.kind='job' AND json_extract(previous.data,'$.scheduled') IS NOT NULL")
+                project = "coalesce(json_extract(previous.data,'$.projectId'),'default')=coalesce(json_extract(records.data,'$.projectId'),'default')"
+                recent = " ORDER BY json_extract(previous.data,'$.scheduled') DESC LIMIT 1"
+                ordering = f"coalesce(({scheduled}{recent}),0),coalesce(({scheduled} AND {project}{recent}),0),{ordering}"
+                if busy_owners:
+                    ordering = f"owner IN ({','.join('?' for _ in busy_owners)}),{ordering}"
+                    parameters.extend(busy_owners)
             rows = db.execute("SELECT owner,data FROM records WHERE " + " AND ".join(where) + " ORDER BY " + ordering + " LIMIT ?", [*parameters, max(1, min(100, limit))]).fetchall()
         return [(row[0], json.loads(row[1])) for row in rows]
 
@@ -609,6 +652,8 @@ class Service:
                 stream.write(secrets.token_bytes(32))
         self.key = self.secret.read_bytes()
         self.rates = {}
+        self.rate_lock = threading.Lock()
+        self.rate_window = None
         self.requests_per_minute = int(os.environ.get("HAMMA_REQUESTS_PER_MINUTE", "2000"))
         if not 1 <= self.requests_per_minute <= 1000000:
             raise ValueError("HAMMA_REQUESTS_PER_MINUTE must be between 1 and 1000000")
@@ -619,14 +664,24 @@ class Service:
         # A crash must never leave an old success or a fictitious running job.
         for owner, record in self.store.iter_records(states=("processing", "verifying", "failed", "cancelled", "interrupted")):
             if record["state"] in ("processing", "verifying"):
-                self.store.patch(owner, "job", record["id"], state="interrupted", error="Processing interrupted", finished=time.time(), downloadAvailable=False)
-                self.clean_work(owner, record["id"])
-            elif record["state"] in ("failed", "cancelled", "interrupted"):
-                # A crash can occur after the terminal state was saved but before cleanup.
-                self.clean_work(owner, record["id"])
+                self.interrupt_job(owner, record, "Processing interrupted")
+            # A crash can occur after the terminal state was saved but before cleanup.
+            self.discard_partial_work(owner, record["id"])
 
     def sign(self, value):
         return hmac.new(self.key, value.encode(), hashlib.sha256).hexdigest()
+
+    def admit_request(self, peer):
+        with self.rate_lock:
+            now = time.monotonic()
+            window = int(now // 60)
+            if self.rate_window != window:
+                self.rates.clear()
+                self.rate_window = window
+            used = self.rates.get(peer, 0)
+            if used >= self.requests_per_minute:
+                raise HTTPError(429, "Too many requests", 60 - int(now % 60))
+            self.rates[peer] = used + 1
 
     def defaults(self, owner):
         pref = self.store.get(owner, "settings", "settings")
@@ -729,12 +784,15 @@ class Service:
     def terminate(self, job_id):
         entry = self.running.get(job_id)
         if not entry:
-            return
+            return False
         process = entry[0]
         if process.is_alive():
             if os.name == "nt":
                 # Terminate the generated worker's process tree, including FFmpeg.
-                subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, timeout=10)
+                try:
+                    subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, timeout=10)
+                except subprocess.TimeoutExpired:
+                    LOG.warning("Worker tree termination timed out: %s", job_id)
             else:
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
@@ -744,9 +802,7 @@ class Service:
             if process.is_alive():
                 process.kill()
                 process.join(3)
-        record = self.store.get(entry[1], "job", job_id)
-        if not process.is_alive() and record and record["state"] != "completed":
-            self.clean_work(entry[1], job_id)
+        return not process.is_alive()
 
     def clean_work(self, owner, job_id):
         directory = self.store.folder(owner, job_id)
@@ -760,9 +816,20 @@ class Service:
             else:
                 path.unlink(missing_ok=True)
 
+    def discard_partial_work(self, owner, job_id):
+        try:
+            self.clean_work(owner, job_id)
+        except OSError:
+            LOG.exception("Could not clean job files: %s", job_id)
+            return False
+        return True
+
     def delete_files(self, owner, record):
-        self.terminate(record["id"])
-        self.running.pop(record["id"], None)
+        job_id = record["id"]
+        if job_id in self.running:
+            if not self.terminate(job_id):
+                raise OSError("Worker is still stopping")
+            self.running.pop(job_id)[0].close()
         directory = self.store.folder(owner, record["id"])
         if directory.exists():
             shutil.rmtree(directory, ignore_errors=False)
@@ -775,30 +842,47 @@ class Service:
                     shutil.rmtree(folder)
                 self.store.delete(owner, upload["id"])
 
+    def interrupt_job(self, owner, record, message, category="worker_interrupted"):
+        self.store.patch(owner, "job", record["id"], expected_states=ACTIVE,
+                         state="interrupted", error=message, finished=time.time(), downloadAvailable=False,
+                         errorInfo={"category": category, "retryEligible": True, "stage": record["state"],
+                                    "jobId": record["id"]})
+
     def tick(self):
         with self.lock:
             for job_id, (process, owner, started) in list(self.running.items()):
-                if process.is_alive() and time.monotonic() - started > self.limits["seconds"] + 10:
+                expired = time.monotonic() - started > self.limits["seconds"] + 10
+                if process.is_alive() and expired:
                     self.terminate(job_id)
                 if not process.is_alive():
                     process.join()
                     record = self.store.get(owner, "job", job_id)
+                    cleaned = not record or record["state"] == "completed" or self.discard_partial_work(owner, job_id)
                     if record and record["state"] in ACTIVE:
-                        self.store.patch(owner, "job", job_id, state="interrupted", error="Worker interrupted", finished=time.time(), downloadAvailable=False)
-                    if record and record["state"] != "completed":
-                        self.clean_work(owner, job_id)
+                        # Standard archive compression has no child codecs that
+                        # could still be writing after the worker exits.
+                        if expired:
+                            self.interrupt_job(owner, record, "Processing time limit reached", "processing_timeout")
+                        elif (cleaned and not record.get("crashRetries") and record.get("operation") == "compress"
+                                and record.get("target") in ARCHIVES and record.get("inputMode") != "directory-index"
+                                and record.get("fileExpires", 0) > time.time()
+                                and not (self.store.folder(owner, job_id) / "cancel").exists()):
+                            LOG.warning("Restarting interrupted job %s (worker exit %s)", job_id, process.exitcode)
+                            self.store.patch(owner, "job", job_id, expected_states=ACTIVE, state="queued",
+                                             crashRetries=1, downloadAvailable=False, **JOB_PROGRESS_RESET)
+                        else:
+                            self.interrupt_job(owner, record, "Worker interrupted")
                     del self.running[job_id]
+                    process.close()
             if time.monotonic() < self.restart_until:
                 return
             attempts = 0
             capacity = worker_capacity(available_memory())
             while len(self.running) < capacity and attempts < 16:
                 attempts += 1
-                owners = {entry[1] for entry in self.running.values()}
-                blocked = {owner for owner in owners if sum(entry[1] == owner for entry in self.running.values()) >= self.owner_plan(owner)['maxConcurrentJobs']}
-                candidates = self.store.queued(excluded_owners=owners, fair=True)
-                if not candidates and owners:
-                    candidates = self.store.queued(excluded_owners=blocked, fair=True)
+                owners = Counter(entry[1] for entry in self.running.values())
+                blocked = {owner for owner, count in owners.items() if count >= self.owner_plan(owner)['maxConcurrentJobs']}
+                candidates = self.store.queued(excluded_owners=blocked, busy_owners=owners.keys() - blocked, fair=True)
                 if not candidates:
                     break
                 owner, job = candidates[0]
@@ -808,14 +892,14 @@ class Service:
                                      errorInfo={'category': 'insufficient_storage', 'retryEligible': True, 'stage': 'queued',
                                                 'jobId': job['id'], 'fileIds': self.store.job_input_ids(owner, job)}, downloadAvailable=False)
                     continue
-                self.store.patch(owner, "job", job["id"], state="processing", scheduled=time.time())
+                job = self.store.patch(owner, "job", job["id"], state="processing", scheduled=time.time())
                 try:
                     process = multiprocessing.get_context("spawn").Process(target=run_job, args=(str(self.store.root), owner, job["id"], self.limits, True))
                     process.start()
                 except Exception:
                     LOG.exception("Worker could not start: %s", job["id"])
-                    self.store.patch(owner, "job", job["id"], state="interrupted", error="Worker could not start; retry the job", finished=time.time(), downloadAvailable=False)
-                    self.clean_work(owner, job["id"])
+                    self.interrupt_job(owner, job, "Worker could not start; retry the job")
+                    self.discard_partial_work(owner, job["id"])
                     continue
                 self.running[job["id"]] = (process, owner, time.monotonic())
 
@@ -832,8 +916,13 @@ class Service:
     def close(self):
         self.stop.set()
         with self.lock:
-            for job_id in list(self.running):
-                self.terminate(job_id)
+            for job_id, (process, owner, _) in list(self.running.items()):
+                if self.terminate(job_id):
+                    record = self.store.get(owner, "job", job_id)
+                    if record and record["state"] != "completed":
+                        self.discard_partial_work(owner, job_id)
+                    del self.running[job_id]
+                    process.close()
             if not self.instance_lock.closed:
                 self.instance_lock.seek(0)
                 if os.name == "nt":
@@ -859,25 +948,39 @@ class LocalHTTPServer(ThreadingHTTPServer):
 
     def __init__(self, *args, **kwargs):
         self.request_slots = threading.BoundedSemaphore(64)
+        self.peer_slots = Counter()
+        self.peer_lock = threading.Lock()
         super().__init__(*args, **kwargs)
+
+    def release_slot(self, peer):
+        with self.peer_lock:
+            self.peer_slots[peer] -= 1
+            if not self.peer_slots[peer]:
+                del self.peer_slots[peer]
+            self.request_slots.release()
 
     def process_request(self, request, client_address):
         # Bound slow uploads and stalled TLS handshakes before creating threads.
         # A TLS overload cannot safely receive a plaintext HTTP error response.
-        if not self.request_slots.acquire(blocking=False):
+        peer = client_address[0]
+        with self.peer_lock:
+            admitted = self.peer_slots[peer] < 16 and self.request_slots.acquire(blocking=False)
+            if admitted:
+                self.peer_slots[peer] += 1
+        if not admitted:
             self.shutdown_request(request)
             return
         try:
             super().process_request(request, client_address)
         except BaseException:
-            self.request_slots.release()
+            self.release_slot(peer)
             raise
 
     def process_request_thread(self, request, client_address):
         try:
             super().process_request_thread(request, client_address)
         finally:
-            self.request_slots.release()
+            self.release_slot(client_address[0])
 
     def get_request(self):
         connection, address = super().get_request()
@@ -935,12 +1038,7 @@ def handler(service):
             if getattr(self, 'oauth_cookie', None):
                 self.send_header('Set-Cookie', self.oauth_cookie)
 
-        def identity(self):
-            self.new_cookie = None
-            self.account_cookie = None
-            self.oauth_cookie = None
-            self.account = None
-            self.account_token = None
+        def validate_origin(self):
             peer = ipaddress.ip_address(self.client_address[0])
             self.credentials_allowed = peer.is_loopback or getattr(self.server, 'transport_secure', False)
             if service.lan_hosts and not (peer.is_private or peer.is_loopback):
@@ -954,6 +1052,13 @@ def handler(service):
                 raise HTTPError(403, "Invalid origin")
             if self.headers.get("Sec-Fetch-Site") == "cross-site":
                 raise HTTPError(403, "Invalid origin")
+
+        def identity(self):
+            self.new_cookie = None
+            self.account_cookie = None
+            self.oauth_cookie = None
+            self.account = None
+            self.account_token = None
             jar = cookies.SimpleCookie()
             try:
                 jar.load(self.headers.get("Cookie", ""))
@@ -1090,21 +1195,14 @@ def handler(service):
 
         def route(self):
             self.connection.settimeout(30)
-            self.identity()
+            self.validate_origin()
             url = urlsplit(self.path)
             path, method = url.path, self.command
-            if path.startswith("/api/process"):
-                with service.lock:
-                    now = time.time()
-                    minute = int(now // 60)
-                    service.rates = {address: entry for address, entry in service.rates.items() if entry[1] == minute}
-                    key = self.client_address[0]
-                    used, window = service.rates.get(key, (0, minute))
-                    service.rates[key] = ((used if minute == window else 0) + 1, minute)
-                    if service.rates[key][0] > service.requests_per_minute:
-                        raise HTTPError(429, "Too many requests", max(1, 60 - int(now % 60)))
+            if path == "/api/process" or path.startswith("/api/process/"):
+                service.admit_request(self.client_address[0])
                 if method in ("POST", "PUT", "DELETE") and self.headers.get("X-Hamma-Request") != "1":
                     raise HTTPError(403, "Request authorization required")
+            self.identity()
             if path == "/api/process/prepare-restart" and method == "POST":
                 if not ipaddress.ip_address(self.client_address[0]).is_loopback:
                     raise HTTPError(403, "Restart preparation is local only")
@@ -1194,7 +1292,13 @@ def handler(service):
                     raise HTTPError(400, str(error)) from error
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
-                return self.send(200, {"groupedWorkflows": True, "projectRecovery": True, "projectZipProfiles": True, "recoverableUploads": True, "pagedJobSelections": True, "draftScope": hashlib.sha256(("hamma-draft:" + self.owner).encode()).hexdigest(), "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(), "inspection": True, "zipVerification": True, "tarVerification": True, "zipSelection": True, "archiveRepack": True, "officeInspection": True, "zipComments": True, "zipProfiles": list(ZIP_PROFILES), "actionRegistry": action_registry(), "conversions": media_targets(),
+                return self.send(200, {"liveJobPolling": True, "groupedWorkflows": True, "projectRecovery": True, "projectZipProfiles": True, "recoverableUploads": True,
+                                       "pagedJobSelections": True,
+                                       "draftScope": hashlib.sha256(("hamma-draft:" + self.owner).encode()).hexdigest(),
+                                       "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(),
+                                       "inspection": True, "zipVerification": True, "tarVerification": True, "zipSelection": True,
+                                       "archiveRepack": True, "officeInspection": True, "zipComments": True, "zipProfiles": list(ZIP_PROFILES),
+                                       "actionRegistry": action_registry(), "conversions": media_targets(),
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
             if path == "/api/process/settings":
                 if method == "GET":
@@ -1394,7 +1498,6 @@ def handler(service):
                 if type(recoverable) is not bool:
                     raise HTTPError(400, 'Invalid recovery mode')
                 if recoverable:
-                    service.projects.get(self.owner, project_id)
                     identity = ['project-recovery-v1', project_id, sorted(ids), operation, target, bool(body.get('recursive')), quality_mode, metadata_policy]
                     if zip_indexes is not None:
                         identity.append(zip_indexes)
@@ -1407,6 +1510,8 @@ def handler(service):
                     raise HTTPError(400, "Invalid request identifier")
                 job_id = hashlib.sha256((self.owner + request_id).encode()).hexdigest()[:32] if request_id else secrets.token_hex(16)
                 def existing_job():
+                    if recoverable:
+                        service.projects.get(self.owner, project_id)
                     existing = service.store.get(self.owner, "job", job_id)
                     if existing:
                         existing_ids = [i['id'] for i in service.store.iter_job_inputs(self.owner, existing)]
@@ -1431,6 +1536,7 @@ def handler(service):
                 uploads = service.store.get_uploads(self.owner, ids)
 
                 inputs, verified_uploads, seen = [], [], set()
+                source_stamps = {}
                 for upload_id in ids:
                     upload = uploads.get(upload_id)
                     if not upload or upload["expires"] <= time.time():
@@ -1442,13 +1548,17 @@ def handler(service):
                             raise HTTPError(410, "Upload expired or unavailable")
                         if info.st_size != upload["size"]:
                             raise HTTPError(409, "Upload incomplete")
+                        source_stamps[source] = upload_stamp(info)
                         name_key = upload["name"].casefold()
                         if name_key in seen:
                             raise HTTPError(400, "Duplicate filename")
                         seen.add(name_key)
                         if not upload.get("sha256"):
                             ctx = Context(source.parent, service.limits)
-                            upload.update(file_digest(source, ctx), format=detect(source))
+                            digest = file_digest(source, ctx)
+                            if digest["size"] != upload["size"]:
+                                raise HTTPError(409, "Upload changed during verification. Retry the job.")
+                            upload.update(digest, format=detect(source))
                             verified_uploads.append(upload)
                     except FileNotFoundError as error:
                         raise HTTPError(410, "Upload expired or unavailable") from error
@@ -1465,6 +1575,13 @@ def handler(service):
                     now = time.time()
                     if service.store.count_available_uploads(self.owner, ids, now) != len(ids):
                         raise HTTPError(410, "Upload expired or unavailable")
+                    for source, stamp in source_stamps.items():
+                        try:
+                            unchanged = upload_stamp(source.stat()) == stamp
+                        except FileNotFoundError:
+                            raise HTTPError(410, "Upload expired or unavailable") from None
+                        if not unchanged:
+                            raise HTTPError(409, "Upload changed during verification. Retry the job.")
                     settings = service.defaults(self.owner)
                     retention = RETENTION[settings["historyRetention"]]
                     record = {"id": job_id, "projectId": project_id, "created": now, "name": inputs[0]["name"] if len(inputs) == 1 else f"{len(inputs)} files",
@@ -1492,6 +1609,13 @@ def handler(service):
                     service.store.trim_history(self.owner, limit=self.plan['historyRecords'])
                 LOG.info("Job queued: %s %s", record["id"], operation)
                 return self.send(202, service.public(self.owner, record))
+            if path == "/api/process/jobs/live" and method == "GET":
+                now = time.time()
+                revision, jobs = service.store.live_jobs(self.owner, now)
+                token = service.sign(f"jobs:{service.instance_id}:{self.owner}:{revision}")
+                known = parse_qs(url.query).get("revision", [""])[0]
+                live = [service.public(self.owner, job) for job in jobs] if jobs is not None and token == known else None
+                return self.send(200, {"revision": token, "now": now, "jobs": live})
             if path == "/api/process/jobs/overview" and method == "GET":
                 metrics, jobs = service.store.history_overview(self.owner)
                 return self.send(200, {"metrics": metrics, "jobs": [service.public(self.owner, job) for job in jobs]})
@@ -1571,9 +1695,14 @@ def handler(service):
                         record = service.store.get(self.owner, "job", job_id)
                         if action == "cancel" and record["state"] in (*ACTIVE, "paused"):
                             (directory / "cancel").touch()
-                            service.store.patch(self.owner, "job", job_id, state="cancelled", error="Cancelled", finished=time.time())
-                            service.terminate(job_id)
-                            service.running.pop(job_id, None)
+                            cancelled = service.store.patch(self.owner, "job", job_id, expected_states=(*ACTIVE, "paused"),
+                                                            state="cancelled", error="Cancelled", finished=time.time())
+                            if cancelled["state"] != "cancelled":
+                                (directory / "cancel").unlink(missing_ok=True)
+                                raise HTTPError(409, "Action unavailable for this job")
+                            if service.terminate(job_id):
+                                service.running.pop(job_id)[0].close()
+                                service.discard_partial_work(self.owner, job_id)
                         elif action == "pause" and record["state"] == "queued":
                             service.store.patch(self.owner, "job", job_id, state="paused")
                         elif action == "resume" and record["state"] == "paused":
@@ -1587,8 +1716,10 @@ def handler(service):
                                 raise HTTPError(429, 'Processor queue full')
                             if record["fileExpires"] <= time.time() or any(not (service.store.folder(self.owner, i["id"]) / "input").exists() for i in service.store.iter_job_inputs(self.owner, record)):
                                 raise HTTPError(410, "Input files expired")
+                            service.clean_work(self.owner, job_id)
                             (directory / "cancel").unlink(missing_ok=True)
-                            service.store.patch(self.owner, "job", job_id, state="queued", error=None, errorInfo=None, retryCount=record.get('retryCount', 0) + 1, processed=0, entries=0, expanded=0, mediaSeconds=0, duration=None, started=None, finished=None, hidden=False)
+                            service.store.patch(self.owner, "job", job_id, state="queued", retryCount=record.get('retryCount', 0) + 1,
+                                                crashRetries=0, hidden=False, **JOB_PROGRESS_RESET)
                         else:
                             raise HTTPError(409, "Action unavailable for this job")
                     return self.send(200, service.public(self.owner, service.store.get(self.owner, "job", job_id)))
@@ -1644,21 +1775,42 @@ def handler(service):
                     self.wfile.write(chunk)
                     remaining -= len(chunk)
 
+        def end_headers(self):
+            self.response_started = True
+            super().end_headers()
+
+        def send_failure(self, status, message, retry_after=None):
+            if getattr(self, "response_started", False):
+                self.close_connection = True
+                return
+            try:
+                self.send(status, {"error": message}, retry_after)
+            except (ConnectionError, TimeoutError):
+                self.close_connection = True
+
         def handle_request(self):
             try:
                 self.route()
             except (HTTPError, AccountError, ProjectError) as error:
-                self.send(error.status, {"error": error.message}, error.retry_after)
+                self.send_failure(error.status, error.message, error.retry_after)
             except (ValueError, TypeError, KeyError, ProcessingError):
-                self.send(400, {"error": "Invalid request"})
-            except (BrokenPipeError, ConnectionResetError, TimeoutError):
-                pass
+                self.send_failure(400, "Invalid request")
+            except (ConnectionError, TimeoutError):
+                self.close_connection = True
+            except sqlite3.OperationalError as error:
+                code = getattr(error, "sqlite_errorcode", 0) & 0xff
+                if code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                    self.send_failure(503, "Processor is busy", retry_after=1)
+                else:
+                    LOG.exception("Database operation failed")
+                    status = 507 if code == sqlite3.SQLITE_FULL else 500
+                    self.send_failure(status, "Storage full" if status == 507 else "Request failed")
             except OSError:
                 LOG.exception("Storage operation failed")
-                self.send(507, {"error": "Storage unavailable"})
+                self.send_failure(507, "Storage unavailable")
             except Exception:
                 LOG.exception("Request failed")
-                self.send(500, {"error": "Request failed"})
+                self.send_failure(500, "Request failed")
 
         do_GET = do_POST = do_PUT = do_DELETE = do_HEAD = handle_request
 

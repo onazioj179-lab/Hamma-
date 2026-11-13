@@ -97,6 +97,20 @@ it('preserves cancellation during response parsing', async () => {
   await expect(request('/jobs', { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
 });
 
+it('reconciles a mismatched chunk acknowledgment before advancing the upload', async () => {
+  const size = 4 * 1024 * 1024 + 1;
+  const source: Source = { id: 'one', upload: 'kept', name: 'input', file: new File([new Uint8Array(size)], 'input'), size, directory: false };
+  const fetch = vi.fn()
+    .mockResolvedValueOnce(response({ offset: 0 }))
+    .mockResolvedValueOnce(response({ offset: size }))
+    .mockResolvedValueOnce(response({ offset: size - 1 }))
+    .mockResolvedValueOnce(response({ offset: size }));
+  vi.stubGlobal('fetch', fetch);
+  await expect(upload(source, new AbortController().signal, () => {})).resolves.toBe('kept');
+  expect(fetch.mock.calls[2][1].method).toBeUndefined();
+  expect(fetch.mock.calls[3][1].body.size).toBe(1);
+});
+
 it('does not retry throttled upload chunks or discard their resume ID', async () => {
   const source: Source = { id: 'one', upload: 'kept', name: 'input', file: new File(['abc'], 'input'), size: 3, directory: false };
   const fetch = vi.fn().mockResolvedValueOnce(response({ offset: 0 }))

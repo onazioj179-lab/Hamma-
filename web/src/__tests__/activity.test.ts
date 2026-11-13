@@ -1,5 +1,5 @@
 import { expect, it, vi, afterEach } from 'vitest';
-import { combineActivity, filterActivity, loadJobs } from '../processing/activity';
+import { combineActivity, filterActivity, loadJobs, refreshJobHistory } from '../processing/activity';
 import type { Job } from '../processing/client';
 import type { RecentArchive } from '../store/app';
 vi.hoisted(() => { Object.defineProperty(window, 'matchMedia', { configurable: true, value: vi.fn(() => ({ matches: false, addEventListener: vi.fn() })) }); });
@@ -39,4 +39,40 @@ it('keeps hidden processor outputs out of history while retaining download disco
   vi.stubGlobal('fetch', fetch);
   expect(await loadJobs(undefined, true)).toHaveLength(1);
   expect(fetch.mock.calls[0][0]).toContain('includeHiddenDownloads=1');
+});
+
+it('uses one live request for progress and reloads retained rows when the revision changes', async () => {
+  const active = { ...job('working', 2), state: 'processing', processed: 0 };
+  const retained = job('retained', 1);
+  let records = [active, retained];
+  let status = { revision: 'first', now: 100, jobs: null as Job[] | null };
+  const fetch = vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('/jobs/live') ? status : { jobs: records, total: records.length } }));
+  vi.stubGlobal('fetch', fetch);
+  const signal = new AbortController().signal;
+  const initial = await refreshJobHistory(null, signal);
+  fetch.mockClear();
+  status = { ...status, jobs: [{ ...active, processed: 75 }] };
+  const progress = await refreshJobHistory(initial, signal);
+  expect(progress.records).toEqual([{ ...active, processed: 75 }, retained]);
+  expect(fetch.mock.calls.map(([url]) => url)).toEqual(['/api/process/jobs/live?revision=first']);
+  fetch.mockClear();
+  records = [{ ...active, state: 'completed', processed: 100 }, retained];
+  status = { ...status, revision: 'next', jobs: null };
+  expect((await refreshJobHistory(progress, signal)).records).toEqual(records);
+  expect(fetch).toHaveBeenCalledTimes(2);
+});
+
+it('refreshes download links on the processor clock and reuses unchanged idle rows', async () => {
+  let records = [{ ...job('retained', 1), downloadAvailable: true, fileExpires: 123, download: '/signed' }];
+  let now = 100;
+  const fetch = vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('/jobs/live')
+    ? { revision: 'first', now, jobs: [] } : { jobs: records, total: records.length } }));
+  vi.stubGlobal('fetch', fetch);
+  const signal = new AbortController().signal;
+  const initial = await refreshJobHistory(null, signal);
+  expect(await refreshJobHistory(initial, signal)).toBe(initial);
+  now = 123;
+  records = [{ ...records[0], downloadAvailable: false, download: '' }];
+  const expired = await refreshJobHistory(initial, signal);
+  expect(expired.records[0].downloadAvailable).toBe(false);
 });

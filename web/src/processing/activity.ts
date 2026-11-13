@@ -14,6 +14,25 @@ export async function loadJobs(signal?: AbortSignal, includeHiddenDownloads = fa
   }
 }
 
+export interface JobHistorySnapshot {
+  revision: string;
+  records: Job[];
+  refreshAt: number;
+}
+
+export async function refreshJobHistory(previous: JobHistorySnapshot | null, signal: AbortSignal): Promise<JobHistorySnapshot> {
+  const query = previous ? '?revision=' + encodeURIComponent(previous.revision) : '';
+  const live = await request<{ revision: string; now: number; jobs: Job[] | null }>('/jobs/live' + query, { signal });
+  if (previous && live.revision === previous.revision && live.jobs && live.now < previous.refreshAt) {
+    if (!live.jobs.length && !previous.records.some(activeJob)) return previous;
+    return { ...previous, records: [...live.jobs, ...previous.records.filter(job => !activeJob(job))] };
+  }
+  const records = await loadJobs(signal, true);
+  // Signed links last at most an hour and can expire earlier with their file.
+  const refreshAt = records.reduce((next, job) => job.downloadAvailable ? Math.min(next, job.fileExpires) : next, live.now + 1800);
+  return { revision: live.revision, records, refreshAt };
+}
+
 export function summarizeActivity(jobs: Job[]) {
   const completed = jobs.filter(job => job.state === 'completed');
   const compressed = completed.filter(job => job.operation === 'compress');

@@ -313,12 +313,40 @@ it('announces newly completed jobs once after reconnecting', async () => {
   const notice = vi.fn(); window.addEventListener('hamma-job-notice', notice);
   try {
     await render(); expect(notice).not.toHaveBeenCalled();
+    state = 'failed';
+    await act(async () => window.dispatchEvent(new Event('online')));
+    expect(host.querySelector('.state-failed')?.textContent).toBe('Failed');
+    expect(host.querySelector('[aria-label="Processing errors"]')).toBeNull();
+    expect(notice).not.toHaveBeenCalled();
     state = 'completed';
     await act(async () => window.dispatchEvent(new Event('online')));
     expect(notice).toHaveBeenCalledTimes(1);
     await act(async () => window.dispatchEvent(new Event('online')));
     expect(notice).toHaveBeenCalledTimes(1);
   } finally { window.removeEventListener('hamma-job-notice', notice); }
+});
+
+it('polls live progress without reloading retained history', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  const row = { id: 'live-job', name: 'example.zip', state: 'processing', operation: 'compress',
+    inputSize: 100, outputSize: null, processed: 0, created: 1, fileExpires: 500, fileCount: 1, format: 'zip', downloadAvailable: false };
+  fetchMock.mockImplementation(async (url: string) => {
+    if (url.endsWith('/capabilities')) return { ok: true, json: async () => ({ ...caps, liveJobPolling: true }) };
+    if (url.includes('/jobs/live')) return { ok: true, json: async () => ({
+      revision: 'fixture', now: 100, jobs: url.includes('revision=fixture') ? [{ ...row, processed: 60 }] : null,
+    }) };
+    if (url.includes('/jobs?')) return { ok: true, json: async () => ({ jobs: [row], total: 1 }) };
+    return initial(url);
+  });
+  vi.useFakeTimers();
+  try {
+    await render();
+    expect(host.querySelector('progress')?.value).toBe(0);
+    fetchMock.mockClear();
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(host.querySelector('progress')?.value).toBe(60);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(['/api/process/jobs/live?revision=fixture']);
+  } finally { vi.useRealTimers(); }
 });
 
 it('uses the shared file picker for SPK and keeps the current result on its original history row', async () => {

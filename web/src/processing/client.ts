@@ -1,5 +1,6 @@
 export interface Inspection { format: string; conversions: string[]; extract: boolean; error?: string }
 export interface Capability {
+  liveJobPolling?: boolean;
   groupedWorkflows?: boolean;
   projectZipProfiles?: boolean;
   projectRecovery?: boolean;
@@ -54,17 +55,18 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
       ...init, signal: controller.signal, credentials: 'same-origin', headers: { 'X-Hamma-Request': '1', ...init.headers },
     });
     if (response.status === 204) return undefined as T;
+    const header = response.headers?.get('Retry-After');
+    const seconds = header && /^\d+$/.test(header) ? Number(header) : undefined;
+    const retryAfter = Number.isSafeInteger(seconds) ? seconds : undefined;
     let result;
     try { result = await response.json(); }
     catch (error) {
       if (controller.signal.aborted) throw error;
-      throw new ProcessorError('The processor returned an unreadable response. Reconnect and try again.', response.status);
+      throw new ProcessorError('The processor returned an unreadable response. Reconnect and try again.', response.status, retryAfter);
     }
     if (!response.ok) {
-      const header = response.headers?.get('Retry-After');
-      const seconds = header && /^\d+$/.test(header) ? Number(header) : undefined;
       const message = typeof result?.error === 'string' ? result.error : 'Request failed';
-      throw new ProcessorError(seconds ? `${message}. Try again in ${seconds} seconds.` : message, response.status, seconds);
+      throw new ProcessorError(retryAfter ? `${message}. Try again in ${retryAfter} seconds.` : message, response.status, retryAfter);
     }
     return result as T;
   } catch (error) {
@@ -170,16 +172,19 @@ export async function upload(source: Source, signal: AbortSignal, update: (offse
       const result = await request<{ offset: number }>('/uploads/' + id, {
         method: 'PUT', signal, headers: { 'Upload-Offset': String(offset), ...writerHeaders() }, body: source.file!.slice(offset, next),
       });
-      if (result.offset <= offset) throw new Error('The upload made no progress. Retry the operation.');
-      offset = validOffset(result.offset);
+      if (result.offset !== next) throw new Error('The processor returned an unexpected upload position.');
+      offset = next;
       failures = 0;
       update(offset);
     } catch (error) {
       // Retrying throttling or permanent errors only increases pressure on the host.
       if (signal.aborted || error instanceof ProcessorError && ![408, 409, 500, 502, 503, 504].includes(error.status) || ++failures >= 3) throw error;
+      const retryAfter = error instanceof ProcessorError ? error.retryAfterSeconds || 0 : 0;
+      // Long delays are surfaced so the upload can be resumed later.
+      if (retryAfter > 30) throw error;
       await new Promise<void>((resolve, reject) => {
         const cancel = () => { clearTimeout(timer); reject(signal.reason || new DOMException('Aborted', 'AbortError')); };
-        const timer = setTimeout(() => { signal.removeEventListener('abort', cancel); resolve(); }, 200 * 2 ** (failures - 1));
+        const timer = setTimeout(() => { signal.removeEventListener('abort', cancel); resolve(); }, Math.max(200 * 2 ** (failures - 1), retryAfter * 1000));
         if (signal.aborted) cancel();
         else signal.addEventListener('abort', cancel, { once: true });
       });
