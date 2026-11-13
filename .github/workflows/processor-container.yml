@@ -51,7 +51,7 @@ jobs:
           volume=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$container")
           test "$volume" = hamma-restore-ci_hamma-data
           (cd "$RUNNER_TEMP" && sha256sum -c hamma-data.tar.sha256)
-          docker run --rm --network none --read-only --user 0:0 \
+          docker run --rm -i --network none --read-only --user 0:0 \
             --mount "type=volume,src=$volume,dst=/snapshot" \
             --entrypoint sh hamma-ci-backup-test:local -ec \
             'test -z "$(ls -A /snapshot)"; tar --numeric-owner -xpf - -C /snapshot' < "$RUNNER_TEMP/hamma-data.tar"
