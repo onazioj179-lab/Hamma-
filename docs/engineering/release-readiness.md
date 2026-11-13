@@ -1,5 +1,40 @@
 # HAMMA release readiness
 
+## Remaining web release acceptance
+
+Use the six areas in the [web backlog](hammer-directive-audit.md) as the
+release checklist. Run the checks against the same candidate build and record
+the revision, platform, fixture, outcome and skipped cases.
+
+| Area | Candidate acceptance |
+| --- | --- |
+| Mixed project recovery | Reopen unstarted, partial and completed inputs, resume from the saved offset, and verify exact outputs. Repeat with concurrent projects and a file-only retry. |
+| Browser job scale | Verify ordered manifest pages and exact outputs at the supported selection limit. Measure browser, worker and disk use with real payloads and check that an interactive job gets a turn during bulk work. |
+| UI and devices | Check every view in both themes, with keyboard navigation, reduced motion, and meaningful empty, running, failed and recovered states. Verify file picking, downloads and recovery on physical phones and foldables. |
+| Worker isolation and dependencies | Run worker boundary and owner checks. Confirm the deployed inventory and test worker filesystem isolation on the target platform. |
+| Formats and fidelity | Check advertised archive round trips with independent tools and compare decoded media with source fixtures. Exercise the outstanding encryption, split/join, and document conversion cases. |
+| Production operations | Check readiness, retention, interrupted uploads and downloads across service recreation. Rehearse backup restoration, migrations and alerting in the target environment. Multi-node recovery requires the intended compute and storage. |
+
+The Windows candidate passed 112 headless Chromium layout cases across eight
+views, seven widths and two themes, and the skip link moved focus to main content
+in both themes. Two unstarted selections reopened at 375 px. The loopback restart
+drill recovered a verified ZIP, the seven-day retention setting and a partial
+upload from its saved byte offset. A one-slot run completed all 11 jobs across
+three projects and two owners, verified 33,751,040 input bytes and rejected all
+11 cross-owner downloads. Windows native CLI and C ABI contracts passed.
+
+An eight-session Windows HTTP run completed 24 jobs in 22.36 seconds, with
+16 exact-byte downloads and eight expected corrupt-input failures. Earlier
+runs on the same host hit the request rate limit while memory admission held
+the queue and encountered connection resets during upload. With two worker
+slots available, a fresh 16-session run completed 48 jobs in 98.32 seconds,
+with 32 exact-byte downloads and 16 expected corrupt-input failures.
+
+On Python 3.13 the standard TAR reader avoids retaining a separate TarInfo
+cache. Output manifests still retain per-member state. Windows bsdtar 3.8.9
+verified TAR.ZST in both directions, including nested paths, an empty file,
+an empty directory and member SHA-256 checks.
+
 ## Web release evidence — 2026-11-12
 
 The release remains open. The [web engineering audit](hammer-directive-audit.md)
