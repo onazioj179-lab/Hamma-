@@ -23,6 +23,7 @@ jobs:
           path: web-dependencies.cdx.json
           if-no-files-found: error
       - run: npm audit --audit-level=low
+      - run: npm run lint
       - run: npm run typecheck
       - run: npm run test:web
       - run: npm run build

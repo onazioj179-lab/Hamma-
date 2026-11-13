@@ -395,6 +395,35 @@ class MediaTests(EngineFixture):
         with self.assertRaisesRegex(ProcessingError, "No audio"):
             convert(source, self.root / "out.wav", "wav", self.context())
 
+    def test_tiff_round_trip_preserves_16_bit_transparency(self):
+        from processor.capabilities import media_targets
+
+        if "tiff" not in media_targets():
+            self.skipTest("FFmpeg TIFF encoder unavailable")
+        source = self.root / "alpha.png"
+        pixels = struct.pack("<16H", 1, 257, 50000, 0, 99, 257, 65000, 32768,
+                             100, 200, 300, 65535, 400, 500, 600, 12345)
+        subprocess.run([shutil.which("ffmpeg"), "-v", "error", "-f", "rawvideo",
+                        "-pixel_format", "rgba64le", "-video_size", "2x2", "-i", "pipe:0",
+                        "-frames:v", "1", str(source)], input=pixels, check=True, capture_output=True)
+        output = self.root / "out.tiff"
+        convert(source, output, "tiff", self.context())
+        self.assertEqual(detect(output), "tiff")
+        decoded = subprocess.check_output([shutil.which("ffmpeg"), "-v", "error", "-i", str(output),
+                                           "-f", "rawvideo", "-pix_fmt", "rgba64le", "pipe:1"])
+        self.assertEqual(decoded, pixels)
+        convert(output, self.root / "restored.png", "png", self.context())
+        data = bytearray(output.read_bytes())
+        endian = "<" if data[:2] == b"II" else ">"
+        directory = struct.unpack_from(endian + "I", data, 4)[0]
+        count = struct.unpack_from(endian + "H", data, directory)[0]
+        next_page = directory + 2 + count * 12
+        second = data[directory:next_page + 4]
+        struct.pack_into(endian + "I", data, next_page, len(data))
+        output.write_bytes(data + second)
+        with self.assertRaisesRegex(ProcessingError, "one TIFF page"):
+            convert(output, self.root / "multipage.png", "png", self.context())
+
     def test_animated_images_are_rejected_without_dropping_frames(self):
         source = self.root / "animated.gif"
         subprocess.run([shutil.which("ffmpeg"), "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=blue:s=32x32:r=5:d=0.4", str(source)], check=True, capture_output=True)

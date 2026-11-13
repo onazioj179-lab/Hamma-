@@ -21,7 +21,7 @@ services:
     volumes:
       - hamma-lan-data:/data
     healthcheck:
-      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5014/api/process/capabilities',timeout=3)"]
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5014/api/process/ready',timeout=3)"]
       interval: 30s
       timeout: 5s
 volumes:

@@ -1,0 +1,198 @@
+{
+  "date": "2026-11-12",
+  "scope": "Disposable Windows loopback verification",
+  "code": "5f4f4baf2bbedced6d6055707613068e3ce917d0",
+  "webTests": 539,
+  "windowsNativeContracts": 2,
+  "browsers": [
+    {
+      "layoutCases": 112,
+      "widths": [
+        320,
+        375,
+        393,
+        540,
+        768,
+        1024,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "reducedMotion": true,
+      "keyboardSkipAndNavigation": true,
+      "browser": "chromium",
+      "browserVersion": "145.0.7632.6",
+      "reopenedTab": {
+        "verifiedEntries": [
+          "complete.txt",
+          "partial.bin",
+          "unstarted.txt"
+        ],
+        "resumedFromBytes": 4194304,
+        "uploadWrites": 2,
+        "archiveSha256": "7f29a9b9040d704d9763ed6ffb00eddfd8986fe6bfacc2b2dca1c180537daa17"
+      },
+      "pagedBrowserSelection": {
+        "verifiedEntries": 225,
+        "pages": [
+          [
+            0,
+            100
+          ],
+          [
+            100,
+            100
+          ],
+          [
+            200,
+            25
+          ]
+        ]
+      }
+    },
+    {
+      "layoutCases": 112,
+      "widths": [
+        320,
+        375,
+        393,
+        540,
+        768,
+        1024,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "reducedMotion": true,
+      "keyboardSkipAndNavigation": true,
+      "browser": "firefox",
+      "browserVersion": "146.0.1",
+      "reopenedTab": {
+        "verifiedEntries": [
+          "complete.txt",
+          "partial.bin",
+          "unstarted.txt"
+        ],
+        "resumedFromBytes": 4194304,
+        "uploadWrites": 2,
+        "archiveSha256": "00dd9d8b83ff3c3186ca26bfff2b7dc8270d31826bec04ab4457cc74e31fd769"
+      }
+    },
+    {
+      "layoutCases": 112,
+      "widths": [
+        320,
+        375,
+        393,
+        540,
+        768,
+        1024,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "reducedMotion": true,
+      "keyboardSkipAndNavigation": true,
+      "tabReachesSkipLink": false,
+      "browser": "webkit",
+      "browserVersion": "26.0",
+      "reopenedTab": {
+        "verifiedEntries": [
+          "partial.bin",
+          "complete.txt",
+          "unstarted.txt"
+        ],
+        "resumedFromBytes": 4194304,
+        "uploadWrites": 2,
+        "archiveSha256": "769df6aae41a897c42ba397b35df65c46c1f18dfe01d33feeb098bce654e59ae"
+      }
+    }
+  ],
+  "folderPickerFallback": {
+    "browser": "chromium",
+    "width": 375,
+    "nestedPathAndBytesVerified": true
+  },
+  "multiOwnerWorkerBenchmark": {
+    "jobs": 11,
+    "projects": 3,
+    "owners": 2,
+    "dispatchOrder": [
+      "bulk-a",
+      "interactive",
+      "bulk-b",
+      "interactive",
+      "bulk-a",
+      "interactive",
+      "bulk-b",
+      "bulk-a",
+      "bulk-b",
+      "bulk-a",
+      "bulk-b"
+    ],
+    "verifiedDownloads": 11,
+    "crossOwnerDownloadsRejected": 11,
+    "verifiedInputBytes": 33751040,
+    "interactiveQueueWaitSeconds": [
+      2.061,
+      5.818,
+      10.241
+    ],
+    "workerElapsedSeconds": 28.088,
+    "scope": "Loopback HTTP and spawned workers, three projects sharing one worker slot"
+  },
+  "processorStress": {
+    "jobs": 100,
+    "workers": 8,
+    "passed": 100,
+    "seconds": 178.539,
+    "formats": [
+      "zip",
+      "gzip",
+      "bzip2",
+      "xz"
+    ]
+  },
+  "rollback": {
+    "addedIndex": "records_owner_dispatch",
+    "sqliteQuickCheck": "ok",
+    "verifiedZipSha256": "d26262d46b2422629c6ba72c84f03fcd77418b58b82990b2384a92ab997c2b49",
+    "sameGuestSession": true,
+    "verifiedAfterUpgrade": true,
+    "verifiedAfterRestore": true,
+    "newJobAfterRestore": true,
+    "healthInstanceRotated": true
+  },
+  "browserFileRetry": {
+    "browser": "chromium",
+    "injectedAdmissionStatus": 413,
+    "verifiedTiffDownloads": 2,
+    "decodedPixelsMatched": true
+  },
+  "ci": {
+    "pullRequest": 59,
+    "codeChecksPassed": 7,
+    "windowsProcessorTestsRun": 193,
+    "windowsProcessorTestsSkipped": 27,
+    "linuxSanitizersPassed": true
+  },
+  "archiveInteroperability": {
+    "tool": "bsdtar 3.8.9",
+    "formats": [
+      "zip",
+      "tar",
+      "tar.gz",
+      "tar.bz2",
+      "tar.xz"
+    ],
+    "directionsVerified": 2,
+    "fixturesPerArchive": 3,
+    "exactPayloads": true
+  }
+}

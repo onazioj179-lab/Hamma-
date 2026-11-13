@@ -83,15 +83,13 @@ it('retains wrong-password feedback after reloading the current session', async 
 });
 
 
-it('shows honest provider availability without starting an unconfigured sign-in', async () => {
+it('keeps unconfigured providers out of the sign-in choices', async () => {
   fetchMock.mockResolvedValue({ ok: true, json: async () => ({ ...guest, providers: [
     { id: 'google', name: 'Google', available: false }, { id: 'apple', name: 'Apple', available: false },
   ] }) });
   await render();
-  expect(host.textContent).toContain('Google');
-  expect(host.textContent).toContain('Apple');
-  expect(host.querySelectorAll('.account-provider')).toHaveLength(2);
-  expect(host.querySelector('.account-providers button')).toBeNull();
+  expect(host.querySelector('.account-providers')).toBeNull();
+  expect(host.querySelector('input[autocomplete="username"]')).not.toBeNull();
   expect(fetchMock).toHaveBeenCalledTimes(1);
 });
 

@@ -69,6 +69,36 @@ class ProjectRecoveryRoutes(unittest.TestCase):
         self.assert_status(409, lambda: self.checkpoint(other))
         self.assert_status(409, lambda: self.checkpoint(upload, source='b' * 32))
 
+    def test_saved_selections_share_paging_with_upload_checkpoints(self):
+        self.call('/projects/default', {}, 'PUT')
+        path = '/projects/default/inputs'
+        first = {'id': 'a' * 32, 'name': 'draft.txt', 'size': 3, 'directory': False}
+        second = {'id': 'b' * 32, 'name': 'empty/', 'size': 0, 'directory': True}
+        self.call(path, {'selections': [first, second]}, 'PUT')
+        self.assertEqual(self.service.store.count(kind='upload'), 0)
+        self.assertEqual(self.call(path)['sources'], [])
+        options = '?includeIncomplete=1&includeSelections=1'
+        stranger = build_opener(HTTPCookieProcessor(CookieJar()))
+        self.assert_status(404, lambda: self.call(path + options, client=stranger))
+        self.assert_status(404, lambda: self.call(path, {'selections': [first]}, 'PUT', client=stranger))
+        page = self.call(path + options + '&limit=1')
+        self.assertEqual(page['sources'], [{**first, 'pending': True}])
+        self.assertEqual(page['total'], 2)
+        self.assertEqual(self.call(path + options + '&after=' + page['nextCursor'])['sources'],
+                         [{**second, 'pending': True}])
+
+        upload = self.call('/uploads', {'projectId': 'default', 'sourceId': first['id'],
+                                        'name': first['name'], 'size': 3}, 'POST')
+        self.call(path, {'selections': [first]}, 'PUT')
+        sources = self.call(path + options)['sources']
+        self.assertEqual(len(sources), 2)
+        self.assertEqual(sources[0]['upload'], upload['id'])
+        self.assertEqual(sources[0]['uploaded'], 0)
+        self.assertNotIn('pending', sources[0])
+        self.assertEqual(sources[1], {**second, 'pending': True})
+        self.call(path + '/' + second['id'], method='DELETE')
+        self.assertEqual(self.call(path + options)['total'], 1)
+
     def test_partial_foreign_and_expired_inputs_are_not_recovered(self):
         self.save()
         partial = self.call('/uploads', {'name': 'partial', 'size': 20}, 'POST')

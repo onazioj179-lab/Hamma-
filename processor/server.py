@@ -8,13 +8,14 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 import errno
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 import hashlib
 import gzip
 import hmac
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import ipaddress
+from itertools import zip_longest
 import json
 import logging
 import lzma
@@ -43,7 +44,7 @@ from .worker_limits import apply_windows_worker_limits, apply_worker_limits
 from .resources import available_memory, worker_capacity
 from .errors import describe_failure
 from .projects import Projects, ProjectError
-from .job_selections import JobSelections
+from .job_selections import AdmissionInputs, JobSelections, forget_job_uploads, recovery_request_id, upload_stamp
 from .accounts import Accounts, AccountError, plan as account_plan
 from .catalog import FileCatalog
 from .capabilities import action_registry, inspect_headers, media_targets, single_file_archives
@@ -62,10 +63,6 @@ PROCESSOR_REVISION = ":".join(hashlib.sha256(path.read_bytes()).hexdigest() for 
 RETENTION = {"24h": 86400, "7d": 604800, "30d": 2592000, "never": None}
 JOB_PROGRESS_RESET = dict(processed=0, entries=0, expanded=0, mediaSeconds=0, track=None, tracks=None,
                           phase=None, duration=None, started=None, finished=None, error=None, errorInfo=None)
-
-
-def upload_stamp(info):
-    return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
 class Store:
@@ -91,11 +88,16 @@ class Store:
             db.execute("CREATE INDEX IF NOT EXISTS records_visible ON records(owner,kind,coalesce(json_extract(data,'$.hidden'),0),created DESC)")
             db.execute("CREATE INDEX IF NOT EXISTS records_state ON records(kind,json_extract(data,'$.state'),created,id,owner)")
             db.execute("CREATE INDEX IF NOT EXISTS records_owner_state ON records(owner,kind,json_extract(data,'$.state'))")
-            db.execute("CREATE INDEX IF NOT EXISTS job_owner_dispatch ON records(owner,json_extract(data,'$.scheduled') DESC) WHERE kind='job' AND json_extract(data,'$.scheduled') IS NOT NULL")
+            db.execute("DROP INDEX IF EXISTS job_owner_dispatch")
             db.execute("""
                 CREATE INDEX IF NOT EXISTS records_project_dispatch
                 ON records(owner,coalesce(json_extract(data,'$.projectId'),'default'),
                            json_extract(data,'$.scheduled') DESC)
+                WHERE kind='job' AND json_extract(data,'$.scheduled') IS NOT NULL
+            """)
+            db.execute("""
+                CREATE INDEX IF NOT EXISTS records_owner_dispatch
+                ON records(owner,json_extract(data,'$.scheduled') DESC)
                 WHERE kind='job' AND json_extract(data,'$.scheduled') IS NOT NULL
             """)
             db.execute("CREATE INDEX IF NOT EXISTS records_upload_bytes ON records(kind,json_extract(data,'$.size'))")
@@ -112,6 +114,16 @@ class Store:
             )""")
             db.execute("CREATE TABLE IF NOT EXISTS local_index_sources(owner TEXT NOT NULL,job_id TEXT NOT NULL,root TEXT NOT NULL,PRIMARY KEY(owner,job_id))")
             db.execute("CREATE INDEX IF NOT EXISTS job_inputs_upload ON job_inputs(owner,upload_id,job_id)")
+            db.execute("CREATE TABLE IF NOT EXISTS job_revisions (owner TEXT PRIMARY KEY, token TEXT NOT NULL)")
+            for event, row in (("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")):
+                db.execute(f"""
+                    CREATE TRIGGER IF NOT EXISTS job_revision_{event.lower()}
+                    AFTER {event} ON records WHEN {row}.kind='job'
+                    BEGIN
+                        INSERT INTO job_revisions VALUES ({row}.owner, lower(hex(randomblob(16))))
+                        ON CONFLICT(owner) DO UPDATE SET token=excluded.token;
+                    END
+                """)
             db.execute("CREATE TABLE IF NOT EXISTS store_migrations (name TEXT PRIMARY KEY)")
             db.execute("CREATE TABLE IF NOT EXISTS job_history_revisions (owner TEXT PRIMARY KEY, revision INTEGER NOT NULL)")
             # Live progress is fetched separately. A terminal change must invalidate
@@ -163,6 +175,7 @@ class Store:
                                    ((owner, job_id, item["id"]) for item in input_rows))
             if project_input is not None:
                 project_id, source_id = project_input
+                db.execute("DELETE FROM project_selections WHERE owner=? AND project_id=? AND source_id=?", (owner, project_id, source_id))
                 db.execute("INSERT OR REPLACE INTO project_inputs VALUES (?,?,?,?,?)",
                            (owner, project_id, source_id, record["id"], record["created"]))
 
@@ -278,6 +291,11 @@ class Store:
             where.append("coalesce(json_extract(data,'$.hidden'),0)=0")
         with self.connect() as db:
             return db.execute("SELECT count(*) FROM records WHERE " + " AND ".join(where), parameters).fetchone()[0]
+
+    def job_revision(self, owner):
+        with self.connect() as db:
+            row = db.execute("SELECT token FROM job_revisions WHERE owner=?", (owner,)).fetchone()
+        return row["token"] if row else ""
 
     def history_page(self, owner, *, offset=0, limit=50, search="", state="", sort="newest", summary=False, include_hidden_downloads=False):
         where, parameters = ["owner=?", "kind='job'"], [owner]
@@ -642,6 +660,7 @@ class Service:
         self.running = {}
         self.restart_until = 0
         self.stop = threading.Event()
+        self.last_scheduler_tick = None
         self.accounts = Accounts(self.store)
         self.oauth = OAuth(self.store)
         self.catalog = FileCatalog(self.store)
@@ -910,6 +929,7 @@ class Service:
                 self.tick()
                 if time.monotonic() - last_cleanup > 30:
                     last_cleanup = 0 if self.cleanup() else time.monotonic()
+                self.last_scheduler_tick = time.monotonic()
             except Exception:
                 LOG.exception("Scheduler error")
 
@@ -1146,6 +1166,28 @@ def handler(service):
                 raise HTTPError(410, "Upload expired or unavailable")
             return record, source
 
+        def verify_job_input(self, upload_id, upload):
+            if not upload or upload["expires"] <= time.time():
+                raise HTTPError(404, "File unavailable")
+            source = service.store.folder(self.owner, upload_id) / "input"
+            try:
+                info = source.stat()
+                if not stat.S_ISREG(info.st_mode):
+                    raise HTTPError(410, "Upload expired or unavailable")
+                if info.st_size != upload["size"]:
+                    raise HTTPError(409, "Upload incomplete")
+                item = {key: value for key, value in upload.items() if key != "writerHash"}
+                needs_digest = not item.get("sha256")
+                if needs_digest:
+                    ctx = Context(source.parent, service.limits)
+                    digest = file_digest(source, ctx)
+                    if digest["size"] != upload["size"]:
+                        raise HTTPError(409, "Upload changed during verification. Retry the job.")
+                    item.update(digest, format=detect(source))
+            except FileNotFoundError as error:
+                raise HTTPError(410, "Upload expired or unavailable") from error
+            return item, info, needs_digest
+
         def check_upload_writer(self, record):
             expected = record.get("writerHash")
             if expected and not secrets.compare_digest(expected, hashlib.sha256(self.headers.get("Upload-Writer", "").encode()).hexdigest()):
@@ -1202,6 +1244,13 @@ def handler(service):
                 service.admit_request(self.client_address[0])
                 if method in ("POST", "PUT", "DELETE") and self.headers.get("X-Hamma-Request") != "1":
                     raise HTTPError(403, "Request authorization required")
+            if path == "/api/process/ready" and method == "GET":
+                tick = service.last_scheduler_tick
+                if service.stop.is_set() or tick is None or time.monotonic() - tick > 30:
+                    return self.send(503, {"ready": False, "reason": "scheduler"})
+                if service.web is not None and not (service.web / "index.html").is_file():
+                    return self.send(503, {"ready": False, "reason": "web-build"})
+                return self.send(200, {"ready": True})
             self.identity()
             if path == "/api/process/prepare-restart" and method == "POST":
                 if not ipaddress.ip_address(self.client_address[0]).is_loopback:
@@ -1293,7 +1342,7 @@ def handler(service):
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
                 return self.send(200, {"liveJobPolling": True, "groupedWorkflows": True, "projectRecovery": True, "projectZipProfiles": True, "recoverableUploads": True,
-                                       "pagedJobSelections": True,
+                                       "projectSelections": True, "pagedJobSelections": True, "jobRevisions": True,
                                        "draftScope": hashlib.sha256(("hamma-draft:" + self.owner).encode()).hexdigest(),
                                        "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(),
                                        "inspection": True, "zipVerification": True, "tarVerification": True, "zipSelection": True,
@@ -1350,6 +1399,21 @@ def handler(service):
                 project_id, input_route, source_id = project_route.groups()
                 is_inputs = input_route is not None
                 body = self.json_body() if method == 'PUT' else None
+                if is_inputs and not source_id and method == 'PUT':
+                    items = body.get('selections')
+                    if not isinstance(items, list) or not 1 <= len(items) <= 100:
+                        raise HTTPError(400, 'Invalid project selections')
+                    selections = []
+                    for item in items:
+                        if (not isinstance(item, dict) or not isinstance(item.get('id'), str) or
+                            not re.fullmatch(r'[a-f0-9]{32}', item['id']) or type(item.get('directory')) is not bool or
+                            type(item.get('size')) is not int or not 0 <= item['size'] <= self.plan['maxInputBytes'] or
+                            (item['directory'] and item['size'] != 0)):
+                            raise HTTPError(400, 'Invalid project selection')
+                        selections.append((item['id'], safe_path(item.get('name'), item['directory']), item['size'], item['directory']))
+                    with service.lock:
+                        service.projects.remember_selections(self.owner, project_id, selections)
+                    return self.send(200, {'saved': True})
                 with service.lock:
                     if not is_inputs and method == 'GET':
                         result = service.projects.get(self.owner, project_id)
@@ -1358,7 +1422,8 @@ def handler(service):
                     elif is_inputs and not source_id and method == 'GET':
                         query = parse_qs(url.query)
                         result = service.projects.inputs(self.owner, project_id, query.get('after', [''])[0],
-                                                        int(query.get('limit', [100])[0]), query.get('includeIncomplete') == ['1'])
+                                                        int(query.get('limit', [100])[0]), query.get('includeIncomplete') == ['1'],
+                                                        query.get('includeSelections') == ['1'])
                     elif is_inputs and source_id and method == 'PUT':
                         service.projects.checkpoint(self.owner, project_id, source_id, body.get('upload'))
                         result = {'saved': True}
@@ -1449,21 +1514,28 @@ def handler(service):
             if path == "/api/process/jobs" and method == "POST":
                 body = self.json_body()
                 ids = body.get("uploads")
+                staged = None
                 if "selectionId" in body or "selectionCount" in body:
                     if "uploads" in body:
                         raise HTTPError(400, "Choose either uploads or a job selection")
                     project = Projects.identifier(body.get('projectId', 'default'))
-                    ids = service.job_selections.seal(
+                    staged = service.job_selections.seal(
                         self.owner, body.get("selectionId"), project, body.get("selectionCount"))
                 operation, target = body.get("operation"), body.get("target")
-                if not isinstance(ids, list) or not ids or len(ids) > service.limits["files"] or not all(isinstance(i, str) for i in ids) or len(set(ids)) != len(ids):
+                if staged is None and (not isinstance(ids, list) or not ids or len(ids) > service.limits["files"] or not all(isinstance(i, str) for i in ids) or len(set(ids)) != len(ids)):
                     raise HTTPError(400, "Invalid file selection")
                 if (operation == "compress" and target not in archive_formats() or operation == "extract" and target not in ("zip", "zip-deflate") or
                     operation == "convert" and target not in MEDIA or operation in ("verify", "inspect") and target != "json" or
                     operation not in ("compress", "extract", "convert", "verify", "inspect")):
                     raise HTTPError(400, "Unsupported operation")
-                if operation != "compress" and len(ids) != 1:
+                count = staged.count if staged else len(ids)
+                if operation != "compress" and count != 1:
                     raise HTTPError(400, "One input per extraction or conversion job")
+                paged_admission = staged is not None and count > 100
+                if paged_admission and target != "zip" and not target.startswith("tar"):
+                    raise HTTPError(400, "Choose one file for this format")
+                if staged and not paged_admission:
+                    ids = list(staged.ids())
                 zip_profile = body.get("zipProfile", "balanced")
                 if "zipProfile" in body and (operation != "compress" or target != "zip" or
                                               not isinstance(zip_profile, str) or zip_profile not in ZIP_PROFILES):
@@ -1498,14 +1570,15 @@ def handler(service):
                 if type(recoverable) is not bool:
                     raise HTTPError(400, 'Invalid recovery mode')
                 if recoverable:
-                    identity = ['project-recovery-v1', project_id, sorted(ids), operation, target, bool(body.get('recursive')), quality_mode, metadata_policy]
+                    options = [operation, target, bool(body.get('recursive')), quality_mode, metadata_policy]
                     if zip_indexes is not None:
-                        identity.append(zip_indexes)
+                        options.append(zip_indexes)
                     if zip_profile != "balanced":
-                        identity.append(zip_profile)
+                        options.append(zip_profile)
                     if zip_comment:
-                        identity.append(["zipComment", zip_comment])
-                    request_id = hashlib.sha256(json.dumps(identity, separators=(',', ':')).encode()).hexdigest()
+                        options.append(["zipComment", zip_comment])
+                    sorted_ids = staged.ids(by_id=True) if paged_admission else sorted(ids)
+                    request_id = recovery_request_id(project_id, sorted_ids, *options)
                 if request_id is not None and (not isinstance(request_id, str) or not re.fullmatch(r"[a-f0-9]{64}", request_id)):
                     raise HTTPError(400, "Invalid request identifier")
                 job_id = hashlib.sha256((self.owner + request_id).encode()).hexdigest()[:32] if request_id else secrets.token_hex(16)
@@ -1514,11 +1587,26 @@ def handler(service):
                         service.projects.get(self.owner, project_id)
                     existing = service.store.get(self.owner, "job", job_id)
                     if existing:
-                        existing_ids = [i['id'] for i in service.store.iter_job_inputs(self.owner, existing)]
-                        if ((sorted(existing_ids) != sorted(ids) if recoverable else existing_ids != ids) or existing["operation"] != operation or existing["target"] != target or existing["recursive"] != bool(body.get("recursive")) or
+                        if (existing["operation"] != operation or existing["target"] != target or existing["recursive"] != bool(body.get("recursive")) or
                             existing.get('projectId', 'default') != project_id or existing.get('qualityMode', 'lossless') != quality_mode or existing.get('metadataPolicy', 'strip') != metadata_policy or existing.get('zipIndexes') != zip_indexes or existing.get('zipProfile', 'balanced') != zip_profile or existing.get('zipComment', '') != zip_comment):
                             raise HTTPError(409, "Request identifier already used")
-                        if recoverable:
+                        if paged_admission:
+                            with service.store.connect() as db:
+                                if recoverable:
+                                    previous = (row[0] for row in db.execute(
+                                        "SELECT upload_id FROM job_inputs WHERE owner=? AND job_id=? ORDER BY upload_id",
+                                        (self.owner, job_id)))
+                                else:
+                                    previous = (item['id'] for item in service.store.iter_job_inputs(self.owner, existing))
+                                if any(left != right for left, right in zip_longest(previous, staged.ids(by_id=recoverable))):
+                                    raise HTTPError(409, "Request identifier already used")
+                                if recoverable:
+                                    forget_job_uploads(db, self.owner, project_id, job_id)
+                        else:
+                            previous = [i['id'] for i in service.store.iter_job_inputs(self.owner, existing)]
+                            if (sorted(previous) != sorted(ids) if recoverable else previous != ids):
+                                raise HTTPError(409, "Request identifier already used")
+                        if recoverable and not paged_admission:
                             service.projects.forget_uploads(self.owner, project_id, ids)
                     return existing
 
@@ -1528,41 +1616,79 @@ def handler(service):
                     if service.store.count(kind='job', states=(*ACTIVE, 'paused')) >= service.max_queued_jobs:
                         raise HTTPError(429, 'Processor queue full')
 
+                def make_record(name, size, format_hint, now):
+                    settings = service.defaults(self.owner)
+                    retention = RETENTION[settings["historyRetention"]]
+                    record = {"id": job_id, "projectId": project_id, "created": now, "name": name,
+                              "operation": operation, "target": target, "recursive": bool(body.get("recursive")),
+                              'qualityMode': quality_mode, 'metadataPolicy': metadata_policy,
+                              "state": "queued", "inputSize": size, "outputSize": None,
+                              "format": format_hint, "processed": 0, "entries": 0,
+                              "fileExpires": now + RETENTION[settings["fileRetention"]],
+                              "historyExpires": now + retention if retention else None,
+                              "downloadAvailable": False, "error": None}
+                    if zip_indexes is not None:
+                        record["zipIndexes"] = zip_indexes
+                    if zip_profile != "balanced":
+                        record["zipProfile"] = zip_profile
+                    if zip_comment:
+                        record["zipComment"] = zip_comment
+                    return record
+
                 with service.lock:
                     existing = existing_job()
                     if existing:
                         return self.send(200, service.public(self.owner, existing))
                     check_queue_capacity()
+
+                if paged_admission:
+                    with tempfile.TemporaryDirectory(prefix='hamma-admission-') as temp:
+                        spool = Path(temp) / 'inputs.sqlite3'
+                        with closing(sqlite3.connect(spool)) as db:
+                            admission = AdmissionInputs(db, spool)
+                            for page in staged.pages():
+                                uploads = service.store.get_uploads(self.owner, page)
+                                for upload_id in page:
+                                    upload, info, needs_digest = self.verify_job_input(upload_id, uploads.get(upload_id))
+                                    admission.append(upload, info, needs_digest)
+                            with service.lock:
+                                existing = existing_job()
+                                if existing:
+                                    return self.send(200, service.public(self.owner, existing))
+                                check_queue_capacity()
+                                admission.check_files(service.store, self.owner)
+                                record = make_record(f"{count} files", admission.size, "batch", time.time())
+                                record.update(inputMode="upload-pages", fileCount=count)
+                                directory = service.store.folder(self.owner, job_id)
+                                directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+                                try:
+                                    admission.promote(service.store, self.owner, record, recoverable)
+                                except BaseException:
+                                    # It remains empty until the scheduler can see the committed job.
+                                    try:
+                                        directory.rmdir()
+                                    except OSError:
+                                        LOG.warning("Could not remove unused job directory: %s", job_id)
+                                    raise
+                                service.store.trim_history(self.owner, limit=self.plan['historyRecords'])
+                    LOG.info("Job queued: %s %s", job_id, operation)
+                    return self.send(202, service.public(self.owner, record))
                 uploads = service.store.get_uploads(self.owner, ids)
 
                 inputs, verified_uploads, seen = [], [], set()
                 source_stamps = {}
                 for upload_id in ids:
-                    upload = uploads.get(upload_id)
-                    if not upload or upload["expires"] <= time.time():
-                        raise HTTPError(404, "File unavailable")
+                    upload, info, needs_digest = self.verify_job_input(upload_id, uploads.get(upload_id))
                     source = service.store.folder(self.owner, upload_id) / "input"
-                    try:
-                        info = source.stat()
-                        if not stat.S_ISREG(info.st_mode):
-                            raise HTTPError(410, "Upload expired or unavailable")
-                        if info.st_size != upload["size"]:
-                            raise HTTPError(409, "Upload incomplete")
-                        source_stamps[source] = upload_stamp(info)
-                        name_key = upload["name"].casefold()
-                        if name_key in seen:
-                            raise HTTPError(400, "Duplicate filename")
-                        seen.add(name_key)
-                        if not upload.get("sha256"):
-                            ctx = Context(source.parent, service.limits)
-                            digest = file_digest(source, ctx)
-                            if digest["size"] != upload["size"]:
-                                raise HTTPError(409, "Upload changed during verification. Retry the job.")
-                            upload.update(digest, format=detect(source))
-                            verified_uploads.append(upload)
-                    except FileNotFoundError as error:
-                        raise HTTPError(410, "Upload expired or unavailable") from error
-                    inputs.append({key: value for key, value in upload.items() if key != "writerHash"})
+                    source_stamps[source] = upload_stamp(info)
+                    name_key = upload["name"].casefold()
+                    if name_key in seen:
+                        raise HTTPError(400, "Duplicate filename")
+                    seen.add(name_key)
+                    if needs_digest:
+                        # Preserve the upload's writer claim in the legacy update.
+                        verified_uploads.append({**uploads[upload_id], **upload})
+                    inputs.append(upload)
                 if operation != "compress" and inputs[0].get("directory"):
                     raise HTTPError(400, "Choose a file")
 
@@ -1582,21 +1708,10 @@ def handler(service):
                             raise HTTPError(410, "Upload expired or unavailable") from None
                         if not unchanged:
                             raise HTTPError(409, "Upload changed during verification. Retry the job.")
-                    settings = service.defaults(self.owner)
-                    retention = RETENTION[settings["historyRetention"]]
-                    record = {"id": job_id, "projectId": project_id, "created": now, "name": inputs[0]["name"] if len(inputs) == 1 else f"{len(inputs)} files",
-                              "operation": operation, "target": target, "inputs": inputs, "recursive": bool(body.get("recursive")),
-                              'qualityMode': quality_mode, 'metadataPolicy': metadata_policy,
-                              "state": "queued", "inputSize": sum(i["size"] for i in inputs), "outputSize": None,
-                              "format": inputs[0]["format"] if len(inputs) == 1 else "batch", "processed": 0, "entries": 0,
-                              "fileExpires": now + RETENTION[settings["fileRetention"]], "historyExpires": now + retention if retention else None,
-                              "downloadAvailable": False, "error": None}
-                    if zip_indexes is not None:
-                        record["zipIndexes"] = zip_indexes
-                    if zip_profile != "balanced":
-                        record["zipProfile"] = zip_profile
-                    if zip_comment:
-                        record["zipComment"] = zip_comment
+                    record = make_record(inputs[0]["name"] if count == 1 else f"{count} files",
+                                         sum(i["size"] for i in inputs),
+                                         inputs[0]["format"] if count == 1 else "batch", now)
+                    record["inputs"] = inputs
                     service.store.folder(self.owner, record["id"]).mkdir(mode=0o700, parents=True)
                     input_rows = None
                     if operation == "compress" and len(inputs) > 100 and (target == "zip" or target.startswith("tar")):
@@ -1616,6 +1731,8 @@ def handler(service):
                 known = parse_qs(url.query).get("revision", [""])[0]
                 live = [service.public(self.owner, job) for job in jobs] if jobs is not None and token == known else None
                 return self.send(200, {"revision": token, "now": now, "jobs": live})
+            if path == "/api/process/jobs/revision" and method == "GET":
+                return self.send(200, {"revision": service.store.job_revision(self.owner), "now": time.time()})
             if path == "/api/process/jobs/overview" and method == "GET":
                 metrics, jobs = service.store.history_overview(self.owner)
                 return self.send(200, {"metrics": metrics, "jobs": [service.public(self.owner, job) for job in jobs]})

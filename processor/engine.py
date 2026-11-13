@@ -26,7 +26,8 @@ from .media_policy import AUDIO_TARGETS, H264_TARGET, validate_conversion_option
 
 BLOCK = 1024 * 1024
 ARCHIVES = ("zip", "tar", "tar.gz", "tar.bz2", "tar.xz", "gzip", "bzip2", "xz")
-MEDIA = (*AUDIO_TARGETS, "mp4", "mkv", "webm", "png", "webp", "jpg", H264_TARGET)
+IMAGE_TARGETS = ("png", "webp", "jpg", "tiff")
+MEDIA = (*AUDIO_TARGETS, "mp4", "mkv", "webm", *IMAGE_TARGETS, H264_TARGET)
 ZIP_PROFILES = {"auto": 6, "fastest": 1, "balanced": 6, "maximum": 9}
 TAR_CODECS = {
     "gzip": (gzip.open, (".tar.gz", ".tgz")),
@@ -85,6 +86,8 @@ def detect_header(head: bytes) -> str:
         return "tar"
     if head.startswith(b"\x89PNG\r\n\x1a\n"):
         return "png"
+    if head.startswith((b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+")):
+        return "tiff"
     if head.startswith(b"\xff\xd8\xff"):
         return "jpg"
     if head[:4] == b"RIFF" and head[8:12] == b"WAVE":
@@ -769,6 +772,32 @@ def verify_media_decode(path: Path, ctx: Context):
                 process.kill()
 
 
+def require_single_tiff_page(source: Path):
+    # FFmpeg may decode only the first page of a TIFF. Check the directory
+    # chain and reject subimages before treating the input as a still image.
+    with source.open('rb') as stream:
+        header = stream.read(8)
+        if len(header) != 8 or header[:4] not in (b'II*\x00', b'MM\x00*'):
+            raise ProcessingError('Unsupported TIFF directory format')
+        endian = '<' if header[:2] == b'II' else '>'
+        offset = struct.unpack_from(endian + 'I', header, 4)[0]
+        if offset < 8:
+            raise ProcessingError('Invalid TIFF directory')
+        stream.seek(offset)
+        count_bytes = stream.read(2)
+        if len(count_bytes) != 2:
+            raise ProcessingError('Invalid TIFF directory')
+        count = struct.unpack(endian + 'H', count_bytes)[0]
+        entries = stream.read(count * 12 + 4)
+        if not count or len(entries) != count * 12 + 4:
+            raise ProcessingError('Invalid TIFF directory')
+        if struct.unpack_from(endian + 'I', entries, count * 12)[0] or any(
+            struct.unpack_from(endian + 'H', entries, index * 12)[0] == 330
+            for index in range(count)
+        ):
+            raise ProcessingError('Choose a still image with one TIFF page and no subimages')
+
+
 def convert(source: Path, output: Path, target: str, ctx: Context, quality_mode='lossless', metadata_policy='strip'):
     if target not in MEDIA:
         raise ProcessingError('Unsupported conversion format')
@@ -778,9 +807,12 @@ def convert(source: Path, output: Path, target: str, ctx: Context, quality_mode=
         raise ProcessingError(str(error)) from error
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         raise ProcessingError("Media engine unavailable")
+    source_kind = detect(source)
+    if source_kind == "tiff" and target in IMAGE_TARGETS:
+        require_single_tiff_page(source)
     info = probe(source)
     audio = [s for s in info["streams"] if s["codec_type"] == "audio"]
-    image = target in ("png", "webp", "jpg")
+    image = target in IMAGE_TARGETS
     transcode = target == H264_TARGET
     formats = set(info.get("format", {}).get("format_name", "").split(","))
     outputs = []
@@ -789,13 +821,15 @@ def convert(source: Path, output: Path, target: str, ctx: Context, quality_mode=
         if target not in media_targets():
             raise ProcessingError("H.264 MP4 conversion is unavailable in this FFmpeg build")
         video = [s for s in info["streams"] if s["codec_type"] == "video" and not s.get("disposition", {}).get("attached_pic")]
-        if not video or not formats.intersection({"mov", "matroska", "webm", "avi", "mpeg", "mpegvideo", "mpegts"}) or detect(source) in ("avif", "avif-sequence", "heic"):
+        if not video or not formats.intersection({"mov", "matroska", "webm", "avi", "mpeg", "mpegvideo", "mpegts"}) or source_kind in ("avif", "avif-sequence", "heic"):
             raise ProcessingError("Choose a video for H.264 conversion")
         if any(s["width"] % 2 or s["height"] % 2 for s in video):
             raise ProcessingError("H.264 MP4 conversion requires even video dimensions")
         subtitle_count = sum(s["codec_type"] == "subtitle" for s in info["streams"])
     if image:
-        if not formats.intersection({"image2", "png_pipe", "jpeg_pipe", "webp_pipe", "bmp_pipe", "tiff_pipe", "gif"}) and detect(source) != "avif":
+        if "tiff_pipe" in formats and source_kind != "tiff":
+            require_single_tiff_page(source)
+        if not formats.intersection({"image2", "png_pipe", "jpeg_pipe", "webp_pipe", "bmp_pipe", "tiff_pipe", "gif"}) and source_kind != "avif":
             raise ProcessingError("Choose a still image")
         frames = [s for s in probe(source, count_frames=True)["streams"] if s["codec_type"] == "video"]
         if len(frames) != 1 or frames[0].get("nb_read_frames") != "1":
@@ -803,7 +837,7 @@ def convert(source: Path, output: Path, target: str, ctx: Context, quality_mode=
         pixel_format = frames[0].get('pix_fmt', '')
         high_precision = bool(re.search(r'(?:9|10|12|14|16|32|48|64)(?:le|be)?$', pixel_format))
         if target == 'webp' and quality_mode == 'lossless' and high_precision:
-            raise ProcessingError('WebP cannot preserve this image precision. Choose PNG or explicitly allow lossy conversion.')
+            raise ProcessingError('WebP cannot preserve this image precision. Choose PNG or TIFF, or explicitly allow lossy conversion.')
         if target == 'jpg' and (pixel_format.startswith(('rgba', 'bgra', 'argb', 'abgr', 'yuva', 'gbrap', 'ya')) or pixel_format == 'pal8'):
             raise ProcessingError('JPEG cannot preserve transparency. Choose PNG or WebP.')
     tracks = audio if target in AUDIO_TARGETS else [None]
@@ -847,6 +881,8 @@ def convert(source: Path, output: Path, target: str, ctx: Context, quality_mode=
                     args += ['-pix_fmt', 'bgra']
             elif target == 'jpg':
                 args += ['-q:v', '2']
+            elif target == 'tiff':
+                args += ['-c:v', 'tiff', '-pix_fmt', 'rgba64le' if high_precision else 'rgba']
         elif transcode:
             for stream in video:
                 args += ["-map", f"0:{stream['index']}"]
@@ -885,7 +921,7 @@ def convert(source: Path, output: Path, target: str, ctx: Context, quality_mode=
             expected_codec = pcm if target == "wav" else {
                 "flac": "flac", "mp3": "mp3",
                 "aac": "aac", "m4a": "aac", "ogg": "vorbis", "opus": "opus",
-                "png": "png", "webp": "webp", "jpg": "mjpeg",
+                "png": "png", "webp": "webp", "jpg": "mjpeg", "tiff": "tiff",
             }[target]
             streams = [(stream["codec_type"], stream.get("codec_name")) for stream in verified["streams"]
                        if stream["codec_type"] in ("audio", "video")]

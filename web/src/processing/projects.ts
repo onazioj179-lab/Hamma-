@@ -76,11 +76,11 @@ export class ProjectRecovery {
 
   get(id: string) { return this.records.get(id); }
 
-  async sources(id: string, signal?: AbortSignal): Promise<{ sources: Source[]; unavailable: number }> {
+  async sources(id: string, signal?: AbortSignal, includeSelections = false): Promise<{ sources: Source[]; unavailable: number }> {
     const sources: Source[] = [];
     let cursor = '', unavailable = 0;
     while (true) {
-      const page = await request<{ sources: Omit<Source, 'file'>[]; total: number; scanned: number; unavailable: number; nextCursor: string | null }>(`/projects/${id}/inputs?after=${cursor}&limit=100&includeIncomplete=1`, { signal });
+      const page = await request<{ sources: Omit<Source, 'file'>[]; total: number; scanned: number; unavailable: number; nextCursor: string | null }>(`/projects/${id}/inputs?after=${cursor}&limit=100&includeIncomplete=1${includeSelections ? "&includeSelections=1" : ""}`, { signal });
       if (!Array.isArray(page.sources) || page.sources.length > 100 || !Number.isSafeInteger(page.total) || page.total < 0 || page.total > 5000 || !Number.isSafeInteger(page.scanned) || page.scanned < 0 || page.scanned > 100) throw new Error('Invalid project recovery page');
       sources.push(...page.sources.map(source => ({ ...source, file: null, ...(source.uploaded !== undefined && source.uploaded < source.size ? { resume: true } : {}) })));
       if (sources.length > 5000 || !Number.isSafeInteger(page.unavailable) || page.unavailable < 0 || page.unavailable > page.scanned) throw new Error('Invalid project recovery page');
@@ -90,6 +90,18 @@ export class ProjectRecovery {
       cursor = page.nextCursor;
     }
     return { sources, unavailable };
+  }
+
+  async remember(id: string, sources: Source[]): Promise<void> {
+    for (let start = 0; start < sources.length; start += 100) {
+      const selections = sources.slice(start, start + 100).map(({ id, name, size, directory }) =>
+        ({ id, name, size, directory }));
+      await jsonRequest(`/projects/${id}/inputs`, { selections }, 'PUT');
+    }
+  }
+
+  async forgetSelection(id: string, source: Source): Promise<void> {
+    await request(`/projects/${id}/inputs/${source.id}`, { method: 'DELETE' });
   }
 
   async checkpoint(id: string, source: Source, signal?: AbortSignal): Promise<void> {
