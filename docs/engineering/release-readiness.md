@@ -26,8 +26,9 @@ three projects and two owners, verified 33,751,040 input bytes and rejected all
 An eight-session Windows HTTP run completed 24 jobs in 22.36 seconds, with
 16 exact-byte downloads and eight expected corrupt-input failures. Earlier
 runs on the same host hit the request rate limit while memory admission held
-the queue. The 16-session run still needs a fresh pass after connection resets
-during upload.
+the queue and encountered connection resets during upload. With two worker
+slots available, a fresh 16-session run completed 48 jobs in 98.32 seconds,
+with 32 exact-byte downloads and 16 expected corrupt-input failures.
 
 On Python 3.13 the standard TAR reader avoids retaining a separate TarInfo
 cache. Output manifests still retain per-member state. Windows bsdtar 3.8.9
