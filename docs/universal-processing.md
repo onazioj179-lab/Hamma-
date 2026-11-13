@@ -35,6 +35,12 @@ a read-only root filesystem, dropped capabilities, resource limits and a durable
 volume. The image bundles the SHANTE engine for Zstandard operations and is
 intended for local use. Rebuild regularly for codec fixes.
 
+Linux processing jobs require libseccomp 2.5 or later and kernel seccomp
+filter support. The image includes the runtime. For a bare Debian or Ubuntu
+installation, install `libseccomp2`. The filter denies socket creation and
+setup for each spawned worker and its child codecs. The HTTP server remains
+reachable. A worker that cannot install the filter fails before reading input.
+
 ## Implemented operations
 
 | Operation | Actual behavior |
