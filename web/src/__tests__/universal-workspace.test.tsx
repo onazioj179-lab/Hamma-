@@ -149,6 +149,25 @@ it('renders a PDF through the dedicated workspace action', async () => {
   }), 'POST', { signal: expect.any(AbortSignal) });
 });
 
+it('offers Office PDF export only with the processor capability and submits the selected document', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  await render();
+  await select([new File(['fixture'], 'sample.docx')]);
+  expect(button('Export as PDF')).toBeUndefined();
+  await render('history');
+  await render();
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
+    ? { ok: true, json: async () => ({ ...caps, officePdf: true }) } : initial(url));
+  await act(async () => window.dispatchEvent(new Event('online')));
+  vi.spyOn(processingClient, 'upload').mockResolvedValue('uploaded-office');
+  vi.spyOn(processingClient, 'requestId').mockResolvedValue('office-export-request');
+  const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({});
+  await act(async () => button('Export as PDF').click());
+  expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({
+    operation: 'convert', target: 'office-pdf', uploads: ['uploaded-office'], recursive: false,
+  }), 'POST', { signal: expect.any(AbortSignal) });
+});
+
 it('queues a ZIP integrity report only when the processor advertises verification', async () => {
   const initial = fetchMock.getMockImplementation()!;
   fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')

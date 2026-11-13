@@ -40,6 +40,17 @@ def run_pdf_command(args, source, destination, ctx, limit):
         raise ProcessingError("PDF output size limit reached")
 
 
+def pdf_page_count(info_tool, source, info, ctx):
+    run_pdf_command([info_tool, str(source)], source, info, ctx, 64 * 1024)
+    data = info.read_bytes()
+    if not re.search(rb"^Encrypted:[ \t]+no[ \t]*\r?$", data, re.MULTILINE):
+        raise ProcessingError("Unsupported encrypted PDF")
+    pages = re.search(rb"^Pages:[ \t]+([0-9]{1,9})[ \t]*\r?$", data, re.MULTILINE)
+    if not pages or not 1 <= int(pages[1]) <= min(MAX_PAGES, ctx.limits["files"]):
+        raise ProcessingError("PDF page limit reached")
+    return int(pages[1])
+
+
 def render_pdf(source, output, ctx):
     if detect(source) != "pdf":
         raise ProcessingError("Unsupported input for PDF rendering")
@@ -49,15 +60,7 @@ def render_pdf(source, output, ctx):
 
     with TemporaryDirectory(prefix="pdf-pages-", dir=ctx.root) as directory:
         root = Path(directory)
-        info = root / "info"
-        run_pdf_command([info_tool, str(source)], source, info, ctx, 64 * 1024)
-        data = info.read_bytes()
-        if not re.search(rb"^Encrypted:[ \t]+no[ \t]*\r?$", data, re.MULTILINE):
-            raise ProcessingError("Unsupported encrypted PDF")
-        pages = re.search(rb"^Pages:[ \t]+([0-9]{1,9})[ \t]*\r?$", data, re.MULTILINE)
-        if not pages or not 1 <= int(pages[1]) <= min(MAX_PAGES, ctx.limits["files"]):
-            raise ProcessingError("PDF page limit reached")
-        count = int(pages[1])
+        count = pdf_page_count(info_tool, source, root / "info", ctx)
         ctx.report(tracks=count)
         remaining = ctx.limits["expanded"]
         entries = []

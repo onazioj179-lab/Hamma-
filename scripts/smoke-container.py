@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import random
 import re
+import subprocess
 import sys
 import time
 from urllib.error import HTTPError
@@ -16,6 +17,7 @@ from zipfile import ZipFile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from processor.tests.pdf_fixture import two_page_pdf
+from processor.tests.office_fixture import office_fixture
 
 
 def check(base, state_path=None, after_restart=False):
@@ -102,6 +104,16 @@ def check(base, state_path=None, after_restart=False):
     bundle = re.search(rb'<script[^>]+src="(/assets/[^"]+\.js)"', page)
     assert bundle and call(bundle[1].decode("ascii"), raw=True)
     capabilities = call("/api/process/capabilities")
+    assert capabilities["officePdf"], capabilities
+    for extension in ("docx", "xlsx", "pptx"):
+        office_job, office_pdf = download("convert", "office-pdf",
+                                         [upload("office." + extension, office_fixture(extension))])
+        assert office_job["outputName"] == "office.pdf", office_job
+        assert office_pdf.startswith(b"%PDF-")
+        text = subprocess.run(["pdftotext", "-", "-"], input=office_pdf,
+                              capture_output=True, check=True, timeout=10).stdout
+        assert b"HAMMA verified export" in b" ".join(text.split()), (extension, text)
+        assert_owner_only(office_job)
     assert capabilities["pdfPages"], capabilities
     _, rendered = download("convert", "pdf-pages", [upload("fixture.pdf", two_page_pdf())])
     with ZipFile(BytesIO(rendered)) as pages:
