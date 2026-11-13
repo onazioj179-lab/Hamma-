@@ -14,7 +14,7 @@ def describe_failure(error):
     message = str(error) if isinstance(error, ProcessingError) else 'Processing failed'
     category, retry = 'conversion_failure', True
     if isinstance(error, WorkerIsolationError):
-        message, category, retry = 'Linux worker network isolation is unavailable', 'worker_isolation', False
+        message, category, retry = error.public_message, 'worker_isolation', False
     elif isinstance(error, MemoryError):
         message, category = 'Memory limit reached', 'memory_limit'
     elif isinstance(error, PermissionError):

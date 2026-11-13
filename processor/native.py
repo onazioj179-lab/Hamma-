@@ -7,6 +7,8 @@ import subprocess
 import threading
 import time
 
+from .codec_sandbox import check_codec_isolation, codec_command
+
 
 def binary():
     configured = os.environ.get('SHANTE_CORE_BINARY')
@@ -59,7 +61,7 @@ def run(operation, source, output, context, *, input_limit=None, output_limit=No
                str(maximum), str(memory), str(info['workers']), str(context.root / 'cancel')]
     state = {}
     base = context.bytes
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    process = subprocess.Popen(codec_command(command, source, context.root), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                cwd=context.root, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
 
     def read_events():
@@ -96,7 +98,7 @@ def run(operation, source, output, context, *, input_limit=None, output_limit=No
         reader.join(2)
         context.check()
         result = state.get('result', {})
-        if process.returncode or state.get('invalid') or result.get('verified') is not True:
+        if check_codec_isolation(process.returncode) or state.get('invalid') or result.get('verified') is not True:
             code = state.get('error', {}).get('code')
             raise ProcessingError({'cancelled': 'Cancelled', 'limit': 'Native resource limit reached',
                                    'integrity': 'Corrupted archive', 'codec': 'Corrupted archive or native memory limit reached',

@@ -40,6 +40,13 @@ filter support. The image includes the runtime. For a bare Debian or Ubuntu
 installation, install `libseccomp2`. The filter denies socket creation and
 setup for each spawned worker and its child codecs. The HTTP server remains
 reachable. A worker that cannot install the filter fails before reading input.
+FFmpeg, FFprobe and SHANTE jobs also require Landlock ABI 3 on Linux, available
+from Linux 6.2 when Landlock is enabled. Codec subprocesses can read their
+assigned input and system runtime files. Conversion and SHANTE subprocesses
+can write within the job output directory. A codec fails to launch when its
+filesystem rules cannot be applied. Keep uploaded files and credentials
+outside system library directories. The Python worker still accesses the
+processor data store to record job state.
 
 ## Implemented operations
 
