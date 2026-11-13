@@ -132,15 +132,15 @@ it('queues a ZIP integrity report only when the processor advertises verificatio
   }), 'POST', { signal: expect.any(AbortSignal) });
 });
 
-it('queues compressed TAR integrity checks when supported', async () => {
+it.each(['tar.xz', 'tar.zst'])('queues %s integrity checks when supported', async extension => {
   const initial = fetchMock.getMockImplementation()!;
   fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
-    ? { ok: true, json: async () => ({ ...caps, tarVerification: true }) } : initial(url));
+    ? { ok: true, json: async () => ({ ...caps, archives: [...caps.archives, extension], tarVerification: true }) } : initial(url));
   vi.spyOn(processingClient, 'upload').mockResolvedValue('uploaded-tar');
   vi.spyOn(processingClient, 'requestId').mockResolvedValue('verify-tar');
   const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({});
   await render();
-  await select([new File(['fixture'], 'archive.tar.xz')]);
+  await select([new File(['fixture'], `archive.${extension}`)]);
   expect(button('Test ZIP integrity')).toBeUndefined();
   await act(async () => button('Test TAR integrity').click());
   expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({

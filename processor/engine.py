@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import bz2
 from collections import deque
+from contextlib import contextmanager
 import gzip
 import hashlib
 import io
@@ -17,6 +18,7 @@ import stat
 import struct
 import subprocess
 import tarfile
+from tempfile import TemporaryDirectory
 import time
 import unicodedata
 import zipfile
@@ -26,6 +28,8 @@ from .media_policy import AUDIO_TARGETS, H264_TARGET, validate_conversion_option
 
 BLOCK = 1024 * 1024
 ARCHIVES = ("zip", "tar", "tar.gz", "tar.bz2", "tar.xz", "gzip", "bzip2", "xz")
+ZSTD_TAR = "tar.zst"
+ZSTD_TAR_SUFFIXES = (".tar.zst", ".tar.zstd", ".tzst")
 IMAGE_TARGETS = ("png", "webp", "jpg", "tiff")
 MEDIA = (*AUDIO_TARGETS, "mp4", "mkv", "webm", *IMAGE_TARGETS, H264_TARGET)
 ZIP_PROFILES = {"auto": 6, "fastest": 1, "balanced": 6, "maximum": 9}
@@ -38,7 +42,20 @@ TAR_CODECS = {
 
 def archive_formats():
     from .native import capability
-    return ARCHIVES + (("zstd",) if capability() else ())
+    return ARCHIVES + ((ZSTD_TAR, "zstd") if capability() else ())
+
+
+def archive_working_copies(job):
+    if job["operation"] == "compress" and job["target"] == ZSTD_TAR:
+        return 2
+    if job["operation"] == "extract" and job.get("recursive"):
+        # Nested compressed members, a decoded TAR, and the output ZIP can
+        # coexist while the current member is read.
+        return 3
+    if (job["operation"] in ("extract", "verify") and job.get("format") == "zstd"
+            and named_zstd_tar(job["name"])):
+        return 2
+    return 1
 
 
 class ProcessingError(Exception):
@@ -385,6 +402,17 @@ def compress(inputs, output: Path, target: str, ctx: Context, *, zip_profile="ba
     comment = encode_zip_comment(zip_comment)
     if comment and target != "zip":
         raise ProcessingError("Archive comments require ZIP")
+    if target == ZSTD_TAR:
+        from .native import run
+        with TemporaryDirectory(prefix="tar-zstd-", dir=ctx.root) as folder:
+            tar = Path(folder) / "archive.tar"
+            manifest = compress(inputs, tar, "tar", ctx)
+            result = run("compress", tar, output, ctx, progress=False,
+                         input_limit=ctx.limits["expanded"])
+            if result["inputBytes"] > max(1, result["outputBytes"]) * ctx.limits["ratio"]:
+                output.unlink()
+                raise ProcessingError("Archive expansion ratio limit reached")
+        return manifest
     manifest = []
     names = ((item, ctx.register(item["name"], item.get("directory", False))) for item in inputs)
     if not (target == "zip" or target.startswith("tar")):
@@ -564,12 +592,33 @@ def read_tar_members(path, ctx, opener, consume):
                 raise ProcessingError("Unsafe archive link or device")
 
 
+def named_zstd_tar(name):
+    return name.lower().endswith(ZSTD_TAR_SUFFIXES)
+
+
+@contextmanager
+def decoded_zstd_tar(path, ctx):
+    from .native import run
+    maximum = min(ctx.limits["expanded"] - ctx.expanded,
+                  max(1, path.stat().st_size) * ctx.limits["ratio"])
+    if maximum < 1024:
+        raise ProcessingError("Expanded size limit reached")
+    with TemporaryDirectory(prefix="tar-zstd-", dir=ctx.root) as folder:
+        decoded = Path(folder) / "archive.tar"
+        run("decompress", path, decoded, ctx, output_limit=maximum, progress=False)
+        is_tar, _ = tar_source(decoded, decoded.name, detect(decoded))
+        if not is_tar:
+            raise ProcessingError("Zstandard content is not a TAR archive")
+        yield decoded
+
+
 def verify_archive(source: Path, original_name: str, output: Path, ctx: Context):
     kind = detect(source)
     if kind == "zip":
         return verify_zip(source, output, ctx)
+    zstd_tar = kind == "zstd" and named_zstd_tar(original_name)
     is_tar, opener = tar_source(source, original_name, kind)
-    if not is_tar:
+    if not is_tar and not zstd_tar:
         raise ProcessingError("Unsupported archive for integrity verification")
     manifest = []
 
@@ -580,9 +629,13 @@ def verify_archive(source: Path, original_name: str, output: Path, ctx: Context)
         manifest.append({"name": normalized, "directory": directory, **record})
         ctx.report(entries=ctx.count, expanded=ctx.expanded)
 
-    read_tar_members(source, ctx, opener, verify_member)
+    if zstd_tar:
+        with decoded_zstd_tar(source, ctx) as decoded:
+            read_tar_members(decoded, ctx, None, verify_member)
+    else:
+        read_tar_members(source, ctx, opener, verify_member)
     return write_archive_report(output, ctx, {
-        "format": {"gzip": "tar.gz", "bzip2": "tar.bz2", "xz": "tar.xz"}.get(kind, "tar"),
+        "format": {"gzip": "tar.gz", "bzip2": "tar.bz2", "xz": "tar.xz", "zstd": ZSTD_TAR}.get(kind, "tar"),
         "verified": True, "scope": "structure-and-observed-member-digests", "entries": manifest,
     })
 
@@ -659,6 +712,9 @@ def extract(source: Path, original_name: str, output: Path, ctx: Context, recurs
                         work.append((staging, normalized + ".contents/", leaf, depth + 1))
                     else:
                         staging.unlink()
+            elif kind == "zstd" and named_zstd_tar(name):
+                with decoded_zstd_tar(path, ctx) as decoded:
+                    read_tar_members(decoded, ctx, None, add_entry)
             elif kind == "zstd":
                 from .native import run
                 leaf = re.sub(r"\.(zst|zstd)$", "", Path(name).name, flags=re.I)

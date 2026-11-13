@@ -1188,6 +1188,35 @@ class ServerTests(unittest.TestCase):
         with zipfile.ZipFile(io.BytesIO(output)) as archive:
             self.assertEqual(archive.read('original.txt'), data)
 
+    def test_zstandard_tar_jobs_create_extract_repack_and_verify_through_http(self):
+        from processor.native import capability
+        if not capability():
+            self.skipTest('SHANTE C++ engine has not been built')
+        capabilities = self.call('/capabilities')
+        self.assertIn('tar.zst', capabilities['archives'])
+        self.assertNotIn('tar.zst', capabilities['singleFileArchives'])
+        files = {'nested/one.txt': b'First file', 'second.bin': random.Random(5).randbytes(2048)}
+        uploads = [self.upload(data, name)['id'] for name, data in files.items()]
+        job = self.call('/jobs', {'uploads': uploads, 'operation': 'compress', 'target': 'tar.zst'}, 'POST')
+        completed = self.execute(job)
+        self.assertEqual(completed['state'], 'completed', completed)
+        self.assertEqual(completed['outputName'], '2 files.tar.zst')
+        packed = self.call(completed['download'].removeprefix('/api/process'), raw=True)
+        self.assertEqual(hashlib.sha256(packed).hexdigest(), completed['sha256'])
+        source = self.upload(packed, completed['outputName'])
+        for target in ('zip', 'zip-deflate'):
+            restored = self.execute(self.job(source, operation='extract', target=target))
+            self.assertEqual(restored['state'], 'completed', restored)
+            result = self.call(restored['download'].removeprefix('/api/process'), raw=True)
+            with zipfile.ZipFile(io.BytesIO(result)) as archive:
+                self.assertEqual({name: archive.read(name) for name in archive.namelist()}, files)
+        verified = self.execute(self.job(source, operation='verify', target='json'))
+        self.assertEqual(verified['state'], 'completed', verified)
+        report = self.call(verified['download'].removeprefix('/api/process'))
+        self.assertEqual(report['format'], 'tar.zst')
+        self.assertEqual({item['name']: item['sha256'] for item in report['entries']},
+                         {name: hashlib.sha256(data).hexdigest() for name, data in files.items()})
+
     def test_running_worker_cancellation_stays_final(self):
         job = self.job(self.upload(os.urandom(2 * 1024**2), name="cancel.bin"))
         self.service.tick()

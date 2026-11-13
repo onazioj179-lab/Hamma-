@@ -32,15 +32,15 @@ closing the browser.
 On Linux: `docker compose -f compose.local.yml up --build -d`. The supplied
 configuration uses host networking for loopback access, an unprivileged user,
 a read-only root filesystem, dropped capabilities, resource limits and a durable
-volume. It is deliberately not an Internet deployment. Docker configuration was
-not executed on this Windows workstation. Rebuild regularly for codec fixes.
+volume. The image bundles the SHANTE engine for Zstandard operations and is
+intended for local use. Rebuild regularly for codec fixes.
 
 ## Implemented operations
 
 | Operation | Actual behavior |
 | --- | --- |
-| Compress | ZIP/ZIP64, TAR, TAR.GZ, TAR.BZ2, TAR.XZ; single-file GZIP, BZIP2, XZ |
-| Extract | Signature-detected ZIP/ZIP64, TAR, compressed TAR, GZIP, BZIP2, XZ; portable ZIP output |
+| Compress | ZIP/ZIP64, TAR, TAR.GZ, TAR.BZ2, TAR.XZ; single-file GZIP, BZIP2, XZ. The native SHANTE engine adds TAR.ZST and single-file Zstandard. |
+| Extract | Signature-detected ZIP/ZIP64, TAR, compressed TAR, GZIP, BZIP2, XZ; portable ZIP output. Native Zstandard supports raw frames and named Zstandard TAR archives. |
 | Recursive extract | Bounded nesting; original archives kept alongside `archive.contents/` |
 | Audio | WAV, FLAC, MP3, AAC, M4A, OGG via FFmpeg; every audio track retained as a separate output; multiple tracks packaged as ZIP |
 | Video | Stream-preserving MP4/MKV/WebM remux when codecs fit the container; incompatible streams fail visibly |
@@ -54,8 +54,14 @@ not executed on this Windows workstation. Rebuild regularly for codec fixes.
 | Retention | History: 24h/7d/30d/Never; files: 24h/7d/30d; separate deletion; defaults apply to new jobs |
 | UI | Virtual file selection list, bottom navigation, light/dark/system appearance, accessible labels, measured progress |
 
+With the native engine installed, `.tar.zst`, `.tar.zstd`, and `.tzst`
+archives support extraction, repacking as ZIP, and TAR integrity reports. The
+processor uses a bounded temporary TAR file for native encoding and decoding.
+The archive must fit the configured expansion and ratio limits. Files named
+`.zst` or `.zstd` restore a single file.
+
 Any file can be compressed as opaque data. That does **not** mean every format
-can be extracted or converted. RAR/7Z/ZSTD, unknown archives, password protection,
+can be extracted or converted. RAR/7Z, unknown archives, password protection,
 corruption, incompatible codecs, missing audio and engine failures produce failed
 jobs, never fake downloads. Media actions are unavailable without FFmpeg/FFprobe.
 Document-to-PDF is not implemented. Video conversion is remuxing, not transcoding.
