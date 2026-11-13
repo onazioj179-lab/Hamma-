@@ -18,7 +18,7 @@ RUN cmake -S native -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING
     && cmake --install build --prefix /opt/shante --component ShanteCore
 
 FROM python:3.13-slim-bookworm
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libstdc++6 \
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libstdc++6 libseccomp2 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 10001 --create-home hamma \
     && mkdir -p /app/web/dist /data && chown hamma:hamma /data

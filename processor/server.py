@@ -28,6 +28,7 @@ import signal
 import socket
 from socketserver import TCPServer
 import subprocess
+import sys
 import shutil
 import stat
 import sqlite3
@@ -40,7 +41,7 @@ from urllib.parse import parse_qs, urlsplit, quote
 import zipfile
 
 from .engine import ARCHIVES, MEDIA, BLOCK, ZIP_PROFILES, Context, ProcessingError, archive_formats, archive_working_copies, compress, convert, detect, encode_zip_comment, extract, file_digest, safe_path, verify_archive
-from .worker_limits import apply_windows_worker_limits, apply_worker_limits
+from .worker_limits import WorkerIsolationError, apply_windows_worker_limits, apply_worker_limits, restrict_worker_sockets
 from .resources import available_memory, worker_capacity
 from .errors import describe_failure
 from .projects import Projects, ProjectError
@@ -529,6 +530,8 @@ def run_job(root, owner, job_id, limits, isolated=False):
             return
         if isolated and os.name == "nt":
             apply_windows_worker_limits()
+        if isolated and sys.platform == "linux":
+            restrict_worker_sockets()
         manifest = []
         def verified_inputs():
             for upload in store.iter_job_inputs(owner, job):
@@ -615,7 +618,10 @@ def run_job(root, owner, job_id, limits, isolated=False):
                     **({'manifestStorage': 'index', 'fileCount': indexed['entries'], 'entries': indexed['entries'], 'inputSize': indexed['inputBytes'], 'phase': 'completed'} if indexed else {}))
     except Exception as error:
         message, category, retry = describe_failure(error)
-        LOG.warning("Job failed: %s (%s)", job_id, category)
+        if isinstance(error, WorkerIsolationError):
+            LOG.error("Job failed: %s (%s): %s", job_id, category, error)
+        else:
+            LOG.warning("Job failed: %s (%s)", job_id, category)
         state = "cancelled" if (directory / "cancel").exists() else "failed"
         latest = store.get(owner, 'job', job_id) or job
         failure = {'category': category, 'retryEligible': retry, 'stage': latest['state'],

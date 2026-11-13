@@ -1,5 +1,51 @@
-"""POSIX worker limits, respecting inherited caps and platform enforcement support."""
+"""Operating system limits for processing workers and their codec children."""
+import errno
 import sys
+
+
+class WorkerIsolationError(RuntimeError):
+    """The operating system did not install the required worker filter."""
+
+
+def restrict_worker_sockets():
+    """Disable Linux worker socket creation and socket server/client setup."""
+    import ctypes
+
+    try:
+        seccomp = ctypes.CDLL('libseccomp.so.2')
+    except OSError as error:
+        raise WorkerIsolationError('Install libseccomp2 to run Linux processing jobs') from error
+
+    seccomp.seccomp_init.argtypes = [ctypes.c_uint32]
+    seccomp.seccomp_init.restype = ctypes.c_void_p
+    seccomp.seccomp_syscall_resolve_name.argtypes = [ctypes.c_char_p]
+    seccomp.seccomp_syscall_resolve_name.restype = ctypes.c_int
+    seccomp.seccomp_rule_add.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int, ctypes.c_uint]
+    seccomp.seccomp_rule_add.restype = ctypes.c_int
+    seccomp.seccomp_load.argtypes = [ctypes.c_void_p]
+    seccomp.seccomp_load.restype = ctypes.c_int
+    seccomp.seccomp_release.argtypes = [ctypes.c_void_p]
+    seccomp.seccomp_release.restype = None
+
+    allow = 0x7FFF0000  # SCMP_ACT_ALLOW
+    deny = 0x00050000 | errno.EPERM  # SCMP_ACT_ERRNO(EPERM)
+    policy = seccomp.seccomp_init(allow)
+    if not policy:
+        raise WorkerIsolationError('Could not initialize Linux worker network isolation')
+    try:
+        # Workers use files and pipes. Deny socket acquisition and io_uring
+        # submission setup, which can issue socket operations without socket().
+        for name in (b'socket', b'socketpair', b'connect', b'bind', b'listen',
+                     b'accept', b'accept4', b'io_uring_setup', b'pidfd_getfd'):
+            syscall = seccomp.seccomp_syscall_resolve_name(name)
+            if syscall == -1 or seccomp.seccomp_rule_add(policy, deny, syscall, 0):
+                raise WorkerIsolationError('Could not configure Linux worker network isolation')
+        # libseccomp enables no_new_privs when loading the filter. The worker
+        # is single threaded here and subsequently created codec children inherit it.
+        if seccomp.seccomp_load(policy):
+            raise WorkerIsolationError('Could not enforce Linux worker network isolation')
+    finally:
+        seccomp.seccomp_release(policy)
 
 
 def apply_windows_worker_limits(memory=2 * 1024**3):

@@ -2,10 +2,51 @@ import subprocess
 import sys
 import unittest
 from unittest.mock import Mock
-from processor.worker_limits import apply_worker_limits
+from processor.errors import describe_failure
+from processor.worker_limits import WorkerIsolationError, apply_worker_limits, restrict_worker_sockets
 
 
 class WorkerLimitTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == 'linux', 'Requires Linux seccomp')
+    def test_linux_socket_filter_is_inherited_and_parent_remains_online(self):
+        import socket
+
+        with socket.socket() as server:
+            server.bind(('127.0.0.1', 0))
+            server.listen(1)
+            probe = """
+import errno
+import socket
+
+for operation in (socket.socket, lambda: socket.socket(socket.AF_INET6), socket.socketpair):
+    try:
+        operation()
+    except PermissionError as error:
+        assert error.errno == errno.EPERM, error
+    else:
+        raise AssertionError('Worker acquired a socket')
+"""
+            program = """
+import subprocess
+import sys
+from processor.worker_limits import restrict_worker_sockets
+restrict_worker_sockets()
+probe = sys.argv[1]
+exec(probe)
+subprocess.run([sys.executable, '-c', probe], check=True)
+"""
+            result = subprocess.run([sys.executable, '-c', program, probe],
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with socket.create_connection(server.getsockname(), timeout=2):
+                connection, _ = server.accept()
+                connection.close()
+
+    def test_isolation_failure_has_operator_action_and_no_automatic_retry(self):
+        error = WorkerIsolationError('Install libseccomp2 to run Linux processing jobs')
+        self.assertEqual(describe_failure(error),
+                         ('Linux worker network isolation is unavailable', 'worker_isolation', False))
+
     @unittest.skipUnless(sys.platform == 'win32', 'Requires Windows Job Objects')
     def test_windows_job_caps_child_memory_and_reaps_surviving_children(self):
         program = """

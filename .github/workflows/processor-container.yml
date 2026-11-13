@@ -15,6 +15,18 @@ jobs:
         run: docker compose -f compose.local.yml up --build --detach --wait --wait-timeout 60
       - name: Verify web assets and Zstandard jobs through the deployed service
         run: python3 scripts/smoke-container.py http://127.0.0.1:5010
+      - name: Record packages and runtimes from the running image
+        run: |
+          mkdir -p image-inventory
+          docker compose -f compose.local.yml images --format json > image-inventory/images.json
+          docker compose -f compose.local.yml exec -T hamma dpkg-query -W -f='${binary:Package}\t${Version}\t${Architecture}\n' > image-inventory/debian-packages.tsv
+          docker compose -f compose.local.yml exec -T hamma python --version > image-inventory/python.txt
+          docker compose -f compose.local.yml exec -T hamma /opt/shante/bin/shante-core probe > image-inventory/shante.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: processor-image-inventory
+          path: image-inventory/
+          if-no-files-found: error
       - name: Show service logs on failure
         if: failure()
         run: docker compose -f compose.local.yml logs

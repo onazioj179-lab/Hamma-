@@ -7,12 +7,15 @@ import tarfile
 import zipfile
 
 from .engine import ProcessingError
+from .worker_limits import WorkerIsolationError
 
 
 def describe_failure(error):
     message = str(error) if isinstance(error, ProcessingError) else 'Processing failed'
     category, retry = 'conversion_failure', True
-    if isinstance(error, MemoryError):
+    if isinstance(error, WorkerIsolationError):
+        message, category, retry = 'Linux worker network isolation is unavailable', 'worker_isolation', False
+    elif isinstance(error, MemoryError):
         message, category = 'Memory limit reached', 'memory_limit'
     elif isinstance(error, PermissionError):
         message, category, retry = 'Missing permissions', 'permission_denied', False
