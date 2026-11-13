@@ -1,5 +1,25 @@
 # Security review — PARTIAL
 
+## Dependency inventory
+
+Web CI publishes the npm lockfile inventory in CycloneDX JSON, and
+the processor dependency job publishes the pinned Zstandard and optional OAuth
+components with their OSV results. The npm audit still checks development and
+runtime dependencies. OSV findings or incomplete responses fail the processor
+check and its available reports remain attached to the CI run.
+
+Reproduce the inventories from the repository root.
+
+```sh
+npm sbom --package-lock-only --sbom-format=cyclonedx > web-dependencies.cdx.json
+python scripts/audit-shante.py --report buildlogs/processor-dependency-audit.json --sbom buildlogs/processor.cdx.json
+```
+
+These are source dependency inventories. A deployed system also requires an
+inventory of its image, OS, runtimes, FFmpeg and linked system libraries.
+The Rust compatibility crates and standalone clients have separate dependency
+graphs.
+
 Existing owner checks, CSRF/origin guards, path validation, archive expansion
 budgets, retention rules and verified-download gating were retained.
 
