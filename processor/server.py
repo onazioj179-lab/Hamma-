@@ -44,7 +44,7 @@ from .worker_limits import apply_windows_worker_limits, apply_worker_limits
 from .resources import available_memory, worker_capacity
 from .errors import describe_failure
 from .projects import Projects, ProjectError
-from .job_selections import AdmissionInputs, JobSelections, forget_job_uploads, recovery_request_id
+from .job_selections import AdmissionInputs, JobSelections, forget_job_uploads, recovery_request_id, upload_stamp
 from .accounts import Accounts, AccountError, plan as account_plan
 from .catalog import FileCatalog
 from .capabilities import action_registry, inspect_headers, media_targets, single_file_archives
@@ -63,10 +63,6 @@ PROCESSOR_REVISION = ":".join(hashlib.sha256(path.read_bytes()).hexdigest() for 
 RETENTION = {"24h": 86400, "7d": 604800, "30d": 2592000, "never": None}
 JOB_PROGRESS_RESET = dict(processed=0, entries=0, expanded=0, mediaSeconds=0, track=None, tracks=None,
                           phase=None, duration=None, started=None, finished=None, error=None, errorInfo=None)
-
-
-def upload_stamp(info):
-    return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
 class Store:

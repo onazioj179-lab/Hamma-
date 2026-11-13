@@ -18,6 +18,10 @@ MAX_OWNER_SELECTIONS = 64
 MAX_SELECTIONS = 512
 
 
+def upload_stamp(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
 def recovery_request_id(project, sorted_ids, *options):
     """Hash the existing v1 JSON identity without building its upload array."""
     prefix = json.dumps(['project-recovery-v1', project], separators=(',', ':'))
@@ -77,16 +81,11 @@ class AdmissionInputs:
         self.count = 0
         self.size = 0
 
-    @staticmethod
-    def fingerprint(info):
-        return json.dumps((info.st_dev, info.st_ino, info.st_mode, info.st_size,
-                           info.st_mtime_ns, info.st_ctime_ns))
-
     def append(self, upload, info, needs_digest):
         try:
             self.db.execute('INSERT INTO inputs VALUES (?,?,?,?,?,?)', (
                 self.count, upload['id'], upload['name'].casefold(), json.dumps(upload),
-                self.fingerprint(info), needs_digest,
+                json.dumps(upload_stamp(info)), needs_digest,
             ))
         except sqlite3.IntegrityError as error:
             raise ProjectError(400, 'Duplicate filename') from error
@@ -97,7 +96,7 @@ class AdmissionInputs:
         for upload_id, fingerprint in self.db.execute('SELECT upload_id,fingerprint FROM inputs'):
             source = store.folder(owner, upload_id) / 'input'
             try:
-                current = self.fingerprint(source.stat())
+                current = json.dumps(upload_stamp(source.stat()))
             except FileNotFoundError as error:
                 raise ProjectError(410, 'Upload expired or unavailable') from error
             if current != fingerprint:
