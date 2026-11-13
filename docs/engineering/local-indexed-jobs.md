@@ -30,6 +30,28 @@ Browser monitoring/downloads for an explicitly associated owner are available
 when the HTTP service is subsequently started. Default operator history is a
 separate scope. No cloud/distributed executor or browser folder bridge is added.
 
+## Compare two folder scans
+
+Keep both databases outside the folder and use a fresh database for each new
+scan. To compare against a completed baseline:
+
+```
+python -m processor.indexing AUTHORIZED_FOLDER --database baseline.sqlite3 --max-entries 100000 > baseline.jsonl
+python -m processor.indexing AUTHORIZED_FOLDER --database current.sqlite3 --max-entries 100000 --compare-to baseline.sqlite3 > changes.jsonl
+```
+
+The comparison writes one JSON line per added, removed, or changed relative
+path, in path order, with the before and after metadata. Counts go to standard
+error. Both scans must cover the same root and finish without discovery errors.
+You can resume an interrupted scan with the same database. Reusing a completed
+database reuses that scan.
+
+Changes use entry type, byte size, and modification time. Directory size and
+timestamp changes from their children are ignored. A rename appears as a removal
+and an addition. Keep the tree stable during each scan, including across resumes.
+The comparison reads metadata and can miss content edits that preserve both size
+and modification time.
+
 ## Resource policy
 
 Preserved defaults are policy, not demonstrated maximum capacity. Explicit

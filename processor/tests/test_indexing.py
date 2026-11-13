@@ -128,3 +128,75 @@ index.discover()
             self.assertTrue(index.discover())
         self.assertEqual(index.summary(), {'entries': 1, 'errors': 1, 'pendingDirectories': 0})
         self.assertIn('denied', index.page()[0]['error'])
+
+    def test_compare_cli_reports_additions_deletions_and_metadata_changes(self):
+        nested = self.root / 'nested'
+        nested.mkdir()
+        (nested / 'keep.txt').write_bytes(b'same')
+        (nested / 'remove.txt').write_bytes(b'gone')
+        edited = self.root / 'edit.txt'
+        edited.write_bytes(b'old')
+        old_mtime = edited.stat().st_mtime_ns
+        (self.root / 'kind').write_bytes(b'file')
+        self.assertTrue(self.index().discover())
+
+        (nested / 'remove.txt').unlink()
+        (nested / 'new.txt').write_bytes(b'new')
+        edited.write_bytes(b'new')
+        os.utime(edited, ns=(old_mtime, old_mtime + 2_000_000_000))
+        (self.root / 'kind').unlink()
+        (self.root / 'kind').mkdir()
+        current = self.base / 'new scan #1.sqlite3'
+        command = [
+            sys.executable, '-m', 'processor.indexing', str(self.root),
+            '--database', str(current), '--max-entries', '100',
+            '--compare-to', str(self.database),
+        ]
+        result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=20)
+        rows = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual([(row['path'], row['change']) for row in rows], [
+            ('edit.txt', 'changed'), ('kind', 'changed'),
+            ('nested/new.txt', 'added'), ('nested/remove.txt', 'removed'),
+        ])
+        self.assertEqual(rows[0]['before']['size'], rows[0]['after']['size'])
+        self.assertNotEqual(rows[0]['before']['mtime_ns'], rows[0]['after']['mtime_ns'])
+        self.assertEqual((rows[1]['before']['kind'], rows[1]['after']['kind']), ('file', 'directory'))
+        self.assertIsNone(rows[2]['before'])
+        self.assertIsNone(rows[3]['after'])
+        self.assertEqual(json.loads(result.stderr)['changes'], {'added': 1, 'removed': 1, 'changed': 2})
+        repeated = subprocess.run(command, check=True, capture_output=True, text=True, timeout=20)
+        self.assertEqual(repeated.stdout, result.stdout)
+        self.assertIn('nested/remove.txt', {row['path'] for row in self.index().page()})
+
+    def test_compare_refuses_invalid_or_incomplete_scans_before_writing(self):
+        baseline = self.index()
+        current = DirectoryIndex(self.base / 'current.sqlite3', self.root, max_entries=10)
+        stream = io.StringIO()
+        with self.assertRaisesRegex(ValueError, 'different database'):
+            baseline.changes(self.database, stream)
+        self.assertTrue(baseline.discover())
+        with self.assertRaisesRegex(ValueError, 'must be complete'):
+            current.changes(self.database, stream)
+        from unittest.mock import patch
+        with patch('processor.indexing.os.scandir', side_effect=PermissionError('denied')):
+            self.assertTrue(current.discover())
+        with self.assertRaisesRegex(ValueError, 'discovery errors'):
+            current.changes(self.database, stream)
+        other = self.base / 'other'
+        other.mkdir()
+        wrong = DirectoryIndex(self.base / 'wrong.sqlite3', other, max_entries=10)
+        self.assertTrue(wrong.discover())
+        with self.assertRaisesRegex(ValueError, 'same root'):
+            wrong.changes(self.database, stream)
+        self.assertEqual(stream.getvalue(), '')
+
+    def test_compare_unchanged_scans_with_escaped_baseline_filename(self):
+        (self.root / 'keep.txt').write_bytes(b'same')
+        baseline_path = self.base / 'baseline #1.sqlite3'
+        baseline = DirectoryIndex(baseline_path, self.root, max_entries=10)
+        self.assertTrue(baseline.discover())
+        current = self.index()
+        self.assertTrue(current.discover())
+        stream = io.StringIO()
+        self.assertEqual(current.changes(baseline_path, stream), {'added': 0, 'removed': 0, 'changed': 0})
+        self.assertEqual(stream.getvalue(), '')
