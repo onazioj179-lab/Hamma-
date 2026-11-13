@@ -29,6 +29,10 @@
 .zip-inspection { padding: 0 18px 16px; }
 .zip-inspection .search-field { max-width: 360px; }
 .zip-inspection .search-field input { min-width: 0; width: 100%; background: transparent; color: inherit; }
+.encrypted-zip form { display: grid; gap: 10px; margin-top: 10px; }
+.encrypted-zip .search-field { max-width: 360px; }
+.encrypted-zip .search-field input { min-width: 0; width: 100%; }
+.encrypted-zip .button-row { flex-wrap: wrap; }
 .zip-inspection-list { list-style: none; padding: 0; max-height: 320px; overflow: auto; }
 .zip-inspection-list li { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 8px 0; border-bottom: 1px solid rgb(var(--border)); overflow-wrap: anywhere; }
 .zip-inspection-list small { color: rgb(var(--muted)); }
