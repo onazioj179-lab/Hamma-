@@ -13,6 +13,17 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Start the local deployment
         run: docker compose -f compose.local.yml up --build --detach --wait --wait-timeout 60
+      - name: Verify live container memory accounting
+        run: |
+          docker compose -f compose.local.yml exec -T hamma python - <<'PY'
+          from processor.resources import cgroup_available
+
+          headroom = cgroup_available()
+          configured_limit = 3 * 1024**3  # compose.local.yml
+          if headroom is None or not 0 <= headroom < configured_limit:
+              raise SystemExit(f"Expected live cgroup headroom below {configured_limit}, got {headroom}")
+          print(f"Container memory headroom: {headroom} bytes")
+          PY
       - name: Verify web assets and file operations through the deployed service
         run: python3 scripts/smoke-container.py http://127.0.0.1:5010 --state "$RUNNER_TEMP/hamma-smoke.json"
       - name: Recreate the service with its existing volume
