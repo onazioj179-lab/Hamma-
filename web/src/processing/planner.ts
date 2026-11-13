@@ -1,7 +1,7 @@
 import { requiresLossyConsent, resolveActions, resolveArchiveTargets } from './actions';
 import type { Capability, Source } from './client';
 
-export type Operation = 'compress' | 'extract' | 'convert' | 'verify' | 'inspect';
+export type Operation = 'compress' | 'extract' | 'convert' | 'verify' | 'inspect' | 'split' | 'join';
 export interface WorkflowSettings { qualityMode: 'lossless' | 'lossy'; metadataPolicy: 'strip' | 'preserve'; recursive: boolean }
 export interface TaskGroup extends WorkflowSettings { id: string; sources: Source[]; operation: Operation; target: string }
 export interface ExecutionPlan {

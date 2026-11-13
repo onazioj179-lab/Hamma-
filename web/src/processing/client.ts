@@ -15,6 +15,7 @@ export interface Capability {
   streamVerification?: boolean;
   zipSelection?: boolean;
   archiveRepack?: boolean;
+  filePartSizesMiB?: number[];
   officeInspection?: boolean;
   pdfPages?: boolean;
   zipProfiles?: string[];
@@ -31,7 +32,7 @@ export interface Capability {
 export interface Job {
   errorInfo?: { category: string; retryEligible: boolean; stage: string; jobId: string; fileIds?: string[] } | null;
   retryCount?: number;
-  projectId?: string; id: string; name: string; operation: 'compress' | 'extract' | 'convert' | 'verify' | 'inspect'; target: string;
+  projectId?: string; id: string; name: string; operation: 'compress' | 'extract' | 'convert' | 'verify' | 'inspect' | 'split' | 'join'; target: string;
   state: string; inputSize: number; outputSize: number | null; processed: number;
   created: number; finished?: number | null; duration?: number; error?: string; entries: number; hidden?: boolean;
   download?: string; downloadAvailable: boolean; outputName?: string;

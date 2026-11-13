@@ -5,7 +5,7 @@ import { EncryptedZip, UnlockZip } from './EncryptedZip';
 import { VerifiedFiles } from './VerifiedFiles';
 import { ProjectRecovery, defaultProjectSettings, needsOriginal, readSelection, saveSelection } from '../../processing/projects';
 import { requiresLossyConsent, resolveActions, resolveArchiveTargets } from '../../processing/actions';
-import { summarizePlan, type ExecutionPlan, type TaskGroup } from '../../processing/planner';
+import { summarizePlan, type ExecutionPlan, type Operation, type TaskGroup } from '../../processing/planner';
 import { executeWorkflow } from '../../processing/workflow';
 import { GroupedWorkflow } from './GroupedWorkflow';
 import { useAppStore } from '../../store/app';
@@ -63,6 +63,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const [target, setTarget] = useState('zip');
   const [zipProfile, setZipProfile] = useState('balanced');
   const [zipComment, setZipComment] = useState('');
+  const [partMiB, setPartMiB] = useState(8);
   const [conversion, setConversion] = useState('wav');
   const [qualityMode, setQualityMode] = useState<'lossless' | 'lossy'>('lossless');
   const [metadataPolicy, setMetadataPolicy] = useState<'strip' | 'preserve'>('strip');
@@ -440,6 +441,12 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const missingSelections = sources.filter(source => needsOriginal(source) && !source.resume).length;
   const incompleteUploads = sources.filter(source => source.resume && needsOriginal(source)).length;
   const singleSource = chosen.length === 1 ? chosen[0] : undefined;
+  const partPackage = singleSource && !singleSource.directory && /\.parts\.zip$/i.test(singleSource.name);
+  const partSizes = (capability?.filePartSizesMiB ?? []).filter(size => singleSource &&
+    !singleSource.directory && !partPackage && size * 1048576 < singleSource.size);
+  const selectedPartSize = partSizes.includes(partMiB) ? partMiB : partSizes[0];
+  const partActionDisabled = busy || recovering || !!spkBusy || offline || selectedNeedsOriginal
+    || capability?.projectRecovery === true && !recoveryReady;
   const zipSource = singleSource && !singleSource.directory && (singleSource.inspection && !singleSource.inspection.error
     ? singleSource.inspection.format === 'zip' : /\.zip$/i.test(singleSource.name)) ? singleSource : null;
   const signature = singleSource?.inspection?.format;
@@ -472,7 +479,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     (signature === 'pdf' || !signature && /\.pdf$/i.test(singleSource.name));
   const conversionTarget = actions.conversions.includes(conversion) ? conversion : actions.conversions[0];
   const comment = archiveTarget === 'zip' && capability?.zipComments ? zipComment : '';
-  const submit = async (operation: 'compress' | 'extract' | 'convert' | 'verify' | 'inspect', options: { zipIndexes?: number[]; repack?: boolean; pdfPages?: boolean; planned?: ExecutionPlan } = {}) => {
+  const submit = async (operation: Operation, options: { zipIndexes?: number[]; repack?: boolean; pdfPages?: boolean; planned?: ExecutionPlan } = {}) => {
     const { zipIndexes, repack, pdfPages, planned } = options;
     const selectedConversion = pdfPages ? 'pdf-pages' : conversionTarget;
     const inputs = planned ? planned.groups.flatMap(group => group.sources) : chosen;
@@ -489,6 +496,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     }
     if (operation === 'verify' && !verificationLabel) return;
     if (operation === 'inspect' && !canInspectOffice) return;
+    if (operation === 'split' && !selectedPartSize || operation === 'join' && !partPackage) return;
     if (repack && !canRepack) return;
     if (operation === 'convert' && requiresLossyConsent(selectedConversion) && qualityMode !== 'lossy') {
       setError(`${selectedConversion.toUpperCase()} can reduce quality. Choose Allow quality loss before converting.`);
@@ -530,7 +538,9 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       await selectionWrites.current;
       if (capability.projectRecovery) await recovery.current.save(projectId, { target, conversion, qualityMode, metadataPolicy, recursive, ...(capability.projectZipProfiles ? { zipProfile } : {}), ...(capability.groupedWorkflows ? { groupActions } : {}) }, controller.signal);
       const report = operation === 'verify' || operation === 'inspect';
-      const jobTarget = report ? 'json' : operation === 'extract' ? repack ? 'zip-deflate' : 'zip' : operation === 'compress' ? archiveTarget : selectedConversion;
+      const jobTarget = report ? 'json' : operation === 'extract' ? repack ? 'zip-deflate' : 'zip'
+        : operation === 'split' ? 'zip' : operation === 'join' ? 'file'
+        : operation === 'compress' ? archiveTarget : selectedConversion;
       const plan = planned || summarizePlan([{ id: 'selection', sources: chosen, operation, target: jobTarget, qualityMode, metadataPolicy, recursive }], 0, capability);
       const sourcesByUpload = new Map<string, string>();
       const failures = await executeWorkflow(plan, {
@@ -553,14 +563,16 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
         queue: async (group, uploads) => {
           const compression = group.operation === 'compress';
           const conversionOptions = group.operation === 'convert' ? { qualityMode: group.qualityMode, metadataPolicy: group.metadataPolicy } : {};
-          const nested = !compression && !zipIndexes && !repack && !report && !pdfPages && group.recursive && (!planned || group.operation === 'extract');
+          const nested = group.operation === 'extract' && !zipIndexes && !repack && group.recursive
+            || group.operation === 'convert' && !pdfPages && !planned && group.recursive;
           const profiles = !planned && compression && group.target === 'zip' && capability.zipProfiles?.includes(zipProfile) && zipProfile !== 'balanced'
             ? { zipProfile } : {};
           const archiveComment = !planned && compression ? comment : '';
           const selection = zipIndexes ? { zipIndexes } : {};
+          const splitOptions = group.operation === 'split' ? { partMiB: selectedPartSize } : {};
           const identity = planned ? [generation, projectId, uploads, group.operation, group.target, nested, conversionOptions]
             : compression ? [generation, projectId, group.sources.map(source => source.id), group.operation, group.target, ...Object.values(profiles), ...(archiveComment ? [['zipComment', archiveComment]] : [])]
-            : [generation, projectId, sourcesByUpload.get(uploads[0]), group.operation, report || repack ? group.target : selectedConversion, nested, conversionOptions, ...(zipIndexes ? [zipIndexes] : [])];
+            : [generation, projectId, sourcesByUpload.get(uploads[0]), group.operation, group.target, nested, conversionOptions, ...(zipIndexes ? [zipIndexes] : []), ...Object.values(splitOptions)];
           const pagedSelection = capability.pagedJobSelections && uploads.length > 100;
           const jobInputs = pagedSelection
             ? await stageJobSelection(projectId, uploads, controller.signal)
@@ -571,7 +583,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
           }
           try {
             await jsonRequest('/jobs', { ...(projectId === 'default' ? {} : { projectId }), ...jobInputs, operation: group.operation,
-              target: group.target, ...(!compression ? { recursive: nested } : {}), ...conversionOptions, ...profiles, ...selection,
+              target: group.target, ...(!compression ? { recursive: nested } : {}), ...conversionOptions, ...profiles, ...selection, ...splitOptions,
               ...(archiveComment ? { zipComment: archiveComment } : {}),
               ...(capability.projectRecovery ? { recoverable: true } : { requestId: await requestId(identity) }) }, 'POST', {
               signal: controller.signal,
@@ -878,6 +890,19 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
           <button className="button secondary" disabled={busy || recovering || spkBusy || offline}
             onClick={() => void submit('extract', { repack: true })}><FileArchive size={16} /> Repack as ZIP</button>
         </div>}
+        {selectedPartSize && <div className="processing-actions">
+          <label className="conversion-select">Part size
+            <SelectField aria-label="Part size" value={String(selectedPartSize)} disabled={partActionDisabled}
+              onChange={value => setPartMiB(Number(value))}>
+              {partSizes.map(size => <option key={size} value={String(size)}>{size} MiB</option>)}
+            </SelectField>
+          </label>
+          <button className="button secondary" disabled={partActionDisabled} onClick={() => void submit('split')}>Split into parts</button>
+          <span className="footnote">Downloads all parts in one ZIP.</span>
+        </div>}
+        {partPackage && capability?.filePartSizesMiB?.length ? <div className="processing-actions">
+          <button className="button secondary" disabled={partActionDisabled} onClick={() => void submit('join')}>Join parts</button>
+        </div> : null}
         {canInspectOffice && <div className="zip-inspection">
           <button className="button secondary" disabled={busy || recovering || spkBusy || offline}
             onClick={() => void submit('inspect')}><File size={16} /> Inspect Office document</button>
