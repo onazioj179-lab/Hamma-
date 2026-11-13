@@ -28,6 +28,10 @@ Reproduce the two-owner worker test with
 `python -m processor.scheduler_benchmark --multiple-owners --output report.json`.
 The one-slot fixture checks dispatch order, owner boundaries and exact bytes.
 
+The processor container workflow publishes `processor-image-inventory` after
+the HTTP smoke test. It records the tested image ID, installed Debian packages,
+Python version, and the bundled SHANTE and Zstandard versions.
+
 Run the two-way ZIP and TAR interoperability fixtures with
 `python -m unittest processor.tests.test_archive_interoperability -v`. The
 suite uses bsdtar to check nested paths, long names, empty directories and
