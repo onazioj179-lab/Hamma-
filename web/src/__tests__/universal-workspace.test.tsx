@@ -116,6 +116,24 @@ it('queues Office package inspection through the document action', async () => {
   }), 'POST', { signal: expect.any(AbortSignal) });
 });
 
+it.each([
+  { name: 'video.bin', size: 2 * 1048576, action: 'Split into parts', operation: 'split', target: 'zip', options: { partMiB: 1 } },
+  { name: 'video.bin.parts.zip', size: 100, action: 'Join parts', operation: 'join', target: 'file', options: {} },
+])('queues $operation for an eligible file', async ({ name, size, action, operation, target, options }) => {
+  const initial = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
+    ? { ok: true, json: async () => ({ ...caps, filePartSizesMiB: [1, 8] }) } : initial(url));
+  vi.spyOn(processingClient, 'upload').mockResolvedValue('uploaded-parts-fixture');
+  vi.spyOn(processingClient, 'requestId').mockResolvedValue('parts-request');
+  const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({});
+  await render();
+  await select([new File([new Uint8Array(size)], name)]);
+  await act(async () => button(action).click());
+  expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({
+    operation, target, uploads: ['uploaded-parts-fixture'], ...options,
+  }), 'POST', { signal: expect.any(AbortSignal) });
+});
+
 it('queues a ZIP integrity report only when the processor advertises verification', async () => {
   const initial = fetchMock.getMockImplementation()!;
   fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')

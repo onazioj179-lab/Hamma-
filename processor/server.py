@@ -49,6 +49,7 @@ from .job_selections import AdmissionInputs, JobSelections, forget_job_uploads, 
 from .accounts import Accounts, AccountError, plan as account_plan
 from .catalog import FileCatalog
 from .capabilities import action_registry, inspect_headers, media_targets, single_file_archives
+from .file_parts import PART_SIZES, join_file, split_file
 from .media_policy import H264_TARGET
 from .oauth import OAuth
 
@@ -574,6 +575,7 @@ def run_job(root, owner, job_id, limits, isolated=False):
 
         inputs = verified_inputs() if job.get("inputMode") == "upload-pages" else list(verified_inputs())
         indexed = None
+        custom_output_name = None
         if job.get('inputMode') == 'directory-index':
             from .indexing import DirectoryIndex
             from .indexed_archive import compress_index
@@ -617,6 +619,12 @@ def run_job(root, owner, job_id, limits, isolated=False):
         elif job["operation"] == "inspect":
             from .documents import inspect_office
             manifest = inspect_office(Path(inputs[0]["path"]), output, ctx)
+        elif job["operation"] == "split":
+            item = inputs[0]
+            manifest = split_file(Path(item["path"]), item["name"], output, ctx, job["partMiB"], item["sha256"])
+            custom_output_name = Path(item["name"]).name + ".parts.zip"
+        elif job["operation"] == "join":
+            custom_output_name, manifest = join_file(Path(inputs[0]["path"]), output, ctx)
         else:
             manifest = convert(Path(inputs[0]["path"]), output, job["target"], ctx,
                                job.get('qualityMode', 'lossless'), job.get('metadataPolicy', 'strip'))
@@ -637,7 +645,7 @@ def run_job(root, owner, job_id, limits, isolated=False):
             stem += ".inspection"
         if job["operation"] == "extract":
             stem = stem + ".repacked" if job["target"] == "zip-deflate" else "extracted"
-        output_name = stem + "." + extension
+        output_name = custom_output_name or stem + "." + extension
         ctx.check()
         store.patch(owner, "job", job_id, expected_states=ACTIVE, state="completed", processed=job["inputSize"],
                     error=None,
@@ -1386,6 +1394,7 @@ def handler(service):
                                        "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(),
                                        "inspection": True, "zipVerification": True, "tarVerification": True, "streamVerification": True, "zipSelection": True,
                                        "archiveRepack": True, "officeInspection": True, "zipComments": True, "zipProfiles": list(ZIP_PROFILES),
+                                       "filePartSizesMiB": list(PART_SIZES),
                                        "actionRegistry": action_registry(), "conversions": media_targets(),
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
             if path == "/api/process/settings":
@@ -1565,11 +1574,20 @@ def handler(service):
                     raise HTTPError(400, "Invalid file selection")
                 if (operation == "compress" and target not in archive_formats() or operation == "extract" and target not in ("zip", "zip-deflate") or
                     operation == "convert" and target not in MEDIA or operation in ("verify", "inspect") and target != "json" or
-                    operation not in ("compress", "extract", "convert", "verify", "inspect")):
+                    operation == "split" and target != "zip" or operation == "join" and target != "file" or
+                    operation not in ("compress", "extract", "convert", "verify", "inspect", "split", "join")):
                     raise HTTPError(400, "Unsupported operation")
                 count = staged.count if staged else len(ids)
                 if operation != "compress" and count != 1:
-                    raise HTTPError(400, "One input per extraction or conversion job")
+                    raise HTTPError(400, "Choose one input for this operation")
+                part_mib = body.get("partMiB")
+                if operation in ("split", "join") and body.get("recursive"):
+                    raise HTTPError(400, "File parts do not support recursive processing")
+                if operation == "split":
+                    if type(part_mib) is not int or part_mib not in PART_SIZES:
+                        raise HTTPError(400, "Invalid part size")
+                elif "partMiB" in body:
+                    raise HTTPError(400, "Part size applies only when splitting")
                 paged_admission = staged is not None and count > 100
                 if paged_admission and target != "zip" and not target.startswith("tar"):
                     raise HTTPError(400, "Choose one file for this format")
@@ -1616,6 +1634,8 @@ def handler(service):
                         options.append(zip_profile)
                     if zip_comment:
                         options.append(["zipComment", zip_comment])
+                    if part_mib is not None:
+                        options.append(["partMiB", part_mib])
                     sorted_ids = staged.ids(by_id=True) if paged_admission else sorted(ids)
                     request_id = recovery_request_id(project_id, sorted_ids, *options)
                 if request_id is not None and (not isinstance(request_id, str) or not re.fullmatch(r"[a-f0-9]{64}", request_id)):
@@ -1626,6 +1646,8 @@ def handler(service):
                         service.projects.get(self.owner, project_id)
                     existing = service.store.get(self.owner, "job", job_id)
                     if existing:
+                        if existing.get("partMiB") != part_mib:
+                            raise HTTPError(409, "Request identifier already used")
                         if (existing["operation"] != operation or existing["target"] != target or existing["recursive"] != bool(body.get("recursive")) or
                             existing.get('projectId', 'default') != project_id or existing.get('qualityMode', 'lossless') != quality_mode or existing.get('metadataPolicy', 'strip') != metadata_policy or existing.get('zipIndexes') != zip_indexes or existing.get('zipProfile', 'balanced') != zip_profile or existing.get('zipComment', '') != zip_comment):
                             raise HTTPError(409, "Request identifier already used")
@@ -1672,6 +1694,8 @@ def handler(service):
                         record["zipProfile"] = zip_profile
                     if zip_comment:
                         record["zipComment"] = zip_comment
+                    if part_mib is not None:
+                        record["partMiB"] = part_mib
                     return record
 
                 with service.lock:
@@ -1730,6 +1754,8 @@ def handler(service):
                     inputs.append(upload)
                 if operation != "compress" and inputs[0].get("directory"):
                     raise HTTPError(400, "Choose a file")
+                if operation == "split" and inputs[0]["size"] <= part_mib * BLOCK:
+                    raise HTTPError(400, "Choose a part size smaller than the file")
 
                 with service.lock:
                     # Another request may have queued this job while hashing.

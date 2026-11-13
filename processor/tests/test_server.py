@@ -971,6 +971,43 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(rejected['errorInfo']['category'], 'resource_limit')
         self.assertFalse(rejected['downloadAvailable'])
 
+    def test_split_and_join_restore_exact_file_and_reject_damaged_parts(self):
+        source_bytes = random.Random(123).randbytes(2 * 1024**2 + 7)
+        source = self.upload(source_bytes, 'nested/data.bin')
+        request = {'uploads': [source['id']], 'operation': 'split', 'target': 'zip',
+                   'partMiB': 1, 'requestId': 'a' * 64}
+        self.assertIn(1, self.call('/capabilities')['filePartSizesMiB'])
+        self.assert_status(400, lambda: self.call('/jobs', {**request, 'partMiB': True}, 'POST'))
+        queued = self.call('/jobs', request, 'POST')
+        self.assertEqual(self.call('/jobs', request, 'POST')['id'], queued['id'])
+        self.assert_status(409, lambda: self.call('/jobs', {**request, 'partMiB': 8}, 'POST'))
+        split = self.execute(queued)
+        self.assertEqual(split['state'], 'completed', split)
+        self.assertEqual(split['outputName'], 'data.bin.parts.zip')
+        package = self.call(split['download'].removeprefix('/api/process'), raw=True)
+        damaged = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(package)) as parts, zipfile.ZipFile(damaged, 'w') as broken:
+            names = ['parts/000001.part', 'parts/000002.part', 'parts/000003.part']
+            self.assertEqual(parts.namelist(), [*names, 'hamma-parts.json'])
+            self.assertEqual(b''.join(parts.read(name) for name in names), source_bytes)
+            for name in parts.namelist():
+                content = parts.read(name)
+                if name == names[-1]:
+                    content = bytes([content[0] ^ 1]) + content[1:]
+                broken.writestr(name, content)
+
+        for data, state in ((package, 'completed'), (damaged.getvalue(), 'failed')):
+            with self.subTest(state=state):
+                upload = self.upload(data, split['outputName'])
+                job = self.execute(self.job(upload, operation='join', target='file'))
+                self.assertEqual(job['state'], state, job)
+                if state == 'completed':
+                    self.assertEqual(job['outputName'], 'data.bin')
+                    restored = self.call(job['download'].removeprefix('/api/process'), raw=True)
+                    self.assertEqual(restored, source_bytes)
+                else:
+                    self.assertFalse(job['downloadAvailable'])
+
     def test_tar_integrity_job_supports_compressed_tar_and_withholds_invalid_reports(self):
         payload = b"member contents"
 
