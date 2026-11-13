@@ -664,6 +664,7 @@ class Service:
         self.running = {}
         self.restart_until = 0
         self.stop = threading.Event()
+        self.last_scheduler_tick = None
         self.accounts = Accounts(self.store)
         self.oauth = OAuth(self.store)
         self.catalog = FileCatalog(self.store)
@@ -932,6 +933,7 @@ class Service:
                 self.tick()
                 if time.monotonic() - last_cleanup > 30:
                     last_cleanup = 0 if self.cleanup() else time.monotonic()
+                self.last_scheduler_tick = time.monotonic()
             except Exception:
                 LOG.exception("Scheduler error")
 
@@ -1246,6 +1248,13 @@ def handler(service):
                 service.admit_request(self.client_address[0])
                 if method in ("POST", "PUT", "DELETE") and self.headers.get("X-Hamma-Request") != "1":
                     raise HTTPError(403, "Request authorization required")
+            if path == "/api/process/ready" and method == "GET":
+                tick = service.last_scheduler_tick
+                if service.stop.is_set() or tick is None or time.monotonic() - tick > 30:
+                    return self.send(503, {"ready": False, "reason": "scheduler"})
+                if service.web is not None and not (service.web / "index.html").is_file():
+                    return self.send(503, {"ready": False, "reason": "web-build"})
+                return self.send(200, {"ready": True})
             self.identity()
             if path == "/api/process/prepare-restart" and method == "POST":
                 if not ipaddress.ip_address(self.client_address[0]).is_loopback:

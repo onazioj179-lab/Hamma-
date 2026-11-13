@@ -17,6 +17,13 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 5. **Expand format support.** Verify archive interoperability and add encryption, split and join, broader codec coverage, and isolated PDF and Office conversions. Check decoded bytes, format fidelity, and advertised capabilities.
 6. **Validate production operations.** Test rollback, migration, retention, and monitoring in the target environment. Distributed testing requires authorized compute and object storage.
 
+The Linux local and LAN container health checks use `GET /api/process/ready`.
+It returns HTTP 503 until the scheduler has completed a successful loop, if
+its heartbeat is more than 30 seconds old, or if the configured web build
+is missing. The endpoint does not allocate a session or enumerate codecs.
+The launcher retains `GET /api/process/health` for instance and revision
+identification. Verify monitoring and restart behavior in the target deployment.
+
 ## Processor stress evidence
 
 Large ZIP and TAR jobs now store input snapshots in ordered SQLite rows.
