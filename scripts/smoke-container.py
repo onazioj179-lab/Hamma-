@@ -8,10 +8,14 @@ import json
 from pathlib import Path
 import random
 import re
+import sys
 import time
 from urllib.error import HTTPError
 from urllib.request import build_opener, HTTPCookieProcessor, ProxyHandler, Request
 from zipfile import ZipFile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from processor.tests.pdf_fixture import two_page_pdf
 
 
 def check(base, state_path=None, after_restart=False):
@@ -98,6 +102,12 @@ def check(base, state_path=None, after_restart=False):
     bundle = re.search(rb'<script[^>]+src="(/assets/[^"]+\.js)"', page)
     assert bundle and call(bundle[1].decode("ascii"), raw=True)
     capabilities = call("/api/process/capabilities")
+    assert capabilities["pdfPages"], capabilities
+    _, rendered = download("convert", "pdf-pages", [upload("fixture.pdf", two_page_pdf())])
+    with ZipFile(BytesIO(rendered)) as pages:
+        assert pages.namelist() == ["page-001.png", "page-002.png"]
+        assert [tuple(int.from_bytes(pages.read(name)[offset:offset + 4], "big") for offset in (16, 20))
+                for name in pages.namelist()] == [(1024, 2048), (2048, 1024)]
     assert capabilities["nativeEngine"]["protocol"] == 1, capabilities
     assert "tar.zst" in capabilities["archives"], capabilities
     files = {"nested/one.txt": b"First member", "two.bin": random.Random(42).randbytes(4096)}

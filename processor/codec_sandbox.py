@@ -83,6 +83,10 @@ def restrict_filesystem(executable, source, output_dir):
         for path in ('/etc/ld.so.cache', '/dev/urandom'):
             if os.path.exists(path):
                 permit(path, read_file)
+        if Path(executable).name == 'pdftoppm':
+            for path in ('/etc/fonts', '/usr/share/fontconfig', '/usr/share/fonts'):
+                if os.path.isdir(path):
+                    permit(path, read_file | read_dir)
         permit('/dev/null', read_file | write_file)
         if output_dir:
             permit(output_dir, read_file | read_dir | write_file | truncate |
