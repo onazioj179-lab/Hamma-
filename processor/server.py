@@ -396,6 +396,14 @@ class Store:
             """, (owner, job_id, after, after + limit)).fetchall()
         return metadata, [{**json.loads(row['entry']), 'id': row['position'] + 1} for row in rows]
 
+    def full_manifest(self, owner, job_id):
+        record = self.get(owner, "job", job_id)
+        if not record or not record.get("downloadAvailable") or record["fileExpires"] <= time.time():
+            raise HTTPError(410, "Verified manifest unavailable")
+        if record.get("manifestStorage") == "paged":
+            return self.full_paged_manifest(owner, job_id)
+        return record.get("manifest", [])
+
     def full_paged_manifest(self, owner, job_id):
         with self.connect() as db:
             rows = db.execute("""SELECT data FROM job_manifest_entries
@@ -1835,7 +1843,7 @@ def handler(service):
                 job_id, action = match.groups()
                 directory = service.store.folder(self.owner, job_id)
                 query = parse_qs(url.query)
-                if action == "manifest" and method == "GET" and ("limit" in query or "after" in query):
+                if action == "manifest" and method == "GET":
                     after = int(query.get("after", [0])[0])
                     limit = min(1000, max(1, int(query.get("limit", [100])[0])))
                     if not 0 <= after <= 2**63 - 1 - limit:
@@ -1845,10 +1853,15 @@ def handler(service):
                         raise HTTPError(404, "Job unavailable")
                     if not metadata["available"] or (metadata["expires"] or 0) <= time.time():
                         raise HTTPError(410, "Verified manifest unavailable")
+                    paginated = "limit" in query or "after" in query
+                    if not paginated and metadata["mode"] != "directory-index":
+                        return self.send(200, {"id": job_id, "sha256": metadata["sha256"],
+                                               "files": service.store.full_manifest(self.owner, job_id)})
                     if metadata["mode"] == "directory-index":
                         from .indexed_archive import manifest_page
-                        files = manifest_page(directory / "discovery.sqlite3", after, limit)
-                        more = len(files) == limit
+                        files = manifest_page(directory / "discovery.sqlite3", after, limit, lookahead=True)
+                        more = len(files) > limit
+                        files = files[:limit]
                     else:
                         more = after + len(files) < metadata["total"]
                     return self.send(200, {"id": job_id, "sha256": metadata["sha256"], "files": files,
@@ -1865,19 +1878,6 @@ def handler(service):
                     if not record.get("downloadAvailable") or record["fileExpires"] <= time.time():
                         raise HTTPError(410, "File expired")
                     return self.download(directory / record["outputFile"], record["outputName"], record["sha256"])
-                if action == "manifest" and method == "GET":
-                    if record.get('inputMode') == 'directory-index':
-                        if not record.get('downloadAvailable') or record['fileExpires'] <= time.time():
-                            raise HTTPError(410, 'Verified manifest unavailable')
-                        from .indexed_archive import manifest_page
-                        query = parse_qs(url.query)
-                        limit = min(1000, max(1, int(query.get('limit', [100])[0])))
-                        rows = manifest_page(directory / 'discovery.sqlite3', int(query.get('after', [0])[0]), limit)
-                        return self.send(200, {'id': job_id, 'sha256': record.get('sha256'), 'files': rows,
-                                               'total': record['fileCount'], 'nextCursor': str(rows[-1]['id']) if len(rows) == limit else None})
-                    files = (service.store.full_paged_manifest(self.owner, job_id)
-                             if record.get("manifestStorage") == "paged" else record.get("manifest", []))
-                    return self.send(200, {"id": job_id, "sha256": record.get("sha256"), "files": files})
                 if action is None and method == "GET":
                     return self.send(200, service.public(self.owner, record))
                 if method == "DELETE" and action in (None, "files"):

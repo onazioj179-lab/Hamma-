@@ -61,7 +61,11 @@ def check(base, state_path=None, after_restart=False):
         assert first["total"] == last["total"] == 2
         assert first["sha256"] == last["sha256"] == job["sha256"]
         assert last["nextCursor"] is None
-        return [(entry["name"], entry["sha256"]) for entry in first["files"] + last["files"]]
+        entries = first["files"] + last["files"]
+        full = call(url)
+        assert full["sha256"] == job["sha256"]
+        assert full["files"] == [{key: value for key, value in entry.items() if key != "id"} for entry in entries]
+        return [(entry["name"], entry["sha256"]) for entry in entries]
 
     def download(operation, target, uploads, **options):
         job = post("/api/process/jobs", {"operation": operation, "target": target, "uploads": uploads, **options})
@@ -85,6 +89,16 @@ def check(base, state_path=None, after_restart=False):
         job = call("/api/process/jobs/" + state["job"])
         data = call(job["download"], raw=True)
         assert job["sha256"] == hashlib.sha256(data).hexdigest() == state["sha256"]
+        # Resume from the middle of the existing archive after service recreation.
+        offset = len(data) // 2
+        request = Request(base + job["download"], headers={
+            "X-Hamma-Request": "1",
+            "Range": f"bytes={offset}-",
+        })
+        with client.open(request, timeout=10) as response:
+            assert response.status == 206
+            assert response.headers["Content-Range"] == f"bytes {offset}-{len(data) - 1}/{len(data)}"
+            assert response.read() == data[offset:]
         assert_owner_only(job)
         assert check_manifest(job) == [tuple(entry) for entry in state["manifest"]]
         assert call("/api/process/settings")["fileRetention"] == "7d"

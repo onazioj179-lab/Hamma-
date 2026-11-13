@@ -30,19 +30,27 @@ export function VerifiedFiles({ jobId }: { jobId: string }) {
   }, [jobId, open, cursor, attempt]);
 
   const offset = (cursors.length - 1) * pageSize;
+  const nextCursor = page && offset + page.files.length < page.total ? page.nextCursor : null;
   return <details className="job-details verified-files" onToggle={event => setOpen(event.currentTarget.open)}>
     <summary>Verified files</summary>
-    {open && (error ? <p role="alert">{error} <button className="text-button" onClick={() => setAttempt(value => value + 1)}>Retry</button></p>
-      : page ? <>
-        <ul>{page.files.map(file => <li key={file.id}>{file.directory
+    {open && <>
+      {error ? <p role="alert">{error} <button className="text-button" onClick={() => setAttempt(value => value + 1)}>Retry</button></p>
+        : page ? <ul>{page.files.map(file => <li key={file.id}>{file.directory
           ? file.name.replace(/\/?$/, '/')
           : `${file.name} · ${file.size.toLocaleString()} bytes`}</li>)}</ul>
-        <div className="button-row">
-          <button className="text-button" disabled={cursors.length === 1} onClick={() => setCursors(previous => previous.slice(0, -1))}>Previous files</button>
-          <span role="status">{page.files.length ? `${(offset + 1).toLocaleString()}–${(offset + page.files.length).toLocaleString()} of ${page.total.toLocaleString()}` : 'No files'}</span>
-          <button className="text-button" disabled={!page.nextCursor || offset + page.files.length >= page.total}
-            onClick={() => { const next = page.nextCursor; if (next) setCursors(previous => previous[previous.length - 1] === cursor ? [...previous, next] : previous); }}>Next files</button>
-        </div>
-      </> : <p role="status">Loading verified files…</p>)}
+        : null}
+      <div className="button-row verified-file-pagination">
+        <button className="text-button" aria-disabled={cursors.length === 1}
+          onClick={() => setCursors(previous => previous.length > 1 ? previous.slice(0, -1) : previous)}>Previous files</button>
+        <span role="status">{page
+          ? page.files.length ? `${(offset + 1).toLocaleString()}–${(offset + page.files.length).toLocaleString()} of ${page.total.toLocaleString()}` : 'No files'
+          : error ? '' : 'Loading verified files…'}</span>
+        <button className="text-button" aria-disabled={!nextCursor}
+          onClick={() => {
+            const next = nextCursor;
+            if (next) setCursors(previous => previous[previous.length - 1] === cursor ? [...previous, next] : previous);
+          }}>Next files</button>
+      </div>
+    </>}
   </details>;
 }

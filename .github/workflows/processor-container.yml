@@ -15,10 +15,35 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y poppler-utils
       - name: Start the local deployment
         run: docker compose -f compose.local.yml up --build --detach --wait --wait-timeout 60
+      - name: Verify live container memory accounting
+        run: |
+          docker compose -f compose.local.yml exec -T hamma python - <<'PY'
+          from processor.resources import cgroup_available
+
+          headroom = cgroup_available()
+          configured_limit = 3 * 1024**3  # compose.local.yml
+          if headroom is None or not 0 <= headroom < configured_limit:
+              raise SystemExit(f"Expected live cgroup headroom below {configured_limit}, got {headroom}")
+          print(f"Container memory headroom: {headroom} bytes")
+          PY
       - name: Verify web assets and file operations through the deployed service
         run: python3 scripts/smoke-container.py http://127.0.0.1:5010 --state "$RUNNER_TEMP/hamma-smoke.json"
       - name: Recreate the service with its existing volume
         run: docker compose -f compose.local.yml up --detach --force-recreate --wait --wait-timeout 60
+      - name: Check SQLite integrity on the recreated deployment
+        run: |
+          docker compose -f compose.local.yml exec -T hamma python - <<'PY'
+          import os
+          import sqlite3
+          from contextlib import closing
+          from pathlib import Path
+
+          database = Path(os.environ["HAMMA_DATA"]) / "metadata.sqlite3"
+          with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
+              results = connection.execute("PRAGMA quick_check").fetchall()
+          if results != [("ok",)]:
+              raise SystemExit(f"SQLite quick_check failed: {results!r}")
+          PY
       - name: Verify the download, retention and upload checkpoint after restart
         run: python3 scripts/smoke-container.py http://127.0.0.1:5010 --state "$RUNNER_TEMP/hamma-smoke.json" --after-restart
       - name: Record packages and runtimes from the running image

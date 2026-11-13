@@ -118,7 +118,16 @@ class AccountHTTPTests(unittest.TestCase):
         self.assertEqual(self.call('/files')[0]['total'], 0)
         self.assert_status(404, lambda: self.call('/uploads/' + upload['id']))
         own = self.call('/uploads', {'name': 'account.txt', 'size': 0})[0]
-        caps = self.call('/capabilities')[0]
+        # This assertion covers account policy. Codec discovery is tested separately.
+        with (
+            patch('processor.native.capability', return_value={}),
+            patch('processor.server.archive_formats', return_value=[]),
+            patch('processor.server.single_file_archives', return_value=[]),
+            patch('processor.server.pdf_tools', return_value=(None, None)),
+            patch('processor.server.action_registry', return_value=[]),
+            patch('processor.server.media_targets', return_value=[]),
+        ):
+            caps = self.call('/capabilities')[0]
         self.assertEqual(caps['plan'], registered['plan'])
         stranger = build_opener(HTTPCookieProcessor(CookieJar()))
         self.assertEqual(self.call('/files', client=stranger)[0]['total'], 0)

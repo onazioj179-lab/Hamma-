@@ -514,6 +514,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(stored['manifestCount'], 2)
         self.service.store.patch(owner, 'job', job['id'], fileExpires=0)
         self.assert_status(410, lambda: self.call(path + '?limit=1'))
+        self.assert_status(410, lambda: self.call(path))
         self.service.cleanup()
         self.assertEqual(self.service.store.full_paged_manifest(owner, job['id']), [])
 
