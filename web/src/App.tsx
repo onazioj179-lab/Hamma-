@@ -127,7 +127,8 @@ export default function App() {
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
-      if (event.defaultPrevented || target?.isContentEditable || target?.closest?.('input,textarea,select'))
+      if (event.defaultPrevented || event.isComposing || target?.isContentEditable ||
+          target?.closest?.('input,textarea,select,[aria-modal="true"]'))
         return;
       if (
         (event.ctrlKey || event.metaKey) &&
@@ -137,7 +138,7 @@ export default function App() {
         event.preventDefault();
         // Mount the picker while the keyboard event still carries user activation.
         if (view !== 'process') flushSync(() => navigate('process'));
-        mainRef.current?.querySelector<HTMLInputElement>('input[aria-label="Add files to queue"]')?.click();
+        mainRef.current?.querySelector<HTMLButtonElement>('[data-open-file-picker]')?.click();
       }
       if (event.key === 'Escape' && isProcessing) {
         event.preventDefault();

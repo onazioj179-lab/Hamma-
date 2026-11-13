@@ -89,6 +89,19 @@ it('opens the workspace file picker immediately from another page', async () => 
   expect(button('Workspace').getAttribute('aria-current')).toBe('page');
 });
 
+it('does not open a file picker from a modal or while the file action is disabled', async () => {
+  const pickerClick = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {});
+  const modal = document.createElement('section');
+  modal.setAttribute('aria-modal', 'true');
+  host.append(modal);
+  const open = () => new KeyboardEvent('keydown', { key: 'o', ctrlKey: true, bubbles: true, cancelable: true });
+  await act(async () => modal.dispatchEvent(open()));
+  modal.remove();
+  button('Add Files').disabled = true;
+  await act(async () => document.body.dispatchEvent(open()));
+  expect(pickerClick).not.toHaveBeenCalled();
+});
+
 it('keeps the real result available across navigation without requiring an account', async () => {
   expect(host.textContent).not.toContain('Login');
   await act(async () => button('Files & History').click());

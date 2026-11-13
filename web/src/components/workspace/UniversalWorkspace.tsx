@@ -877,7 +877,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, onWorkspace, sp
       }}>
         <div className="universal-drop-icon" aria-hidden="true"><FileArchive size={30} strokeWidth={1.2} /></div>
         <div className="button-row">
-          <button className="button primary" disabled={busy || recovering || spkBusy || acting} onClick={() => input.current?.click()}><Plus size={16} /> Add Files</button>
+          <button className="button primary" data-open-file-picker disabled={busy || recovering || spkBusy || acting} onClick={() => input.current?.click()}><Plus size={16} /> Add Files</button>
           <button className="button secondary" disabled={busy || recovering || spkBusy || acting} onClick={() => void chooseFolder()}><FolderPlus size={16} /> Add Folder</button>
         </div>
         <p className="drop-hint">Or drop files and folders here</p>
