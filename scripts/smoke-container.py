@@ -89,12 +89,15 @@ def check(base, state_path=None, after_restart=False):
         assert job["sha256"] == hashlib.sha256(data).hexdigest() == state["sha256"]
         # Resume from the middle of the existing archive after service recreation.
         offset = len(data) // 2
+        validator = '"' + state["sha256"] + '"'
         request = Request(base + job["download"], headers={
             "X-Hamma-Request": "1",
             "Range": f"bytes={offset}-",
+            "If-Range": validator,
         })
         with client.open(request, timeout=10) as response:
             assert response.status == 206
+            assert response.headers["ETag"] == validator
             assert response.headers["Content-Range"] == f"bytes {offset}-{len(data) - 1}/{len(data)}"
             assert response.read() == data[offset:]
         assert_owner_only(job)
