@@ -1847,8 +1847,9 @@ def handler(service):
                                                "files": service.store.full_manifest(self.owner, job_id)})
                     if metadata["mode"] == "directory-index":
                         from .indexed_archive import manifest_page
-                        files = manifest_page(directory / "discovery.sqlite3", after, limit)
-                        more = len(files) == limit and bool(manifest_page(directory / "discovery.sqlite3", files[-1]["id"], 1))
+                        files = manifest_page(directory / "discovery.sqlite3", after, limit, lookahead=True)
+                        more = len(files) > limit
+                        files = files[:limit]
                     else:
                         more = after + len(files) < metadata["total"]
                     return self.send(200, {"id": job_id, "sha256": metadata["sha256"], "files": files,

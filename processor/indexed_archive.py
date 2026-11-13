@@ -269,12 +269,12 @@ def compress_index(index, output, target, ctx):
         temporary.unlink(missing_ok=True)
 
 
-def manifest_page(database, after=0, limit=100):
+def manifest_page(database, after=0, limit=100, *, lookahead=False):
     if type(after) is not int or not 0 <= after <= 2**63 - 1 or type(limit) is not int or not 1 <= limit <= 1000:
         raise ValueError('Invalid manifest page')
     db = sqlite3.connect(Path(database).resolve().as_uri() + '?mode=ro', uri=True, timeout=15)
     try:
         db.row_factory = sqlite3.Row
-        return [dict(row) for row in db.execute('SELECT id,name,directory,size,sha256 FROM archive_manifest WHERE id>? ORDER BY id LIMIT ?', (after, limit))]
+        return [dict(row) for row in db.execute('SELECT id,name,directory,size,sha256 FROM archive_manifest WHERE id>? ORDER BY id LIMIT ?', (after, limit + int(lookahead)))]
     finally:
         db.close()
