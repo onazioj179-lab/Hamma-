@@ -474,10 +474,13 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const canInspectOffice = capability?.officeInspection && singleSource && !singleSource.directory &&
     (!singleSource.inspection || singleSource.inspection.error || singleSource.inspection.format === 'zip') &&
     /\.(docx|xlsx|pptx)$/i.test(singleSource.name);
+  const canRenderPdf = capability?.pdfPages && singleSource && !singleSource.directory &&
+    (signature === 'pdf' || !signature && /\.pdf$/i.test(singleSource.name));
   const conversionTarget = actions.conversions.includes(conversion) ? conversion : actions.conversions[0];
   const comment = archiveTarget === 'zip' && capability?.zipComments ? zipComment : '';
-  const submit = async (operation: Operation, options: { zipIndexes?: number[]; repack?: boolean; planned?: ExecutionPlan } = {}) => {
-    const { zipIndexes, repack, planned } = options;
+  const submit = async (operation: Operation, options: { zipIndexes?: number[]; repack?: boolean; pdfPages?: boolean; planned?: ExecutionPlan } = {}) => {
+    const { zipIndexes, repack, pdfPages, planned } = options;
+    const selectedConversion = pdfPages ? 'pdf-pages' : conversionTarget;
     const inputs = planned ? planned.groups.flatMap(group => group.sources) : chosen;
     if (accountChanging()) return;
     if (submitting.current || recovering || capability?.projectRecovery && !recoveryReady || spkBusy || !inputs.length) return;
@@ -485,7 +488,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       setError('Select the original files for recovered selections, or deselect them before running this action.');
       return;
     }
-    if (operation === 'convert' && !conversionTarget) return;
+    if (pdfPages && !canRenderPdf || operation === 'convert' && !selectedConversion) return;
     if (operation === 'compress' && !planned && /[^ -~]/.test(comment)) {
       setError('ZIP comments accept printable ASCII characters only.');
       return;
@@ -494,8 +497,8 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     if (operation === 'inspect' && !canInspectOffice) return;
     if (operation === 'split' && !selectedPartSize || operation === 'join' && !partPackage) return;
     if (repack && !canRepack) return;
-    if (operation === 'convert' && requiresLossyConsent(conversionTarget) && qualityMode !== 'lossy') {
-      setError(`${conversionTarget.toUpperCase()} can reduce quality. Choose Allow quality loss before converting.`);
+    if (operation === 'convert' && requiresLossyConsent(selectedConversion) && qualityMode !== 'lossy') {
+      setError(`${selectedConversion.toUpperCase()} can reduce quality. Choose Allow quality loss before converting.`);
       return;
     }
     const browserOnly = !planned && ((operation === 'compress' && archiveTarget === 'spk') || (operation === 'extract' && chosen.every(source => /\.spk$/i.test(source.name))));
@@ -536,7 +539,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       const report = operation === 'verify' || operation === 'inspect';
       const jobTarget = report ? 'json' : operation === 'extract' ? repack ? 'zip-deflate' : 'zip'
         : operation === 'split' ? 'zip' : operation === 'join' ? 'file'
-        : operation === 'compress' ? archiveTarget : conversionTarget;
+        : operation === 'compress' ? archiveTarget : selectedConversion;
       const plan = planned || summarizePlan([{ id: 'selection', sources: chosen, operation, target: jobTarget, qualityMode, metadataPolicy, recursive }], 0, capability);
       const sourcesByUpload = new Map<string, string>();
       const failures = await executeWorkflow(plan, {
@@ -560,7 +563,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
           const compression = group.operation === 'compress';
           const conversionOptions = group.operation === 'convert' ? { qualityMode: group.qualityMode, metadataPolicy: group.metadataPolicy } : {};
           const nested = group.operation === 'extract' && !zipIndexes && !repack && group.recursive
-            || group.operation === 'convert' && !planned && group.recursive;
+            || group.operation === 'convert' && !pdfPages && !planned && group.recursive;
           const profiles = !planned && compression && group.target === 'zip' && capability.zipProfiles?.includes(zipProfile) && zipProfile !== 'balanced'
             ? { zipProfile } : {};
           const archiveComment = !planned && compression ? comment : '';
@@ -568,7 +571,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
           const splitOptions = group.operation === 'split' ? { partMiB: selectedPartSize } : {};
           const identity = planned ? [generation, projectId, uploads, group.operation, group.target, nested, conversionOptions]
             : compression ? [generation, projectId, group.sources.map(source => source.id), group.operation, group.target, ...Object.values(profiles), ...(archiveComment ? [['zipComment', archiveComment]] : [])]
-            : [generation, projectId, sourcesByUpload.get(uploads[0]), group.operation, report || repack ? group.target : conversionTarget, nested, conversionOptions, ...(zipIndexes ? [zipIndexes] : []), ...Object.values(splitOptions)];
+            : [generation, projectId, sourcesByUpload.get(uploads[0]), group.operation, group.target, nested, conversionOptions, ...(zipIndexes ? [zipIndexes] : []), ...Object.values(splitOptions)];
           const pagedSelection = capability.pagedJobSelections && uploads.length > 100;
           const jobInputs = pagedSelection
             ? await stageJobSelection(projectId, uploads, controller.signal)
@@ -898,6 +901,11 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
           <button className="button secondary" disabled={busy || recovering || spkBusy || offline}
             onClick={() => void submit('inspect')}><File size={16} /> Inspect Office document</button>
           <p className="footnote">Uploads the document and returns a package metadata report.</p>
+        </div>}
+        {canRenderPdf && <div className="zip-inspection">
+          <button className="button secondary" disabled={busy || recovering || spkBusy || offline || selectedNeedsOriginal}
+            onClick={() => void submit('convert', { pdfPages: true })}><File size={16} /> Render PDF pages</button>
+          <p className="footnote">Downloads one PNG per page in a ZIP. Up to 100 pages.</p>
         </div>}
         {verificationLabel && <div className="zip-inspection">
           <button className="button secondary" disabled={busy || recovering || spkBusy || offline || selectedNeedsOriginal} onClick={() => void submit('verify')}><ShieldCheck size={16} /> {verificationLabel}</button>

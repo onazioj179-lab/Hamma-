@@ -1008,6 +1008,42 @@ class ServerTests(unittest.TestCase):
                 else:
                     self.assertFalse(job['downloadAvailable'])
 
+    def test_pdf_pages_render_in_order_and_reject_invalid_input(self):
+        from processor.pdf_pages import pdf_tools
+        from processor.tests.pdf_fixture import two_page_pdf
+        import zlib
+
+        if not all(pdf_tools()):
+            self.skipTest("Poppler is unavailable")
+        self.assertTrue(self.call('/capabilities')['pdfPages'])
+        queued = self.job(self.upload(two_page_pdf(), 'example.pdf'), operation='convert', target='pdf-pages')
+        job = self.execute(queued)
+        self.assertEqual(job['state'], 'completed', job)
+        self.assertEqual(job['outputName'], 'example.pages.zip')
+        data = self.call(job['download'].removeprefix('/api/process'), raw=True)
+        manifest = self.call('/jobs/' + job['id'] + '/manifest?limit=2')
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            self.assertEqual(archive.namelist(), ['page-001.png', 'page-002.png'])
+            expected_pages = [((1024, 2048), b'\xff\x00\x00'), ((2048, 1024), b'\x00\x00\xff')]
+            for entry, (expected, pixel) in zip(manifest['files'], expected_pages, strict=True):
+                page = archive.read(entry['name'])
+                self.assertEqual(tuple(int.from_bytes(page[offset:offset + 4], 'big') for offset in (16, 20)), expected)
+                self.assertEqual(entry['sha256'], hashlib.sha256(page).hexdigest())
+                self.assertEqual(page[24:26], b'\x08\x02')  # Eight-bit RGB.
+                position = 8
+                compressed = bytearray()
+                while position < len(page):
+                    length = int.from_bytes(page[position:position + 4], 'big')
+                    if page[position + 4:position + 8] == b'IDAT':
+                        compressed.extend(page[position + 8:position + 8 + length])
+                    position += length + 12
+                # The first pixel has no neighboring bytes for PNG filters.
+                self.assertEqual(zlib.decompress(compressed)[1:4], pixel)
+        for source in (b'%PDF-1.4\n', b'plain text'):
+            bad = self.execute(self.job(self.upload(source, 'invalid.pdf'), operation='convert', target='pdf-pages'))
+            self.assertEqual(bad['state'], 'failed', bad)
+            self.assertFalse(bad['downloadAvailable'])
+
     def test_tar_integrity_job_supports_compressed_tar_and_withholds_invalid_reports(self):
         payload = b"member contents"
 

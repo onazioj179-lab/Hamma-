@@ -17,6 +17,7 @@ export interface Capability {
   archiveRepack?: boolean;
   filePartSizesMiB?: number[];
   officeInspection?: boolean;
+  pdfPages?: boolean;
   zipProfiles?: string[];
   zipComments?: boolean;
   singleFileArchives?: string[];
