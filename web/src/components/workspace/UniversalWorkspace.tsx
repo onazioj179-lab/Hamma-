@@ -363,7 +363,9 @@ export function UniversalWorkspace({ visible, screen, onHistory, onWorkspace, sp
       if (!recovery.current.get(projectId)) {
         await recovery.current.save(projectId, { target, conversion, qualityMode, metadataPolicy, recursive, groupActions, ...(capability.projectZipProfiles ? { zipProfile } : {}) });
       }
-      const source = await jsonRequest<Omit<Source, 'file'>>('/jobs/' + job.id + '/reuse', { projectId, name });
+      const source = await jsonRequest<Omit<Source, 'file'>>('/jobs/' + job.id + '/reuse', { projectId, name }, 'POST', {
+        timeoutMs: Math.max(30000, Math.min(900000, capability.limits.seconds * 1000)),
+      });
       if (!mounted.current || generation !== ownerGeneration.current) return;
       setSources(previous => previous.some(item => item.id === source.id) ? previous : [...previous, { ...source, file: null }]);
       setSelected(new Set([source.id]));
