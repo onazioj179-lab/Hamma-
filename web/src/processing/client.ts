@@ -45,13 +45,15 @@ export class ProcessorError extends Error {
   constructor(message: string, public status: number, public retryAfterSeconds?: number) { super(message); this.name = 'ProcessorError'; }
 }
 
-export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+type ProcessorRequest = RequestInit & { timeoutMs?: number };
+
+export async function request<T>(path: string, { timeoutMs = 30000, ...init }: ProcessorRequest = {}): Promise<T> {
   const controller = new AbortController();
   const cancel = () => controller.abort(init.signal?.reason);
   if (init.signal?.aborted) cancel();
   else init.signal?.addEventListener('abort', cancel, { once: true });
   let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 30000);
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
   try {
     const response = await fetch('/api/process' + path, {
       ...init, signal: controller.signal, credentials: 'same-origin', headers: { 'X-Hamma-Request': '1', ...init.headers },
@@ -79,7 +81,7 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
     init.signal?.removeEventListener('abort', cancel);
   }
 }
-export const jsonRequest = <T>(path: string, data: unknown, method = 'POST', init: RequestInit = {}) =>
+export const jsonRequest = <T>(path: string, data: unknown, method = 'POST', init: ProcessorRequest = {}) =>
   request<T>(path, { ...init, method, headers: { 'Content-Type': 'application/json', ...init.headers }, body: JSON.stringify(data) });
 
 export const randomId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');

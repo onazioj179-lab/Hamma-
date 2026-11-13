@@ -11,7 +11,7 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 ## HAMMA web backlog
 
 1. **Validate recovery across mixed batches.** Unstarted selections and upload checkpoints share the project recovery pages. Browser tests cover 105 upload checkpoints, and a processor test covers 106 checkpoints with a partial upload removed during recovery. Exercise the flow on physical devices and under sustained load.
-2. **Scale browser jobs.** Browser submissions above 100 uploads stage their selection in SQLite pages and submit by reference. The processor still materializes the sealed selection and job input list, and browser folder discovery retains its source list. Extend bounded traversal through the worker and validate multi-owner scheduling and per-file retry under sustained load.
+2. **Scale browser jobs.** Browser ZIP and TAR submissions above 100 uploads stage the selection, admit it in pages, and persist ordered worker inputs in SQLite. Browser folder discovery, archive libraries, and standard output manifests still retain per-file state. Validate large payloads, multi-owner scheduling, and per-file retry under sustained load.
 3. **Validate physical devices.** Test mobile and foldable layouts, folder picking, touch, keyboard access, reduced motion, and recovery on real devices.
 4. **Isolate processing workers.** Enforce filesystem and network isolation, verify tenant boundaries, and expand dependency advisories, SBOM coverage, and fuzz tests.
 5. **Expand format support.** Verify archive interoperability and add encryption, split and join, broader codec coverage, and isolated PDF and Office conversions. Check decoded bytes, format fidelity, and advertised capabilities.
@@ -23,9 +23,19 @@ Large ZIP and TAR jobs now store input snapshots in ordered SQLite rows.
 Workers read up to 100 rows at a time, and scheduler and progress records
 carry only the input count. Existing inline records still run. The 256-file
 test exercises both ZIP and TAR.GZ and verifies every restored member.
-Admission still assembles the input list before saving it. Archive name
-registries, ZIP codec metadata, and standard output manifests still scale
-with the member count.
+Staged submissions hash inputs outside the scheduler lock, then atomically
+publish the queued job and its worker input pages. The Windows loopback
+fixture admitted 5,000 files through 50 reads of 100 records and returned a
+ZIP containing every input in order with exact bytes. Replaying the same
+request returned the existing job. The fixture pre-seeded 60,000 payload
+bytes and ran the normal worker entry point in-process. Admission took
+137.857 seconds and the worker took 100.745 seconds while other tests ran.
+These timings describe this fixture on this host.
+
+The browser shows when the processor is checking files and allows staged job
+submission to exceed the ordinary request timeout. Inline compatibility
+requests still assemble their input list. Archive name registries, ZIP codec
+metadata, and standard output manifests still scale with the member count.
 
 Browser job admission now reads upload metadata as a batch and hashes outside
 the shared scheduler lock. It rechecks queue limits and upload availability

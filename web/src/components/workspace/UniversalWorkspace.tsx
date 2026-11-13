@@ -82,6 +82,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const [readingFolder, setReadingFolder] = useState(false);
   const folderController = useRef<AbortController | null>(null);
   const [uploadStatus, setUploadStatus] = useState<{ name: string; offset: number; size: number; checking?: boolean } | null>(null);
+  const [checkingSelection, setCheckingSelection] = useState(false);
   const [scroll, setScroll] = useState(0);
   const [dragging, setDragging] = useState(false);
   const input = useRef<HTMLInputElement>(null);
@@ -531,13 +532,26 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
           const identity = planned ? [generation, projectId, uploads, group.operation, group.target, nested, conversionOptions]
             : compression ? [generation, projectId, group.sources.map(source => source.id), group.operation, group.target, ...Object.values(profiles), ...(archiveComment ? [['zipComment', archiveComment]] : [])]
             : [generation, projectId, sourcesByUpload.get(uploads[0]), group.operation, report || repack ? group.target : conversionTarget, nested, conversionOptions, ...(zipIndexes ? [zipIndexes] : [])];
-          const jobInputs = capability.pagedJobSelections && uploads.length > 100
+          const pagedSelection = capability.pagedJobSelections && uploads.length > 100;
+          const jobInputs = pagedSelection
             ? await stageJobSelection(projectId, uploads, controller.signal)
             : { uploads };
-          await jsonRequest('/jobs', { ...(projectId === 'default' ? {} : { projectId }), ...jobInputs, operation: group.operation,
-            target: group.target, ...(!compression ? { recursive: nested } : {}), ...conversionOptions, ...profiles, ...selection,
-            ...(archiveComment ? { zipComment: archiveComment } : {}),
-            ...(capability.projectRecovery ? { recoverable: true } : { requestId: await requestId(identity) }) }, 'POST', { signal: controller.signal });
+          if (pagedSelection) {
+            setUploadStatus(null);
+            setCheckingSelection(true);
+          }
+          try {
+            await jsonRequest('/jobs', { ...(projectId === 'default' ? {} : { projectId }), ...jobInputs, operation: group.operation,
+              target: group.target, ...(!compression ? { recursive: nested } : {}), ...conversionOptions, ...profiles, ...selection,
+              ...(archiveComment ? { zipComment: archiveComment } : {}),
+              ...(capability.projectRecovery ? { recoverable: true } : { requestId: await requestId(identity) }) }, 'POST', {
+              signal: controller.signal,
+              // Hashing a full selection can exceed the normal request timeout.
+              timeoutMs: pagedSelection ? Math.max(30000, Math.min(900000, capability.limits.seconds * 1000)) : undefined,
+            });
+          } finally {
+            if (pagedSelection) setCheckingSelection(false);
+          }
           if (archiveComment && generation === ownerGeneration.current) setZipComment('');
         },
         submitted: source => {
@@ -827,6 +841,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       {capability?.inspection && sources.length > 0 && <p className="footnote">File detection sends the first 512 bytes to your processor. Processor jobs upload full files. ZIP inspection runs in this browser.</p>}
       {capability && !capability.conversions.length && <p className="footnote">Media conversion is unavailable until FFmpeg and FFprobe are installed on the computer running HAMMA.</p>}
       {uploadStatus && <div className="upload-status" role="status"><Loader2 size={16} className="animate-spin" /><span>{uploadStatus.name}<small>{uploadStatus.checking ? 'Checking saved bytes…' : `${formatFileSize(uploadStatus.offset)} / ${formatFileSize(uploadStatus.size)}`}</small></span><progress aria-label="Upload progress" value={uploadStatus.offset} max={Math.max(1, uploadStatus.size)} /><button className="icon-button" aria-label="Pause upload" onClick={() => abort.current?.abort()}><Pause size={16} /></button></div>}
+      {checkingSelection && <p className="footnote" role="status">Checking files before queueing…</p>}
       <details className="processing-options"><summary>Options</summary><div className="options-grid"><label>Archive<SelectField disabled={busy || recovering || spkBusy} value={archiveTarget} onChange={value => setTarget(value)} aria-label="Archive format">{[...archiveTargets, ...(onSpkSelect && projectId === 'default' && browserInputs ? ['spk'] : [])].map(format => <option key={format}>{format}</option>)}</SelectField></label><label>Conversion metadata<SelectField disabled={busy || recovering || spkBusy} aria-label="Conversion metadata" value={metadataPolicy} onChange={value => setMetadataPolicy(value as "strip" | "preserve")}><option value="strip">Remove metadata</option><option value="preserve">Preserve supported tags</option></SelectField></label><label className="selection-label"><input type="checkbox" disabled={busy || recovering || spkBusy} checked={recursive} onChange={event => setRecursive(event.target.checked)} /> Open nested archives</label></div><p>Nested originals are kept alongside their contents. MP4, MKV, and WebM preserve streams when compatible. Lossy conversion requires Allow quality loss. Metadata is removed by default; preservation depends on the output format.</p></details>
     </>}
     {screen === 'workspace' && spkStatus}
