@@ -135,16 +135,32 @@ it('queues a ZIP integrity report only when the processor advertises verificatio
 it.each(['tar.xz', 'tar.zst'])('queues %s integrity checks when supported', async extension => {
   const initial = fetchMock.getMockImplementation()!;
   fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
-    ? { ok: true, json: async () => ({ ...caps, archives: [...caps.archives, extension], tarVerification: true }) } : initial(url));
+    ? { ok: true, json: async () => ({ ...caps, archives: [...caps.archives, extension], tarVerification: true, streamVerification: true }) } : initial(url));
   vi.spyOn(processingClient, 'upload').mockResolvedValue('uploaded-tar');
   vi.spyOn(processingClient, 'requestId').mockResolvedValue('verify-tar');
   const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({});
   await render();
   await select([new File(['fixture'], `archive.${extension}`)]);
   expect(button('Test ZIP integrity')).toBeUndefined();
+  expect(button('Test stream integrity')).toBeUndefined();
   await act(async () => button('Test TAR integrity').click());
   expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({
     operation: 'verify', target: 'json', uploads: ['uploaded-tar'], recursive: false,
+  }), 'POST', { signal: expect.any(AbortSignal) });
+});
+
+it('queues standalone stream verification with the advertised capability', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
+    ? { ok: true, json: async () => ({ ...caps, streamVerification: true }) } : initial(url));
+  vi.spyOn(processingClient, 'upload').mockResolvedValue('uploaded-gzip');
+  vi.spyOn(processingClient, 'requestId').mockResolvedValue('verify-stream');
+  const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({});
+  await render();
+  await select([new File(['fixture'], 'archive.gz')]);
+  await act(async () => button('Test stream integrity').click());
+  expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({
+    operation: 'verify', target: 'json', uploads: ['uploaded-gzip'],
   }), 'POST', { signal: expect.any(AbortSignal) });
 });
 

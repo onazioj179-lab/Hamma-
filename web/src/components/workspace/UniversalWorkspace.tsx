@@ -449,8 +449,15 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     || (!signature || signature === 'bzip2') && /\.(tar\.bz2|tbz2?)$/i.test(tarName)
     || (!signature || signature === 'xz') && /\.(tar\.xz|txz)$/i.test(tarName)
     || capability?.archives.includes('tar.zst') && (!signature || signature === 'zstd') && /\.(tar\.zst(?:d)?|tzst)$/i.test(tarName));
+  const streamSource = singleSource && !singleSource.directory && (
+    signature === 'gzip' || signature === 'bzip2' || signature === 'xz'
+    || capability?.archives.includes('zstd') && signature === 'zstd'
+    || !signature && (/\.(gz|gzip|bz2|xz)$/i.test(tarName)
+      || capability?.archives.includes('zstd') && /\.zst(?:d)?$/i.test(tarName))
+  );
   const verificationLabel = zipSource && capability?.zipVerification ? 'Test ZIP integrity'
-    : tarSource && capability?.tarVerification ? 'Test TAR integrity' : '';
+    : tarSource && capability?.tarVerification ? 'Test TAR integrity'
+    : !tarSource && streamSource && capability?.streamVerification ? 'Test stream integrity' : '';
   const archiveTargets = resolveArchiveTargets(chosen, capability);
   const browserInputs = chosen.every(source => !!source.file && !source.resume);
   const archiveTarget = target === 'spk' && browserInputs || archiveTargets.includes(target) ? target : archiveTargets[0] || 'zip';
@@ -868,8 +875,8 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
           <p className="footnote">Uploads the document and returns a package metadata report.</p>
         </div>}
         {verificationLabel && <div className="zip-inspection">
-          <button className="button secondary" disabled={busy || recovering || spkBusy || offline} onClick={() => void submit('verify')}><ShieldCheck size={16} /> {verificationLabel}</button>
-          <p className="footnote">Uploads the archive to the processor for a downloadable integrity report.</p>
+          <button className="button secondary" disabled={busy || recovering || spkBusy || offline || selectedNeedsOriginal} onClick={() => void submit('verify')}><ShieldCheck size={16} /> {verificationLabel}</button>
+          <p className="footnote">Uploads the file and returns a report with SHA-256 digests.</p>
         </div>}
       </section>}
       {capability?.inspection && sources.length > 0 && <p className="footnote">File detection sends the first 512 bytes to your processor. Processor jobs upload full files. ZIP inspection runs in this browser.</p>}

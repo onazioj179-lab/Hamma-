@@ -175,6 +175,12 @@ See [the worker report](../../validation/scheduler-worker-fairness.json).
   stored or Deflate members through the existing archive quotas, checks
   decoded size and ZIP CRC, and records SHA-256 digests in a JSON report.
   Password-protected and other compression methods are excluded.
+- **Test stream integrity** decodes standalone gzip, bzip2, XZ, and Zstandard
+  files and reports the observed SHA-256 and decoded byte count. It checks the
+  stream with the installed decoder and enforces the expanded byte and ratio
+  limits. Compare the digest with a trusted reference when verifying the
+  original content. Zstandard requires SHANTE and uses temporary decoded
+  storage. Compressed TAR still uses the TAR member verification path.
 
 ## Video audio extraction
 

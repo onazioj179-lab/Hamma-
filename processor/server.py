@@ -1384,7 +1384,7 @@ def handler(service):
                                        "projectSelections": True, "pagedJobSelections": True, "jobRevisions": True,
                                        "draftScope": hashlib.sha256(("hamma-draft:" + self.owner).encode()).hexdigest(),
                                        "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(),
-                                       "inspection": True, "zipVerification": True, "tarVerification": True, "zipSelection": True,
+                                       "inspection": True, "zipVerification": True, "tarVerification": True, "streamVerification": True, "zipSelection": True,
                                        "archiveRepack": True, "officeInspection": True, "zipComments": True, "zipProfiles": list(ZIP_PROFILES),
                                        "actionRegistry": action_registry(), "conversions": media_targets(),
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})

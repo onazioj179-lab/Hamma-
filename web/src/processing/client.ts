@@ -12,6 +12,7 @@ export interface Capability {
   inspection?: boolean;
   zipVerification?: boolean;
   tarVerification?: boolean;
+  streamVerification?: boolean;
   zipSelection?: boolean;
   archiveRepack?: boolean;
   officeInspection?: boolean;
