@@ -1008,6 +1008,19 @@ class ServerTests(unittest.TestCase):
                 else:
                     self.assertFalse(job['downloadAvailable'])
 
+    def test_office_export_rejects_active_content_and_disguised_files(self):
+        from processor.tests.office_fixture import office_fixture
+
+        source = self.upload(office_fixture('docx', extra={'word/vbaProject.bin': b'fixture'}), 'active.docx')
+        with patch('processor.server.office_tools', return_value=('helper', 'pdfinfo')), \
+                patch('processor.office_pdf.office_tools', return_value=('helper', 'pdfinfo')):
+            failed = self.execute(self.job(source, operation='convert', target='office-pdf'))
+            self.assertEqual(failed['state'], 'failed')
+            self.assertIn('active or embedded Office content', failed['error'])
+            self.assertFalse(failed['downloadAvailable'])
+            plain = self.upload(b'not an Office archive', 'fake.docx')
+            self.assert_status(400, lambda: self.job(plain, operation='convert', target='office-pdf'))
+
     def test_pdf_pages_render_in_order_and_reject_invalid_input(self):
         from processor.pdf_pages import pdf_tools
         from processor.tests.pdf_fixture import two_page_pdf
