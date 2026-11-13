@@ -1,6 +1,7 @@
 """Conservative admission control; never treats memory estimates as OS enforcement."""
 import os
-from pathlib import Path
+import re
+from pathlib import Path, PurePosixPath
 import sys
 
 MIB = 1024 ** 2
@@ -27,29 +28,57 @@ def configured_limits(environ=None):
     return defaults
 
 
-def cgroup_available(root=Path('/sys/fs/cgroup'), membership=Path('/proc/self/cgroup')):
-    """Remaining v1/v2 memory on standard Linux cgroup mounts, if readable.
-
-    Check mounted root and each visible ancestor of our membership. A parent
-    limit applies even when the leaf says ``max``. This is an admission hint;
-    the kernel remains responsible for enforcing the container's memory limit.
-    """
-    candidates = {(root, 'memory.max', 'memory.current'),
-                  (root / 'memory', 'memory.limit_in_bytes', 'memory.usage_in_bytes')}
+def _memory_mounts(mountinfo):
     try:
-        for line in membership.read_text().splitlines():
-            _, controllers, relative = line.split(':', 2)
-            if controllers and 'memory' not in controllers.split(','):
+        lines = mountinfo.read_text().splitlines()
+    except OSError:
+        return
+    for line in lines:
+        before, separator, after = line.partition(' - ')
+        fields, filesystem = before.split(), after.split()
+        if not separator or len(fields) < 5 or len(filesystem) < 3:
+            continue
+        kind = filesystem[0]
+        if kind == 'cgroup2' or (kind == 'cgroup' and 'memory' in filesystem[2].split(',')):
+            mount_root, mount_path = (
+                re.sub(r'\\([0-7]{3})', lambda match: chr(int(match[1], 8)), value)
+                for value in fields[3:5]
+            )
+            yield kind, PurePosixPath(mount_root), Path(mount_path)
+
+
+def cgroup_available(root=Path('/sys/fs/cgroup'), membership=Path('/proc/self/cgroup'),
+                     mountinfo=None):
+    """Return the tightest readable memory headroom across visible cgroup ancestors."""
+    v2_names = ('memory.max', 'memory.current')
+    v1_names = ('memory.limit_in_bytes', 'memory.usage_in_bytes')
+    candidates = {(root, *v2_names), (root / 'memory', *v1_names)}
+    if mountinfo is None:
+        mountinfo = membership.with_name('mountinfo')
+    mounts = list(_memory_mounts(mountinfo))
+    try:
+        lines = membership.read_text().splitlines()
+    except OSError:
+        lines = []
+    for line in lines:
+        fields = line.split(':', 2)
+        if len(fields) != 3:
+            continue
+        _, controllers, relative = fields
+        if controllers and 'memory' not in controllers.split(','):
+            continue
+        path = PurePosixPath(relative)
+        if not path.is_absolute() or '..' in path.parts:
+            continue
+        names = v1_names if controllers else v2_names
+        kind = 'cgroup' if controllers else 'cgroup2'
+        standard = root / 'memory' if controllers else root
+        for mount_kind, mount_root, directory in [*mounts, (kind, PurePosixPath('/'), standard)]:
+            if mount_kind != kind or not path.is_relative_to(mount_root):
                 continue
-            parts = Path(relative.lstrip('/')).parts
-            if '..' in parts:
-                continue
-            base = root / 'memory' if controllers else root
-            names = ('memory.limit_in_bytes', 'memory.usage_in_bytes') if controllers else ('memory.max', 'memory.current')
+            parts = path.relative_to(mount_root).parts
             for depth in range(len(parts) + 1):
-                candidates.add((base.joinpath(*parts[:depth]), *names))
-    except (OSError, ValueError):
-        pass
+                candidates.add((directory.joinpath(*parts[:depth]), *names))
     remaining = []
     for directory, limit_name, usage_name in candidates:
         try:

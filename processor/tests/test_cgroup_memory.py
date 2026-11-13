@@ -40,3 +40,14 @@ class ContainerMemoryTests(unittest.TestCase):
         self.membership.write_text('0::/../../outside\n')
         self.write('', 'max', 0)
         self.assertIsNone(cgroup_available(self.root, self.membership))
+
+    def test_custom_mount_root_and_escaped_mountpoint(self):
+        self.membership.write_text('malformed\n0::/tenant/jobs/worker\n')
+        mount = (self.root / 'custom memory').as_posix().replace(' ', r'\040')
+        self.membership.with_name('mountinfo').write_text(
+            f'31 20 0:28 /tenant {mount} rw - cgroup2 cgroup rw\n'
+        )
+        self.write('custom memory', 4096, 100)
+        self.write('custom memory/jobs', 2048, 1024)
+        self.write('custom memory/jobs/worker', 'max', 100)
+        self.assertEqual(cgroup_available(self.root, self.membership), 1024)
