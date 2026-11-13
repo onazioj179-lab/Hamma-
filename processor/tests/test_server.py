@@ -215,7 +215,8 @@ class ServerTests(unittest.TestCase):
         self.assert_status(410, lambda: self.call(path, {"name": "original.zip"}, "POST"))
         original = self.execute(original)
         body = {"name": original["outputName"]}
-        source = self.call(path, body, "POST")
+        source = self.call(path, {}, "POST")
+        self.assertEqual(source["name"], original["outputName"])
         self.assertEqual(self.call(path, body, "POST"), source)
         self.assertEqual(self.call("/projects/default/inputs")["sources"][0]["id"], source["id"])
         other = build_opener(HTTPCookieProcessor(CookieJar()))

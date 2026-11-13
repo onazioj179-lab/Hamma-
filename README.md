@@ -38,6 +38,14 @@ the result to the current project without transferring it through the browser.
 The input keeps the original result's expiration time. This works with processor
 outputs on storage that supports hard links.
 
+Local HTTP clients can use the same handoff with
+`POST /api/process/jobs/{jobId}/reuse`. Send `X-Hamma-Request: 1`, the same
+session cookie used to create the job, and a JSON object with an existing
+`projectId` (defaults to `default`). The processor uses the output filename
+unless you supply a project-relative `name`. Pass the returned `upload` ID
+in the next job's `uploads` array. Repeating the handoff for the same job
+and project returns the existing input while the output is available.
+
 Logs: `.hamma-data/server.err.log`. Startup state: `.hamma-data/launcher.json`.
 The launcher uses `.hamma-data/lan-test` to preserve the existing LAN job store.
 

@@ -788,6 +788,7 @@ class Service:
         now = time.time()
         if record["state"] != "completed" or not record.get("downloadAvailable") or record["fileExpires"] <= now:
             raise HTTPError(410, "Output unavailable")
+        name = safe_path(record["outputName"] if name is None else name)
         output = self.store.folder(owner, job_id) / record["outputFile"]
         if not output.is_file() or output.stat().st_size != record["outputSize"]:
             raise HTTPError(410, "Output unavailable")
@@ -1884,9 +1885,8 @@ def handler(service):
                 if action == "reuse" and method == "POST":
                     body = self.json_body()
                     project_id = service.projects.identifier(body.get("projectId", "default"))
-                    name = safe_path(body.get("name"))
                     with service.lock:
-                        source = service.reuse_output(self.owner, job_id, project_id, name, self.plan)
+                        source = service.reuse_output(self.owner, job_id, project_id, body.get("name"), self.plan)
                     return self.send(200, source)
                 directory = service.store.folder(self.owner, job_id)
                 query = parse_qs(url.query)
