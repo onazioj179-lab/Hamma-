@@ -1,5 +1,6 @@
 """Verify standard archives against libarchive rather than only HAMMA itself."""
 import hashlib
+import lzma
 import os
 import shutil
 import subprocess
@@ -44,8 +45,25 @@ class ArchiveInteroperabilityTests(EngineFixture):
         (self.fixture / self.empty).mkdir()
 
     def run_bsdtar(self, *args, cwd=None):
-        result = subprocess.run([self.bsdtar, *args], cwd=cwd, capture_output=True, timeout=30)
+        return subprocess.run([self.bsdtar, *args], cwd=cwd, capture_output=True, timeout=30)
+
+    def assert_bsdtar_succeeded(self, result):
         self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+
+    def create_bsdtar_archive(self, archive, target):
+        options = FORMAT_OPTIONS[target]
+        members = ("folder", "zero.txt")
+        result = self.run_bsdtar("-cf", archive, *options, *members, cwd=self.fixture)
+        if (target == "tar.xz" and result.returncode
+                and b"Unsupported compression option --xz" in result.stderr):
+            # Older Windows inbox tar can read XZ but lacks the write filter.
+            raw = self.root / "bsdtar-plain.tar"
+            result = self.run_bsdtar("-cf", raw, *FORMAT_OPTIONS["tar"], *members, cwd=self.fixture)
+            self.assert_bsdtar_succeeded(result)
+            with raw.open("rb") as source, lzma.open(archive, "wb") as compressed:
+                shutil.copyfileobj(source, compressed)
+        else:
+            self.assert_bsdtar_succeeded(result)
 
     def test_bsdtar_extracts_hamma_archives(self):
         inputs = [{"name": name, "path": str(self.fixture / name)} for name in self.files]
@@ -56,7 +74,7 @@ class ArchiveInteroperabilityTests(EngineFixture):
                 restored = self.root / f"bsdtar-restored-{target}"
                 restored.mkdir()
                 compress(inputs, archive, target, self.context())
-                self.run_bsdtar("-xf", archive, cwd=restored)
+                self.assert_bsdtar_succeeded(self.run_bsdtar("-xf", archive, cwd=restored))
                 actual = {
                     path.relative_to(restored).as_posix(): path.read_bytes()
                     for path in restored.rglob("*") if path.is_file()
@@ -65,10 +83,10 @@ class ArchiveInteroperabilityTests(EngineFixture):
                 self.assertEqual(list((restored / self.empty).iterdir()), [])
 
     def test_hamma_verifies_and_extracts_bsdtar_archives(self):
-        for target, options in FORMAT_OPTIONS.items():
+        for target in FORMAT_OPTIONS:
             with self.subTest(target=target):
                 archive = self.root / f"bsdtar.{target}"
-                self.run_bsdtar("-cf", archive, *options, "folder", "zero.txt", cwd=self.fixture)
+                self.create_bsdtar_archive(archive, target)
                 entries = verify_archive(archive, archive.name, self.root / "report.json", self.context())
                 self.assertEqual(
                     {entry["name"]: (entry["size"], entry["sha256"])
@@ -84,7 +102,7 @@ class ArchiveInteroperabilityTests(EngineFixture):
 
     def test_hamma_extracts_only_selected_bsdtar_zip_members(self):
         archive = self.root / "selection.zip"
-        self.run_bsdtar("-cf", archive, *FORMAT_OPTIONS["zip"], "folder", "zero.txt", cwd=self.fixture)
+        self.create_bsdtar_archive(archive, "zip")
         chosen = next(iter(self.files))
         with zipfile.ZipFile(archive) as source:
             index = source.namelist().index(chosen)

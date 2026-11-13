@@ -35,7 +35,8 @@ byte-for-byte extraction for ZIP, TAR, TAR.GZ, TAR.BZ2, and TAR.XZ. It also
 checks selective ZIP extraction and verifies digests from bsdtar archives.
 Unix fixtures include a Unicode filename. The Windows fixture uses an ASCII
 filename because inbox tar could not round-trip the Unicode name under the
-tested Windows code page.
+tested Windows code page. When inbox tar lacks the XZ write filter, the fixture
+compresses its PAX archive with Python XZ before HAMMA verifies and extracts it.
 
 ## Historical baseline — 2026-11-04
 
