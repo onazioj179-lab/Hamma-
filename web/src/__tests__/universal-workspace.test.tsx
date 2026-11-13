@@ -768,9 +768,8 @@ it('keeps a hidden processor output discoverable through Available downloads aft
     await act(async () => confirmButton('Clear history').click());
     expect(host.querySelectorAll('.processing-job')).toHaveLength(0);
     expect(counts[counts.length - 1]).toBe(0);
-    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Filter by operation"]')!.click());
-    const available = [...document.querySelectorAll<HTMLElement>('[role=option]')].find(option => option.textContent === 'Available downloads')!;
-    await act(async () => available.click());
+    await act(async () => button('Downloads').click());
+    expect(button('Downloads').getAttribute('aria-pressed')).toBe('true');
     expect(host.querySelectorAll('.processing-job')).toHaveLength(1);
     expect(host.querySelector('[aria-label="Download retained.zip"]')).not.toBeNull();
   } finally { window.removeEventListener('hamma-job-count', count); }
