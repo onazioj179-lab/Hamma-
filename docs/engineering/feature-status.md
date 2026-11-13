@@ -25,7 +25,7 @@ automatically full acceptance of a feature in the new directive.
 | Smart Error Center | PARTIAL | Categories, aggregation, eligible retry and dismissal implemented |
 | Mini monitor | PARTIAL | Existing job count/events; full aggregate monitor pending |
 | Mobile repair | PARTIAL | Wrapping changes; physical device matrix pending |
-| Folder change detection | NOT STARTED | Authorized reindex/diff pending |
+| Folder change detection | PARTIAL | Operator CLI compares completed scans by metadata. Browser controls and continuous monitoring remain open. |
 | Project version history | NOT STARTED | Revision manifests/retention pending |
 | Hybrid local/cloud | NOT STARTED | Local server only |
 | Storage connectors | NOT STARTED | Requires chosen authorized provider configuration |

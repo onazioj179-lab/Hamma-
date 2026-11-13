@@ -5,7 +5,7 @@ Directories commit in bounded batches. Interrupted directories are rescanned;
 unique relative paths make replay idempotent. Links are recorded, never followed.
 Use a private database outside the scanned tree and one discoverer per database.
 """
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 import json
 import os
 from pathlib import Path
@@ -138,6 +138,52 @@ class DirectoryIndex:
                 stream.write(json.dumps(row, ensure_ascii=True) + '\n')
             after = rows[-1]['id']
 
+    def changes(self, previous, stream):
+        """Write metadata changes as JSON Lines and return counts by change type."""
+        previous = Path(previous).resolve(strict=True)
+        if previous.samefile(self.database):
+            raise ValueError('Use a different database for the baseline scan')
+        counts = dict(added=0, removed=0, changed=0)
+        with (
+            closing(sqlite3.connect(previous.as_uri() + '?mode=ro', uri=True, timeout=15)) as baseline,
+            self.connect() as current,
+        ):
+            for db in (baseline, current):
+                db.execute('BEGIN')
+                root = db.execute("SELECT value FROM metadata WHERE key='root'").fetchone()
+                if root != (str(self.root),):
+                    raise ValueError('Both scans must belong to the same root')
+                if db.execute("SELECT 1 FROM frontier WHERE done=0 LIMIT 1").fetchone():
+                    raise ValueError('Both scans must be complete before comparison')
+                if db.execute("SELECT 1 FROM entries WHERE kind='error' LIMIT 1").fetchone():
+                    raise ValueError('Both scans must be free of discovery errors before comparison')
+                db.row_factory = sqlite3.Row
+
+            query = 'SELECT path,kind,size,mtime_ns FROM entries ORDER BY path'
+            before_rows = iter(baseline.execute(query))
+            after_rows = iter(current.execute(query))
+            before, after = next(before_rows, None), next(after_rows, None)
+            while before is not None or after is not None:
+                if after is None or (before is not None and before['path'] < after['path']):
+                    change, old, new = 'removed', before, None
+                    before = next(before_rows, None)
+                elif before is None or after['path'] < before['path']:
+                    change, old, new = 'added', None, after
+                    after = next(after_rows, None)
+                else:
+                    change, old, new = 'changed', before, after
+                    before, after = next(before_rows, None), next(after_rows, None)
+                    # Ignore directory timestamps and sizes, which change with their children.
+                    if old == new or old['kind'] == new['kind'] == 'directory':
+                        continue
+                counts[change] += 1
+                stream.write(json.dumps({
+                    'path': (new if old is None else old)['path'], 'change': change,
+                    'before': dict(old) if old is not None else None,
+                    'after': dict(new) if new is not None else None,
+                }, ensure_ascii=True) + '\n')
+        return counts
+
     def summary(self):
         with self.connect() as db:
             return {'entries': int(db.execute("SELECT value FROM metadata WHERE key='entry_count'").fetchone()[0]),
@@ -152,17 +198,26 @@ def main():
     parser.add_argument('root', type=Path)
     parser.add_argument('--database', type=Path, required=True, help='Private index path outside the source tree; reuse to resume')
     parser.add_argument('--max-entries', type=int, required=True, help='Operator resource quota, not a supported-capacity claim')
+    parser.add_argument('--compare-to', type=Path, help='Compare with a completed index of the same root')
     parser.add_argument('--batch-size', type=int, default=256)
     args = parser.parse_args()
     try:
+        previous = args.compare_to
+        if previous is not None:
+            previous = previous.resolve(strict=True)
+            if args.database.exists() and previous.samefile(args.database):
+                raise ValueError('Use a different database for the baseline scan')
         index = DirectoryIndex(args.database, args.root, max_entries=args.max_entries, batch_size=args.batch_size)
         index.discover()
-        index.manifest(sys.stdout)
         summary = index.summary()
+        if previous is None:
+            index.manifest(sys.stdout)
+        else:
+            summary['changes'] = index.changes(previous, sys.stdout)
         print(json.dumps(summary), file=sys.stderr)
         if summary['errors']:
             parser.exit(1, 'Discovery finished with errors; consult manifest diagnostics.\n')
-    except (OSError, ValueError, IndexQuotaError) as error:
+    except (OSError, ValueError, IndexQuotaError, sqlite3.Error) as error:
         parser.exit(1, f'Indexing incomplete: {error}\n')
 
 
