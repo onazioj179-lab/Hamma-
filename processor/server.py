@@ -778,6 +778,63 @@ class Service:
         result["fileCount"] = record.get('fileCount', 0) if record.get('inputMode') == 'directory-index' else len(record["inputs"]) if "inputs" in record else record.get("fileCount", 0)
         return result
 
+    def reuse_output(self, owner, job_id, project_id, name, plan):
+        """Register a retained output as a recoverable project input."""
+        self.projects.get(owner, project_id)
+        record = self.store.get(owner, "job", job_id)
+        if not record:
+            raise HTTPError(404, "Job unavailable")
+        now = time.time()
+        if record["state"] != "completed" or not record.get("downloadAvailable") or record["fileExpires"] <= now:
+            raise HTTPError(410, "Output unavailable")
+        output = self.store.folder(owner, job_id) / record["outputFile"]
+        if not output.is_file() or output.stat().st_size != record["outputSize"]:
+            raise HTTPError(410, "Output unavailable")
+        size = record["outputSize"]
+        if size > plan["maxInputBytes"]:
+            raise HTTPError(413, "Output exceeds the input size limit")
+        upload_id = hashlib.sha256(f"reuse:{owner}:{project_id}:{job_id}".encode()).hexdigest()[:32]
+        upload = self.store.get(owner, "upload", upload_id)
+        folder = self.store.folder(owner, upload_id)
+        destination = folder / "input"
+        created = upload is None
+        if created:
+            if self.store.count(owner, "upload") >= plan["maxUploadFiles"]:
+                raise HTTPError(413, "Retained file limit reached")
+            if self.store.count(kind="upload") >= self.max_uploads:
+                raise HTTPError(429, "Upload capacity reached")
+            if self.reserved() + size > self.limits["storage"]:
+                raise HTTPError(507, "Storage full")
+            if self.store.reserved_bytes(owner) + size > plan["maxStorageBytes"]:
+                raise HTTPError(413, "Storage limit reached")
+            upload = {"id": upload_id, "created": now, "name": name, "size": size,
+                      "directory": False, "expires": record["fileExpires"], "offset": size,
+                      "sha256": record["sha256"], "format": detect(output)}
+        if not created and (not destination.is_file() or destination.stat().st_size != size):
+            raise HTTPError(410, "Saved output unavailable")
+        try:
+            if created:
+                folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+                # Both paths are immutable. Separate directory entries let either
+                # retention policy remove its reference without deleting the other.
+                destination.unlink(missing_ok=True)
+                try:
+                    os.link(output, destination)
+                except OSError as error:
+                    raise HTTPError(507, "Processor storage could not link this output") from error
+                self.store.put(owner, "upload", upload)
+            with destination.open("rb") as stream:
+                inspection = inspect_headers([{"head": stream.read(512).hex()}])[0]
+            self.projects.checkpoint(owner, project_id, upload_id, upload_id)
+        except Exception:
+            if created:
+                self.store.delete(owner, upload_id)
+                if folder.exists():
+                    shutil.rmtree(folder)
+            raise
+        return {"id": upload_id, "name": upload["name"], "size": size, "directory": False,
+                "upload": upload_id, "uploaded": size, "inspection": inspection}
+
     def enqueue_directory(self, owner, root, target='tar.gz', project_id='default'):
         """Trusted operator entry point only. Never call with an HTTP path field."""
         from .indexed_archive import TARGETS
@@ -1393,7 +1450,7 @@ def handler(service):
                     raise HTTPError(400, str(error)) from error
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
-                return self.send(200, {"liveJobPolling": True, "groupedWorkflows": True, "projectRecovery": True, "projectZipProfiles": True, "recoverableUploads": True,
+                return self.send(200, {"liveJobPolling": True, "groupedWorkflows": True, "projectRecovery": True, "outputReuse": True, "projectZipProfiles": True, "recoverableUploads": True,
                                        "projectSelections": True, "pagedJobSelections": True, "jobRevisions": True,
                                        "draftScope": hashlib.sha256(("hamma-draft:" + self.owner).encode()).hexdigest(),
                                        "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(),
@@ -1818,9 +1875,16 @@ def handler(service):
                 total, jobs = service.store.history_page(self.owner, offset=offset, limit=limit, search=search, state=state, sort=sort, summary=True,
                                                         include_hidden_downloads=query.get("includeHiddenDownloads", ["0"])[0] == "1")
                 return self.send(200, {"total": total, "jobs": [service.public(self.owner, j) for j in jobs]})
-            match = re.fullmatch(r"/api/process/jobs/([a-f0-9]{32})(?:/(cancel|pause|resume|retry|files|download|manifest))?", path)
+            match = re.fullmatch(r"/api/process/jobs/([a-f0-9]{32})(?:/(cancel|pause|resume|retry|files|download|manifest|reuse))?", path)
             if match:
                 job_id, action = match.groups()
+                if action == "reuse" and method == "POST":
+                    body = self.json_body()
+                    project_id = service.projects.identifier(body.get("projectId", "default"))
+                    name = safe_path(body.get("name"))
+                    with service.lock:
+                        source = service.reuse_output(self.owner, job_id, project_id, name, self.plan)
+                    return self.send(200, source)
                 directory = service.store.folder(self.owner, job_id)
                 query = parse_qs(url.query)
                 if action == "manifest" and method == "GET" and ("limit" in query or "after" in query):

@@ -9,6 +9,7 @@ import {
   Loader2,
   Settings2,
   UserRound,
+  X,
 } from 'lucide-react';
 import { useCompression } from './hooks/useCompression';
 import { useAppStore } from './store/app';
@@ -177,6 +178,7 @@ export default function App() {
           {navigation.map(({ key, label, icon: Icon }) => (
             <button
               key={key}
+              aria-label={label}
               aria-current={view === key ? 'page' : undefined}
               onClick={() => navigate(key)}
             >
@@ -208,9 +210,6 @@ export default function App() {
             <HelpCircle size={17} />
             <span>About HAMMA</span>
           </button>
-          <div className="watermark">
-            <span>By Onazi Treasure Oj</span>
-          </div>
         </div>
       </aside>
       <div className="workspace-body">
@@ -230,7 +229,7 @@ export default function App() {
           tabIndex={-1}
           className="workspace-main"
         >
-          {!termsAccepted && <aside className="processor-notice first-run-note" aria-label="File privacy"><div><strong>Your file privacy</strong><p>Standard jobs run on the computer hosting HAMMA. SPK runs in this browser. Each person has a separate file history.</p><button className="text-button" onClick={() => openSettings('privacy')}>Privacy details</button></div><button className="button secondary" onClick={() => { browserStorage.setItem('hamma-terms-v1', 'accepted'); setTermsAccepted(true); setPrivacyChoice('essential'); }}>Got it</button></aside>}
+          {!termsAccepted && <aside className="processor-notice first-run-note" aria-label="File privacy"><div><strong>Your file privacy</strong><p>Standard jobs run on the host computer. SPK runs in your browser.</p><button className="text-button" onClick={() => openSettings('privacy')}>Privacy details</button></div><button className="button secondary" onClick={() => { browserStorage.setItem('hamma-terms-v1', 'accepted'); setTermsAccepted(true); setPrivacyChoice('essential'); }}>Got it</button></aside>}
           <UniversalWorkspace
             spkReady={workerReady}
             spkBusy={isProcessing}
@@ -241,6 +240,7 @@ export default function App() {
             visible={view === 'process' || view === 'files'}
             screen={view === 'files' ? 'history' : 'workspace'}
             onHistory={() => navigate('files')}
+            onWorkspace={() => navigate('process')}
           />
               {view === 'account' && <AccountPanel />}
               {view === 'overview' && (
@@ -258,7 +258,7 @@ export default function App() {
               )}
         </main>
       </div>
-      {notice && <aside className="job-toast" aria-label="Job update"><span key={notice.message} className={notice.success ? "job-toast-success" : undefined}>{notice.message}</span><button className="button secondary" onClick={() => { navigate('files'); setNotice(null); }}>View files</button><button className="text-button" aria-label="Dismiss job update" onClick={() => setNotice(null)}>Dismiss</button></aside>}
+      {notice && <aside className="job-toast" aria-label="Job update"><span key={notice.message} className={notice.success ? "job-toast-success" : undefined}>{notice.message}</span><button className="button secondary" onClick={() => { navigate('files'); setNotice(null); }}>View files</button><button className="icon-button" aria-label="Dismiss job update" onClick={() => setNotice(null)}><X size={16} /></button></aside>}
       <span className="sr-only" role="status">
         {announcement}
       </span>

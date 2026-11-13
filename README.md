@@ -32,6 +32,12 @@ its history row; older SPK records contain metadata only. Overview includes
 retained processor jobs and browser SPK records, with measured compression savings.
 Each visitor has a separate session and history.
 
+To use a retained processor result in another operation, open **Files & History**
+and choose the **Use in workspace** plus button beside its download. HAMMA adds
+the result to the current project without transferring it through the browser.
+The input keeps the original result's expiration time. This works with processor
+outputs on storage that supports hard links.
+
 Logs: `.hamma-data/server.err.log`. Startup state: `.hamma-data/launcher.json`.
 The launcher uses `.hamma-data/lan-test` to preserve the existing LAN job store.
 

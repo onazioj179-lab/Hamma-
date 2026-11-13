@@ -49,7 +49,7 @@ export function LocalOverview({ onHistory }: {
   const latest = [...(overview?.jobs ?? []), ...local]
     .sort((a, b) => b.created - a.created || a.id.localeCompare(b.id)).slice(0, 5);
   return <section className="overview-page">
-    <div className="page-heading"><div><h1>Overview</h1><p className="page-description">Your files, activity, and measured space savings.</p></div><button className="button secondary" onClick={onHistory}>Files &amp; History <ArrowRight size={15} /></button></div>
+    <div className="page-heading"><div><h1>Overview</h1></div><button className="button secondary" onClick={onHistory}>Files &amp; History <ArrowRight size={15} /></button></div>
     {status === 'offline' && <div className="processor-notice" role="status"><span>Processor unavailable. Showing browser records and the last loaded jobs.</span><button className="button secondary" onClick={() => setAttempt(value => value + 1)}><RefreshCw size={15} /> Retry</button></div>}
     {status === 'loading' && <p className="footnote" role="status">Loading activity…</p>}
     <div className="overview-grid">
@@ -58,13 +58,13 @@ export function LocalOverview({ onHistory }: {
       <Metric label={saved >= 0 ? 'Space saved' : 'Archive overhead'} value={formatFileSize(Math.abs(saved))} detail={input ? `${(Math.abs(saved) / input * 100).toFixed(1)}% of compression input` : 'Savings appear after your first compression'} />
     </div>
     <div className="overview-panels">
-      <section className="surface settings-group"><div className="section-heading"><h2>Activity by operation</h2><p>Completed jobs across standard formats and SPK.</p></div>
+      <section className="surface settings-group"><div className="section-heading"><h2>Activity by operation</h2></div>
         <div className="operation-breakdown">{(['compress', 'extract', 'convert'] as const).map(operation => {
           const count = counts[operation];
           return <div key={operation}><span className={`operation-tag tag-${operation}`}>{operation === 'compress' ? 'Compression' : operation === 'extract' ? 'Extraction' : 'Conversion'}</span><meter aria-label={`${operation} share`} min={0} max={Math.max(1, completed)} value={count} /><strong>{count}</strong></div>;
         })}</div>
       </section>
-      <section className="surface settings-group"><div className="section-heading"><h2>Workspace status</h2><p>{status === 'ready' ? 'Processor connected' : status === 'offline' ? 'Processor disconnected' : 'Connecting to processor'}</p></div><dl className="overview-status"><dt>In progress</dt><dd>{active}</dd><dt>Needs attention</dt><dd>{failed}</dd></dl><p className="footnote">Your account or guest session determines which jobs appear here.</p></section>
+      <section className="surface settings-group"><div className="section-heading"><h2>Workspace status</h2><p>{status === 'ready' ? 'Processor connected' : status === 'offline' ? 'Processor disconnected' : 'Connecting to processor'}</p></div><dl className="overview-status"><dt>In progress</dt><dd>{active}</dd><dt>Needs attention</dt><dd>{failed}</dd></dl></section>
     </div>
     <section className="surface settings-group"><div className="section-line"><h2>Recent activity</h2><button className="text-button" onClick={onHistory}>See all <ArrowRight size={14} /></button></div>{latest.length ? <div className="overview-recent">{latest.map(job => <button key={job.id} onClick={onHistory}><span className={`operation-tag tag-${job.operation}`}>{job.operation}</span><span><strong>{job.outputName || job.name}</strong><small>{new Date(job.created * 1000).toLocaleString()}</small></span><span className={`file-state state-${job.state}`}>{job.state}</span></button>)}</div> : <p className="footnote">Add files in Workspace to start your first operation.</p>}</section>
     <p className="footnote">Totals cover retained processor jobs, browser records, and visible SPK outputs in this session. Savings count completed compressions only; extraction and conversion do not inflate them.</p>

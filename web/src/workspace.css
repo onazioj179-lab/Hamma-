@@ -1568,11 +1568,13 @@ a{color:rgb(var(--accent));text-underline-offset:3px}button,input,a{touch-action
 /* Dense desktop rhythm, with full-size touch targets on phones. */
 .hamma-shell .workspace-header { min-height:52px; padding-block:10px; }
 .hamma-shell .page-heading { margin-bottom:12px; gap:12px; }
-.hamma-shell .universal-drop { padding:12px; }
-.hamma-shell .universal-drop-icon { width:32px; height:32px; margin-bottom:6px; }
-.hamma-shell .universal-drop-icon svg { width:24px; height:24px; }
-.hamma-shell .universal-drop h2 { margin-bottom:4px; }
-.hamma-shell .universal-drop p { margin-bottom:10px; }
+.hamma-shell .universal-drop { padding:24px 12px; }
+.hamma-shell .universal-drop-icon { width:40px; height:40px; margin-bottom:12px; }
+.hamma-shell .universal-drop .drop-hint { margin:10px 0 0; }
+
+@media (hover: none) {
+  .hamma-shell .universal-drop .drop-hint { display:none; }
+}
 .hamma-shell .processing-options { margin:8px 0 12px; }
 .hamma-shell .processing-history { margin-top:12px; }
 .hamma-shell .universal-search { margin:8px 0; }

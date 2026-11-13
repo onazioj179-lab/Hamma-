@@ -96,7 +96,6 @@ export function SettingsPanel({ section, onSectionChange, busy, onHistory }: Pro
           <section className="surface settings-group">
             <div className="section-heading">
               <h2>Appearance</h2>
-              <p>Choose light, dark, or match your device.</p>
             </div>
             <div className="appearance-options">
               {[
@@ -229,15 +228,7 @@ export function SettingsPanel({ section, onSectionChange, busy, onHistory }: Pro
             <div className="about-monogram" aria-hidden="true">
               H
             </div>
-            <p className="eyebrow">HAMMA · SINGULARITY PACK</p>
-            <h2>
-              A little less space.
-              <br />A lot more intention.
-            </h2>
-            <p>
-              A free, local workspace for compression, extraction, and media
-              conversion. Built to make a technical task feel simple.
-            </p>
+            <h2>HAMMA</h2>
             <div className="creator-credit">
               <span>CREATED BY</span>
               <strong>Onazi Treasure Oj</strong>
@@ -248,7 +239,7 @@ export function SettingsPanel({ section, onSectionChange, busy, onHistory }: Pro
               target="_blank"
               rel="noreferrer"
             >
-              Explore the project <ArrowUpRight size={14} />
+              View source <ArrowUpRight size={14} />
             </a>
           </section>
           <section className="surface settings-group">

@@ -13,8 +13,9 @@ remaining release acceptance work.
 3. Continue validating installed codecs, archive password and selective
    extraction paths, lossless policy, and hardware fallback. Existing
    verified formats do not cover the full matrix.
-4. Local ZIP preview and archive comments are implemented. Broader previews,
-   safe duplicate-output reuse, an encrypted recovery vault, persistent
+4. Local ZIP preview and archive comments are implemented. Retained processor
+   results can feed another job through an owner-scoped project input.
+   Broader previews, reuse of identical results across jobs, an encrypted recovery vault, persistent
    presets, browser folder change detection, revision history, SDK, and
    scoped temporary sharing remain open.
 5. Select and configure authorized storage connectors, compute nodes, and

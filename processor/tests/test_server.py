@@ -208,6 +208,28 @@ class ServerTests(unittest.TestCase):
             function()
         self.assertEqual(raised.exception.code, status, raised.exception.read().decode())
 
+    def test_completed_output_can_be_reused_after_original_is_deleted(self):
+        original = self.job(self.upload(b"retained bytes", "original.txt"))
+        path = "/jobs/" + original["id"] + "/reuse"
+        self.call("/projects/default", {}, "PUT")
+        self.assert_status(410, lambda: self.call(path, {"name": "original.zip"}, "POST"))
+        original = self.execute(original)
+        body = {"name": original["outputName"]}
+        source = self.call(path, body, "POST")
+        self.assertEqual(self.call(path, body, "POST"), source)
+        self.assertEqual(self.call("/projects/default/inputs")["sources"][0]["id"], source["id"])
+        other = build_opener(HTTPCookieProcessor(CookieJar()))
+        self.call("/projects/default", {}, "PUT", client=other)
+        self.assert_status(404, lambda: self.call(path, body, "POST", client=other))
+        self.call("/jobs/" + original["id"] + "/files", method="DELETE")
+        self.assert_status(410, lambda: self.call(path, body, "POST"))
+        extracted = self.job({"id": source["upload"]}, operation="extract", recoverable=True)
+        extracted = self.execute(extracted)
+        self.assertEqual(extracted["state"], "completed")
+        with zipfile.ZipFile(io.BytesIO(self.call(extracted["download"].removeprefix("/api/process"), raw=True))) as archive:
+            self.assertEqual(archive.read("original.txt"), b"retained bytes")
+        self.assertEqual(self.call("/projects/default/inputs")["sources"], [])
+
     def test_restart_preparation_is_instance_bound_and_keeps_queued_jobs_intact(self):
         queued = self.job()
         self.assert_status(409, lambda: self.call("/prepare-restart", method="POST", headers={"X-Hamma-Instance": "wrong"}))

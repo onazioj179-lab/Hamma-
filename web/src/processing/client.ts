@@ -4,6 +4,7 @@ export interface Capability {
   groupedWorkflows?: boolean;
   projectZipProfiles?: boolean;
   projectRecovery?: boolean;
+  outputReuse?: boolean;
   recoverableUploads?: boolean;
   projectSelections?: boolean;
   jobRevisions?: boolean;
