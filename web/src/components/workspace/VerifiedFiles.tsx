@@ -34,7 +34,9 @@ export function VerifiedFiles({ jobId }: { jobId: string }) {
     <summary>Verified files</summary>
     {open && (error ? <p role="alert">{error} <button className="text-button" onClick={() => setAttempt(value => value + 1)}>Retry</button></p>
       : page ? <>
-        <ul>{page.files.map(file => <li key={file.id}>{file.name}{file.directory ? '/' : ` · ${file.size.toLocaleString()} bytes`}</li>)}</ul>
+        <ul>{page.files.map(file => <li key={file.id}>{file.directory
+          ? file.name.replace(/\/?$/, '/')
+          : `${file.name} · ${file.size.toLocaleString()} bytes`}</li>)}</ul>
         <div className="button-row">
           <button className="text-button" disabled={cursors.length === 1} onClick={() => setCursors(previous => previous.slice(0, -1))}>Previous files</button>
           <span role="status">{page.files.length ? `${(offset + 1).toLocaleString()}–${(offset + page.files.length).toLocaleString()} of ${page.total.toLocaleString()}` : 'No files'}</span>
