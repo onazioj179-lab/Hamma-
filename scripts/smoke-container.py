@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import random
 import re
+import subprocess
 import sys
 import time
 from urllib.error import HTTPError
@@ -16,12 +17,13 @@ from zipfile import ZipFile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from processor.tests.pdf_fixture import two_page_pdf
+from processor.tests.office_fixture import office_fixture
 
 
-def check(base, state_path=None, after_restart=False):
+def check(base, state_path=None, after_restart=False, after_restore=False):
     cookie_path = state_path.with_suffix(".cookies") if state_path else None
     cookies = LWPCookieJar(cookie_path)
-    if after_restart:
+    if after_restart or after_restore:
         cookies.load(ignore_discard=True)
     client = build_opener(ProxyHandler({}), HTTPCookieProcessor(cookies))
 
@@ -59,7 +61,11 @@ def check(base, state_path=None, after_restart=False):
         assert first["total"] == last["total"] == 2
         assert first["sha256"] == last["sha256"] == job["sha256"]
         assert last["nextCursor"] is None
-        return [(entry["name"], entry["sha256"]) for entry in first["files"] + last["files"]]
+        entries = first["files"] + last["files"]
+        full = call(url)
+        assert full["sha256"] == job["sha256"]
+        assert full["files"] == [{key: value for key, value in entry.items() if key != "id"} for entry in entries]
+        return [(entry["name"], entry["sha256"]) for entry in entries]
 
     def download(operation, target, uploads, **options):
         job = post("/api/process/jobs", {"operation": operation, "target": target, "uploads": uploads, **options})
@@ -78,11 +84,22 @@ def check(base, state_path=None, after_restart=False):
     with build_opener(ProxyHandler({})).open(base + "/api/process/ready", timeout=10) as response:
         assert json.load(response) == {"ready": True}
         assert response.headers.get("Set-Cookie") is None
-    if after_restart:
+    if after_restart or after_restore:
         state = json.loads(state_path.read_text(encoding="utf-8"))
+        assert call("/api/process/health")["instance"] != state["instance"]
         job = call("/api/process/jobs/" + state["job"])
-        data = call(job["download"], raw=True)
+        data = call(state["download"], raw=True)
         assert job["sha256"] == hashlib.sha256(data).hexdigest() == state["sha256"]
+        # Resume from the middle of the existing archive after service recreation.
+        offset = len(data) // 2
+        request = Request(base + job["download"], headers={
+            "X-Hamma-Request": "1",
+            "Range": f"bytes={offset}-",
+        })
+        with client.open(request, timeout=10) as response:
+            assert response.status == 206
+            assert response.headers["Content-Range"] == f"bytes {offset}-{len(data) - 1}/{len(data)}"
+            assert response.read() == data[offset:]
         assert_owner_only(job)
         assert check_manifest(job) == [tuple(entry) for entry in state["manifest"]]
         assert call("/api/process/settings")["fileRetention"] == "7d"
@@ -101,7 +118,8 @@ def check(base, state_path=None, after_restart=False):
         with ZipFile(BytesIO(chained)) as archive:
             assert {name: hashlib.sha256(archive.read(name)).hexdigest()
                     for name in archive.namelist()} == dict(state["manifest"])
-        print("Restart preserved retention, the upload checkpoint, and a reusable output.")
+        operation = "Backup restore" if after_restore else "Restart"
+        print(f"{operation} preserved retention, the signed download, the upload checkpoint, and a reusable output.")
         return
 
     page = call("/", raw=True)
@@ -109,6 +127,16 @@ def check(base, state_path=None, after_restart=False):
     bundle = re.search(rb'<script[^>]+src="(/assets/[^"]+\.js)"', page)
     assert bundle and call(bundle[1].decode("ascii"), raw=True)
     capabilities = call("/api/process/capabilities")
+    assert capabilities["officePdf"], capabilities
+    for extension in ("docx", "pptx"):
+        office_job, office_pdf = download("convert", "office-pdf",
+                                         [upload("office." + extension, office_fixture(extension))])
+        assert office_job["outputName"] == "office.pdf", office_job
+        assert office_pdf.startswith(b"%PDF-")
+        text = subprocess.run(["pdftotext", "-", "-"], input=office_pdf,
+                              capture_output=True, check=True, timeout=10).stdout
+        assert b"HAMMA verified export" in b" ".join(text.split()), (extension, text)
+        assert_owner_only(office_job)
     assert capabilities["pdfPages"], capabilities
     _, rendered = download("convert", "pdf-pages", [upload("fixture.pdf", two_page_pdf())])
     with ZipFile(BytesIO(rendered)) as pages:
@@ -157,8 +185,17 @@ def check(base, state_path=None, after_restart=False):
         result = call("/api/process/uploads/" + source["id"], b"start", "PUT",
                       {"Upload-Offset": "0"})
         assert result["offset"] == 5, result
+        deadline = time.monotonic() + 10
+        while True:
+            health = call("/api/process/health")
+            if not health["activeJobs"]:
+                break
+            assert time.monotonic() < deadline, "Worker did not finish before backup"
+            time.sleep(.2)
         cookies.save(ignore_discard=True)
         state_path.write_text(json.dumps({"job": restored_job["id"],
+                                          "instance": health["instance"],
+                                          "download": restored_job["download"],
                                           "sha256": restored_job["sha256"],
                                           "manifest": manifest,
                                           "reused": reused["upload"],
@@ -170,8 +207,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("base")
     parser.add_argument("--state", type=Path)
-    parser.add_argument("--after-restart", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--after-restart", action="store_true")
+    mode.add_argument("--after-restore", action="store_true")
     args = parser.parse_args()
-    if args.after_restart and not args.state:
-        parser.error("--after-restart requires --state")
-    check(args.base.rstrip("/"), args.state, args.after_restart)
+    if (args.after_restart or args.after_restore) and not args.state:
+        parser.error("Restart and restore checks require --state")
+    check(args.base.rstrip("/"), args.state, args.after_restart, args.after_restore)

@@ -200,6 +200,8 @@ class IndexedJobRoutes(unittest.TestCase):
         first = self.call('/jobs/' + job['id'] + '/manifest?limit=1')
         second = self.call('/jobs/' + job['id'] + '/manifest?limit=1&after=' + first['nextCursor'])
         self.assertNotEqual(first['files'][0]['id'], second['files'][0]['id'])
+        self.assertIsNone(second['nextCursor'])
+        self.assertIsNone(self.call('/jobs/' + job['id'] + '/manifest')['nextCursor'])
         stranger = build_opener(HTTPCookieProcessor(CookieJar()))
         self.assert_status(404, lambda: self.call('/jobs/' + job['id'] + '/manifest', client=stranger))
         payload = self.call(result['download'].removeprefix('/api/process'), raw=True)

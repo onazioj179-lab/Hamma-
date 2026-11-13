@@ -516,16 +516,18 @@ export function UniversalWorkspace({ visible, screen, onHistory, onWorkspace, sp
     (!source.inspection && source.file?.type.startsWith('video/')));
   const canExtract = chosen.length > 0 && chosen.every(source => /\.spk$/i.test(source.name) ? !!source.file && !source.resume && !!spkReady && projectId === 'default' : resolveActions([source], capability).extract);
   const canRepack = capability?.archiveRepack && singleSource && !/\.spk$/i.test(singleSource.name) && canExtract;
-  const canInspectOffice = capability?.officeInspection && singleSource && !singleSource.directory &&
+  const officeSource = singleSource && !singleSource.directory &&
     (!singleSource.inspection || singleSource.inspection.error || singleSource.inspection.format === 'zip') &&
     /\.(docx|xlsx|pptx)$/i.test(singleSource.name);
+  const canInspectOffice = capability?.officeInspection && officeSource;
+  const canExportOffice = capability?.officePdf && officeSource && /\.(docx|pptx)$/i.test(singleSource.name);
   const canRenderPdf = capability?.pdfPages && singleSource && !singleSource.directory &&
     (signature === 'pdf' || !signature && /\.pdf$/i.test(singleSource.name));
   const conversionTarget = actions.conversions.includes(conversion) ? conversion : actions.conversions[0];
   const comment = archiveTarget === 'zip' && capability?.zipComments ? zipComment : '';
-  const submit = async (operation: Operation, options: { zipIndexes?: number[]; repack?: boolean; pdfPages?: boolean; planned?: ExecutionPlan } = {}) => {
-    const { zipIndexes, repack, pdfPages, planned } = options;
-    const selectedConversion = pdfPages ? 'pdf-pages' : conversionTarget;
+  const submit = async (operation: Operation, options: { zipIndexes?: number[]; repack?: boolean; documentTarget?: 'pdf-pages' | 'office-pdf'; planned?: ExecutionPlan } = {}) => {
+    const { zipIndexes, repack, documentTarget, planned } = options;
+    const selectedConversion = documentTarget || conversionTarget;
     const inputs = planned ? planned.groups.flatMap(group => group.sources) : chosen;
     if (accountChanging()) return;
     if (submitting.current || mutation.current || recovering || capability?.projectRecovery && !recoveryReady || spkBusy || !inputs.length) return;
@@ -533,7 +535,8 @@ export function UniversalWorkspace({ visible, screen, onHistory, onWorkspace, sp
       setError('Select the original files for recovered selections, or deselect them before running this action.');
       return;
     }
-    if (pdfPages && !canRenderPdf || operation === 'convert' && !selectedConversion) return;
+    if (documentTarget === 'pdf-pages' && !canRenderPdf || documentTarget === 'office-pdf' && !canExportOffice ||
+        operation === 'convert' && !selectedConversion) return;
     if (operation === 'compress' && !planned && /[^ -~]/.test(comment)) {
       setError('ZIP comments accept printable ASCII characters only.');
       return;
@@ -606,9 +609,10 @@ export function UniversalWorkspace({ visible, screen, onHistory, onWorkspace, sp
         },
         queue: async (group, uploads) => {
           const compression = group.operation === 'compress';
-          const conversionOptions = group.operation === 'convert' ? { qualityMode: group.qualityMode, metadataPolicy: group.metadataPolicy } : {};
+          const conversionOptions = group.operation === 'convert' && documentTarget !== 'office-pdf'
+            ? { qualityMode: group.qualityMode, metadataPolicy: group.metadataPolicy } : {};
           const nested = group.operation === 'extract' && !zipIndexes && !repack && group.recursive
-            || group.operation === 'convert' && !pdfPages && !planned && group.recursive;
+            || group.operation === 'convert' && !documentTarget && !planned && group.recursive;
           const profiles = !planned && compression && group.target === 'zip' && capability.zipProfiles?.includes(zipProfile) && zipProfile !== 'balanced'
             ? { zipProfile } : {};
           const archiveComment = !planned && compression ? comment : '';
@@ -967,12 +971,16 @@ export function UniversalWorkspace({ visible, screen, onHistory, onWorkspace, sp
         </div>}
         {canRenderPdf && <div className="zip-inspection">
           <button className="button secondary" disabled={busy || recovering || spkBusy || offline || selectedNeedsOriginal}
-            onClick={() => void submit('convert', { pdfPages: true })}><File size={16} /> Render PDF pages</button>
+            onClick={() => void submit('convert', { documentTarget: 'pdf-pages' })}><File size={16} /> Render PDF pages</button>
           <p className="footnote">Downloads one PNG per page in a ZIP. Up to 100 pages.</p>
         </div>}
         {verificationLabel && <div className="zip-inspection">
           <button className="button secondary" disabled={busy || recovering || spkBusy || offline || selectedNeedsOriginal} onClick={() => void submit('verify')}><ShieldCheck size={16} /> {verificationLabel}</button>
           <p className="footnote">Uploads the file and returns a report with SHA-256 digests.</p>
+        </div>}
+        {canExportOffice && <div className="zip-inspection">
+          <button className="button secondary" disabled={busy || recovering || spkBusy || offline || selectedNeedsOriginal}
+            onClick={() => void submit('convert', { documentTarget: 'office-pdf' })}><File size={16} /> Export as PDF</button>
         </div>}
       </section>}
       {capability?.inspection && sources.length > 0 && <p className="footnote">File detection sends the first 512 bytes to your processor. Processor jobs upload full files. ZIP inspection runs in this browser.</p>}

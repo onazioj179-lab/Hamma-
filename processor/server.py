@@ -51,6 +51,7 @@ from .catalog import FileCatalog
 from .capabilities import action_registry, inspect_headers, media_targets, single_file_archives
 from .file_parts import PART_SIZES, join_file, split_file
 from .pdf_pages import TARGET as PDF_PAGES, pdf_tools, render_pdf
+from .office_pdf import TARGET as OFFICE_PDF, INPUT_LIMIT as OFFICE_INPUT_LIMIT, SUFFIXES as OFFICE_SUFFIXES, convert_office, office_tools
 from .media_policy import H264_TARGET
 from .oauth import OAuth
 
@@ -395,6 +396,14 @@ class Store:
             """, (owner, job_id, after, after + limit)).fetchall()
         return metadata, [{**json.loads(row['entry']), 'id': row['position'] + 1} for row in rows]
 
+    def full_manifest(self, owner, job_id):
+        record = self.get(owner, "job", job_id)
+        if not record or not record.get("downloadAvailable") or record["fileExpires"] <= time.time():
+            raise HTTPError(410, "Verified manifest unavailable")
+        if record.get("manifestStorage") == "paged":
+            return self.full_paged_manifest(owner, job_id)
+        return record.get("manifest", [])
+
     def full_paged_manifest(self, owner, job_id):
         with self.connect() as db:
             rows = db.execute("""SELECT data FROM job_manifest_entries
@@ -552,7 +561,7 @@ def run_job(root, owner, job_id, limits, isolated=False):
             last_report[0] = now
 
     ctx = Context(directory, limits, report)
-    output_extension = "mp4" if job["target"] == H264_TARGET else job["target"]
+    output_extension = {H264_TARGET: "mp4", OFFICE_PDF: "pdf"}.get(job["target"], job["target"])
     output = directory / ("output." + output_extension)
     try:
         current = store.patch(owner, "job", job_id, expected_states=ACTIVE,
@@ -628,6 +637,9 @@ def run_job(root, owner, job_id, limits, isolated=False):
             custom_output_name, manifest = join_file(Path(inputs[0]["path"]), output, ctx)
         elif job["operation"] == "convert" and job["target"] == PDF_PAGES:
             manifest = render_pdf(Path(inputs[0]["path"]), output, ctx)
+        elif job["operation"] == "convert" and job["target"] == OFFICE_PDF:
+            item = inputs[0]
+            manifest = convert_office(Path(item["path"]), item["name"], output, ctx)
         else:
             manifest = convert(Path(inputs[0]["path"]), output, job["target"], ctx,
                                job.get('qualityMode', 'lossless'), job.get('metadataPolicy', 'strip'))
@@ -1477,7 +1489,8 @@ def handler(service):
                                        "draftScope": hashlib.sha256(("hamma-draft:" + self.owner).encode()).hexdigest(),
                                        "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(),
                                        "inspection": True, "zipVerification": True, "tarVerification": True, "streamVerification": True, "zipSelection": True,
-                                       "archiveRepack": True, "officeInspection": True, "pdfPages": all(pdf_tools()), "zipComments": True, "zipProfiles": list(ZIP_PROFILES),
+                                       "archiveRepack": True, "officeInspection": True, "pdfPages": all(pdf_tools()),
+                                       "officePdf": bool(office_tools()), "zipComments": True, "zipProfiles": list(ZIP_PROFILES),
                                        "filePartSizesMiB": list(PART_SIZES),
                                        "actionRegistry": action_registry(), "conversions": media_targets(),
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
@@ -1657,7 +1670,7 @@ def handler(service):
                 if staged is None and (not isinstance(ids, list) or not ids or len(ids) > service.limits["files"] or not all(isinstance(i, str) for i in ids) or len(set(ids)) != len(ids)):
                     raise HTTPError(400, "Invalid file selection")
                 if (operation == "compress" and target not in archive_formats() or operation == "extract" and target not in ("zip", "zip-deflate") or
-                    operation == "convert" and target not in (*MEDIA, PDF_PAGES) or operation in ("verify", "inspect") and target != "json" or
+                    operation == "convert" and target not in (*MEDIA, PDF_PAGES, OFFICE_PDF) or operation in ("verify", "inspect") and target != "json" or
                     operation == "split" and target != "zip" or operation == "join" and target != "file" or
                     operation not in ("compress", "extract", "convert", "verify", "inspect", "split", "join")):
                     raise HTTPError(400, "Unsupported operation")
@@ -1674,6 +1687,8 @@ def handler(service):
                     raise HTTPError(400, "Part size applies only when splitting")
                 if target == PDF_PAGES and not all(pdf_tools()):
                     raise HTTPError(400, "PDF rendering requires Poppler")
+                if target == OFFICE_PDF and not office_tools():
+                    raise HTTPError(400, "Office export requires the Linux document renderer")
                 paged_admission = staged is not None and count > 100
                 if paged_admission and target != "zip" and not target.startswith("tar"):
                     raise HTTPError(400, "Choose one file for this format")
@@ -1842,6 +1857,11 @@ def handler(service):
                     raise HTTPError(400, "Choose a file")
                 if operation == "split" and inputs[0]["size"] <= part_mib * BLOCK:
                     raise HTTPError(400, "Choose a part size smaller than the file")
+                if target == OFFICE_PDF:
+                    if inputs[0]["format"] != "zip" or Path(inputs[0]["name"]).suffix.lower() not in OFFICE_SUFFIXES:
+                        raise HTTPError(400, "Choose a DOCX or PPTX file")
+                    if inputs[0]["size"] > OFFICE_INPUT_LIMIT:
+                        raise HTTPError(413, "Office files must be 32 MiB or smaller")
 
                 with service.lock:
                     # Another request may have queued this job while hashing.
@@ -1909,7 +1929,7 @@ def handler(service):
                     return self.send(200, source)
                 directory = service.store.folder(self.owner, job_id)
                 query = parse_qs(url.query)
-                if action == "manifest" and method == "GET" and ("limit" in query or "after" in query):
+                if action == "manifest" and method == "GET":
                     after = int(query.get("after", [0])[0])
                     limit = min(1000, max(1, int(query.get("limit", [100])[0])))
                     if not 0 <= after <= 2**63 - 1 - limit:
@@ -1919,10 +1939,15 @@ def handler(service):
                         raise HTTPError(404, "Job unavailable")
                     if not metadata["available"] or (metadata["expires"] or 0) <= time.time():
                         raise HTTPError(410, "Verified manifest unavailable")
+                    paginated = "limit" in query or "after" in query
+                    if not paginated and metadata["mode"] != "directory-index":
+                        return self.send(200, {"id": job_id, "sha256": metadata["sha256"],
+                                               "files": service.store.full_manifest(self.owner, job_id)})
                     if metadata["mode"] == "directory-index":
                         from .indexed_archive import manifest_page
-                        files = manifest_page(directory / "discovery.sqlite3", after, limit)
-                        more = len(files) == limit
+                        files = manifest_page(directory / "discovery.sqlite3", after, limit, lookahead=True)
+                        more = len(files) > limit
+                        files = files[:limit]
                     else:
                         more = after + len(files) < metadata["total"]
                     return self.send(200, {"id": job_id, "sha256": metadata["sha256"], "files": files,
@@ -1939,19 +1964,6 @@ def handler(service):
                     if not record.get("downloadAvailable") or record["fileExpires"] <= time.time():
                         raise HTTPError(410, "File expired")
                     return self.download(directory / record["outputFile"], record["outputName"], record["sha256"])
-                if action == "manifest" and method == "GET":
-                    if record.get('inputMode') == 'directory-index':
-                        if not record.get('downloadAvailable') or record['fileExpires'] <= time.time():
-                            raise HTTPError(410, 'Verified manifest unavailable')
-                        from .indexed_archive import manifest_page
-                        query = parse_qs(url.query)
-                        limit = min(1000, max(1, int(query.get('limit', [100])[0])))
-                        rows = manifest_page(directory / 'discovery.sqlite3', int(query.get('after', [0])[0]), limit)
-                        return self.send(200, {'id': job_id, 'sha256': record.get('sha256'), 'files': rows,
-                                               'total': record['fileCount'], 'nextCursor': str(rows[-1]['id']) if len(rows) == limit else None})
-                    files = (service.store.full_paged_manifest(self.owner, job_id)
-                             if record.get("manifestStorage") == "paged" else record.get("manifest", []))
-                    return self.send(200, {"id": job_id, "sha256": record.get("sha256"), "files": files})
                 if action is None and method == "GET":
                     return self.send(200, service.public(self.owner, record))
                 if method == "DELETE" and action in (None, "files"):

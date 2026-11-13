@@ -43,6 +43,17 @@ the queue and encountered connection resets during upload. With two worker
 slots available, a fresh 16-session run completed 48 jobs in 98.32 seconds,
 with 32 exact-byte downloads and 16 expected corrupt-input failures.
 
+A Windows 11 run on revision `beeb2cb` independently checked every member of an
+indexed TAR.GZ containing 10,000 files and 312.5 MiB of deterministic random
+input. Directory discovery, archive creation and internal verification took
+626.9 seconds. Independent verification ran outside that interval. Peak traced
+Python allocations were 3.42 MiB. The trace excludes SQLite and native
+allocations and the OS cache. The benchmark ran the worker in-process and
+leaves browser upload scale and whole-process memory unverified.
+
+Reproduce with
+`python -m processor.indexed_benchmark --files 10000 --bytes-per-file 32768 --output report.json`.
+
 On Python 3.13 the standard TAR reader avoids retaining a separate TarInfo
 cache. New verified outputs commit ordered manifest rows together with the
 completed job. The browser reads those rows by cursor, and existing inline
@@ -79,6 +90,14 @@ restoring the pre-upgrade snapshot to a separate directory. Start the previous
 version on the same port with that restored copy and verify the known download
 and a new job. Keep the upgraded directory for diagnosis. Use disposable
 fixtures for the drill.
+
+The Linux container workflow also rehearses backup restoration. It archives
+the stopped service's data volume, validates the archive checksum, and
+restores into a fresh Compose volume. The restored SQLite store must pass
+`PRAGMA quick_check`. The HTTP checks reuse the original guest cookie and
+signed download, compare the paged manifest, check retention and owner
+boundaries, and complete the upload from its backed-up offset. The workflow
+uses the same application image for the source and restored service.
 
 Reproduce the two-owner worker test with
 `python -m processor.scheduler_benchmark --multiple-owners --output report.json`.

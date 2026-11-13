@@ -19,6 +19,7 @@ export interface Capability {
   filePartSizesMiB?: number[];
   officeInspection?: boolean;
   pdfPages?: boolean;
+  officePdf?: boolean;
   zipProfiles?: string[];
   zipComments?: boolean;
   singleFileArchives?: string[];

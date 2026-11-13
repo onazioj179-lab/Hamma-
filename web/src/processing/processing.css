@@ -121,3 +121,5 @@
   .source-row { gap:8px; }
   .source-row > svg { flex-shrink:0; }
 }
+.verified-file-pagination .text-button, .verified-files [role="alert"] .text-button { min-height: 44px; }
+.verified-file-pagination [aria-disabled="true"] { opacity: .5; cursor: default; }
