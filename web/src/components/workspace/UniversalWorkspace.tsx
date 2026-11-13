@@ -1,6 +1,7 @@
 import { inspectSources } from '../../processing/inspection';
 import { allocateSourcePaths } from '../../processing/selection';
 import { ZipInspection } from './ZipInspection';
+import { EncryptedZip, UnlockZip } from './EncryptedZip';
 import { VerifiedFiles } from './VerifiedFiles';
 import { ProjectRecovery, defaultProjectSettings, needsOriginal, readSelection, saveSelection } from '../../processing/projects';
 import { requiresLossyConsent, resolveActions, resolveArchiveTargets } from '../../processing/actions';
@@ -868,6 +869,11 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
         {visible && zipSource?.file && <ZipInspection key={projectId + ':' + zipSource.id} file={zipSource.file}
           disabled={busy || recovering || spkBusy || offline}
           onExtract={capability?.zipSelection ? indexes => void submit('extract', { zipIndexes: indexes }) : undefined} />}
+        {visible && zipSource?.file && <UnlockZip key={projectId + ':unlock:' + zipSource.id}
+          archive={zipSource.file} disabled={busy || recovering || !!spkBusy} />}
+        {visible && archiveTarget === 'zip' && chosen.some(source => source.file) && chosen.every(source => source.file || source.directory) &&
+          <EncryptedZip key={projectId + ':encrypt:' + chosen.map(source => source.id).join(',')}
+            sources={chosen} disabled={busy || recovering || !!spkBusy} />}
         {canRepack && <div className="zip-inspection">
           <button className="button secondary" disabled={busy || recovering || spkBusy || offline}
             onClick={() => void submit('extract', { repack: true })}><FileArchive size={16} /> Repack as ZIP</button>
