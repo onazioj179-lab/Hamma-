@@ -78,6 +78,14 @@ version on the same port with that restored copy and verify the known download
 and a new job. Keep the upgraded directory for diagnosis. Use disposable
 fixtures for the drill.
 
+The Linux container workflow also rehearses backup restoration. It archives
+the stopped service's data volume, validates the archive checksum, and
+restores into a fresh Compose volume. The restored SQLite store must pass
+`PRAGMA quick_check`. The HTTP checks reuse the original guest cookie and
+signed download, compare the paged manifest, check retention and owner
+boundaries, and complete the upload from its backed-up offset. The workflow
+uses the same application image for the source and restored service.
+
 Reproduce the two-owner worker test with
 `python -m processor.scheduler_benchmark --multiple-owners --output report.json`.
 The one-slot fixture checks dispatch order, owner boundaries and exact bytes.
