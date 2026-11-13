@@ -620,7 +620,9 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       }
       const succeeded = new Set(chosenJobs.filter((_, index) => results[index].status === 'fulfilled').map(job => job.id));
       setJobSelected(previous => new Set([...previous].filter(id => !succeeded.has(id))));
-      if (!offline) await refresh(true).catch(() => {});
+      if (!offline) await refresh(true).catch(caught => {
+        if (!failed.length) setError(caught instanceof Error ? caught.message : 'Could not refresh the queue.');
+      });
     } finally { mutation.current = false; setActing(false); }
   };
   const confirmBulk = (operation: '' | 'files') => {
