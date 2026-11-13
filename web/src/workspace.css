@@ -1247,7 +1247,7 @@ progress::-moz-progress-bar {
     inset: auto 0 0;
     width: 100%;
     height: calc(66px + env(safe-area-inset-bottom));
-    padding: 7px 8px calc(7px + env(safe-area-inset-bottom));
+    padding: 7px max(8px, env(safe-area-inset-right)) calc(7px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
     display: grid;
     grid-template-columns: none;
     grid-template-rows: minmax(0, 1fr);
@@ -1292,8 +1292,8 @@ progress::-moz-progress-bar {
     padding-bottom: calc(66px + env(safe-area-inset-bottom));
   }
   .workspace-header {
-    height: 54px;
-    padding: 0 20px;
+    height: calc(54px + env(safe-area-inset-top));
+    padding-inline: max(20px, env(safe-area-inset-left)) max(20px, env(safe-area-inset-right));
     justify-content: space-between;
   }
   .mobile-brand {
@@ -1618,8 +1618,15 @@ a{color:rgb(var(--accent));text-underline-offset:3px}button,input,a{touch-action
 
 /* Keep shared page content and notifications above the home indicator. */
 @media (max-width: 650px) {
-  .hamma-shell .workspace-main { padding-bottom: calc(100px + env(safe-area-inset-bottom)); }
-  .hamma-shell .job-toast { bottom: calc(90px + env(safe-area-inset-bottom)); }
+  .hamma-shell .workspace-header { padding-top: calc(10px + env(safe-area-inset-top)); }
+  .hamma-shell .workspace-main {
+    padding-inline: max(12px, env(safe-area-inset-left)) max(12px, env(safe-area-inset-right));
+    padding-bottom: calc(100px + env(safe-area-inset-bottom));
+  }
+  .hamma-shell .job-toast {
+    bottom: calc(90px + env(safe-area-inset-bottom));
+    inset-inline: max(12px, env(safe-area-inset-left)) max(12px, env(safe-area-inset-right));
+  }
 }
 
 /* Keep form entry readable without automatic mobile focus zoom. */
