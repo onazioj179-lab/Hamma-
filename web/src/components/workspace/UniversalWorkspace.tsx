@@ -2,6 +2,7 @@ import { inspectSources } from '../../processing/inspection';
 import { allocateSourcePaths } from '../../processing/selection';
 import { ZipInspection } from './ZipInspection';
 import { EncryptedZip, UnlockZip } from './EncryptedZip';
+import { SplitZip } from './SplitZip';
 import { VerifiedFiles } from './VerifiedFiles';
 import { ProjectRecovery, defaultProjectSettings, needsOriginal, readSelection, saveSelection } from '../../processing/projects';
 import { requiresLossyConsent, resolveActions, resolveArchiveTargets } from '../../processing/actions';
@@ -883,6 +884,10 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
           onExtract={capability?.zipSelection ? indexes => void submit('extract', { zipIndexes: indexes }) : undefined} />}
         {visible && zipSource?.file && <UnlockZip key={projectId + ':unlock:' + zipSource.id}
           archive={zipSource.file} disabled={busy || recovering || !!spkBusy} />}
+        {visible && chosen.some(source => source.file) && chosen.every(source => source.file || source.directory) &&
+          <SplitZip key={projectId + ':volumes:' + chosen.map(source => source.id).join(',')}
+            sources={chosen} disabled={busy || recovering || !!spkBusy ||
+              chosen.some(source => source.directory) && chosen.some(source => /\.z\d{2,3}$/i.test(source.name))} />}
         {visible && archiveTarget === 'zip' && chosen.some(source => source.file) && chosen.every(source => source.file || source.directory) &&
           <EncryptedZip key={projectId + ':encrypt:' + chosen.map(source => source.id).join(',')}
             sources={chosen} disabled={busy || recovering || !!spkBusy} />}

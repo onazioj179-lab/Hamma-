@@ -1,4 +1,4 @@
-import { BlobReader, BlobWriter, ZipReader, ZipWriter, ERR_INVALID_AUTHENTICATION_CODE,
+import { BlobReader, BlobWriter, ZipReader, ZipWriter, type FileEntry, ERR_INVALID_AUTHENTICATION_CODE,
   ERR_INVALID_PASSWORD } from '@zip.js/zip.js';
 import { archivePath } from '../utils/archiveFiles';
 import { inspectZip } from './zip-inspection';
@@ -7,7 +7,7 @@ export const encryptedZipLimit = 128 * 1024 * 1024;
 export const encryptedZipFileLimit = 1000;
 type Input = { name: string; file: Blob | null; directory: boolean };
 
-function checkNames(names: string[]) {
+export function checkZipPaths(names: string[]) {
   const files = new Set<string>();
   const seen = new Set<string>();
   for (const name of names) {
@@ -30,6 +30,22 @@ function checkNames(names: string[]) {
   }
 }
 
+export async function readVerifiedZipEntry(entry: FileEntry, signal: AbortSignal, password?: string) {
+  const chunks: BlobPart[] = [];
+  let written = 0;
+  await entry.getData(new WritableStream<Uint8Array>({
+    write(chunk) {
+      signal.throwIfAborted();
+      written += chunk.length;
+      if (written > entry.uncompressedSize) throw new Error('Invalid ZIP entry size.');
+      chunks.push(new Uint8Array(chunk));
+    },
+  }), { password, checkAuthenticationCode: true, checkCrc32: true, checkOverlappingEntry: true,
+    checkLocalFilename: true, signal });
+  if (written !== entry.uncompressedSize) throw new Error('Invalid ZIP entry size.');
+  return new Blob(chunks);
+}
+
 function checkLimits(sizes: number[]) {
   if (sizes.length > encryptedZipFileLimit || sizes.some(size => !Number.isSafeInteger(size) || size < 0)
       || sizes.reduce((sum, size) => sum + size, 0) > encryptedZipLimit) {
@@ -40,7 +56,7 @@ function checkLimits(sizes: number[]) {
 export async function createEncryptedZip(inputs: Input[], password: string, signal: AbortSignal) {
   checkLimits(inputs.map(input => input.file?.size ?? 0));
   const names = inputs.map(input => input.directory ? input.name.replace(/\/?$/, '/') : input.name);
-  checkNames(names);
+  checkZipPaths(names);
   if (!password || !inputs.some(input => input.file) || inputs.some(input => !input.directory && !input.file)) {
     throw new Error('Choose files and enter an archive password.');
   }
@@ -104,7 +120,7 @@ export async function unlockEncryptedZip(input: Blob, password: string, signal: 
     }
     if (entries.some(entry => entry.symlink)) throw new Error('The ZIP contains a symbolic link.');
     checkLimits(entries.map(entry => entry.uncompressedSize));
-    checkNames(entries.map(entry => entry.filename));
+    checkZipPaths(entries.map(entry => entry.filename));
     const writer = new ZipWriter(new BlobWriter('application/zip'), { useWebWorkers: false });
     for (const entry of entries) {
       signal.throwIfAborted();
@@ -112,19 +128,8 @@ export async function unlockEncryptedZip(input: Blob, password: string, signal: 
         await writer.add(entry.filename, undefined, { directory: true, signal });
         continue;
       }
-      const chunks: BlobPart[] = [];
-      let written = 0;
-      await entry.getData(new WritableStream<Uint8Array>({
-        write(chunk) {
-          signal.throwIfAborted();
-          written += chunk.length;
-          if (written > entry.uncompressedSize) throw new Error('Invalid ZIP entry size.');
-          chunks.push(new Uint8Array(chunk));
-        },
-      }), { password, checkAuthenticationCode: true, checkCrc32: true, checkOverlappingEntry: true,
-        checkLocalFilename: true, signal });
-      if (written !== entry.uncompressedSize) throw new Error('Invalid ZIP entry size.');
-      await writer.add(entry.filename, new BlobReader(new Blob(chunks)), { level: 0, signal });
+      const blob = await readVerifiedZipEntry(entry, signal, password);
+      await writer.add(entry.filename, new BlobReader(blob), { level: 0, signal });
     }
     const output = await writer.close();
     const restored = new ZipReader(new BlobReader(output), { useWebWorkers: false });
