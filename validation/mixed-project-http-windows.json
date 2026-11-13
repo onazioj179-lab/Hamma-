@@ -1,0 +1,98 @@
+{
+  "owners": 4,
+  "rounds": 3,
+  "projects": 24,
+  "jobs": 28,
+  "resumedUploads": 12,
+  "resumedBytes": 150994944,
+  "mixedBatchInputBytes": 214794240,
+  "foreignAccessDenied": 8,
+  "sha256AndRangeVerified": true,
+  "seconds": 168.353,
+  "runs": [
+    [
+      {
+        "target": "zip",
+        "inputBytes": 17899520,
+        "quickJobSeconds": 6.692,
+        "batchJobSeconds": 21.843
+      },
+      {
+        "target": "tar.gz",
+        "inputBytes": 17899520,
+        "quickJobSeconds": 4.111,
+        "batchJobSeconds": 26.315
+      },
+      {
+        "target": "tar.zst",
+        "inputBytes": 17899520,
+        "quickJobSeconds": 6.737,
+        "batchJobSeconds": 39.473
+      }
+    ],
+    [
+      {
+        "target": "zip",
+        "inputBytes": 17899520,
+        "quickJobSeconds": 6.489,
+        "batchJobSeconds": 8.827
+      },
+      {
+        "target": "tar.gz",
+        "inputBytes": 17899520,
+        "quickJobSeconds": 15.065,
+        "batchJobSeconds": 19.97
+      },
+      {
+        "target": "tar.zst",
+        "inputBytes": 17899520,
+        "quickJobSeconds": 14.531,
+        "batchJobSeconds": 34.804
+      }
+    ],
+    [
+      {
+        "target": "zip",
+        "inputBytes": 17899520,
+        "quickJobSeconds": 4.517,
+        "batchJobSeconds": 14.334
+      },
+      {
+        "target": "tar.gz",
+        "inputBytes": 17899520,
+        "quickJobSeconds": 10.696,
+        "batchJobSeconds": 21.86
+      },
+      {
+        "target": "tar.zst",
+        "inputBytes": 17899520,
+        "quickJobSeconds": 10.916,
+        "batchJobSeconds": 35.705
+      }
+    ],
+    [
+      {
+        "target": "zip",
+        "inputBytes": 17899520,
+        "quickJobSeconds": 4.108,
+        "batchJobSeconds": 8.741
+      },
+      {
+        "target": "tar.gz",
+        "inputBytes": 17899520,
+        "quickJobSeconds": 13.038,
+        "batchJobSeconds": 18.781
+      },
+      {
+        "target": "tar.zst",
+        "inputBytes": 17899520,
+        "quickJobSeconds": 13.675,
+        "batchJobSeconds": 27.256
+      }
+    ]
+  ],
+  "platform": "Windows-11-10.0.26300-SP0",
+  "python": "3.13.14",
+  "native": "0.1.0",
+  "zstandard": "1.5.7"
+}
