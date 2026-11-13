@@ -9,16 +9,18 @@ vi.hoisted(() => { Object.defineProperty(window, 'matchMedia', { configurable: t
 let host: HTMLDivElement, root: Root;
 let saved: SavedProject | undefined;
 let checkpoint: { id: string; upload: string; name: string; size: number; directory: boolean } | undefined;
+let selections: { id: string; name: string; size: number; directory: boolean }[];
 let offset: number, chunkWrites: number, jobAttempts: number;
 let rejectJob: boolean;
 const uploadId = 'c'.repeat(32);
-const caps = { groupedWorkflows: true, projectRecovery: true, recoverableUploads: false, draftScope: '', archives: ['zip'], conversions: [], version: 1, processing: 'local', limits: { files: 5000, input: 1e9, expanded: 1e9, seconds: 30 } };
+const caps = { groupedWorkflows: true, projectRecovery: true, projectSelections: false, recoverableUploads: false, draftScope: '', archives: ['zip'], conversions: [], version: 1, processing: 'local', limits: { files: 5000, input: 1e9, expanded: 1e9, seconds: 30 } };
 const ok = (data: unknown) => ({ ok: true, status: 200, json: async () => data });
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   useAppStore.setState({ sessionOutputs: {}, recentArchives: [], history: [], result: null });
   saved = undefined; checkpoint = undefined; offset = 0; chunkWrites = 0; jobAttempts = 0; rejectJob = true;
   caps.recoverableUploads = false;
+  caps.projectSelections = false; selections = [];
   caps.draftScope = '';
   localStorage.clear();
   host = document.createElement('div'); document.body.append(host); root = createRoot(host);
@@ -31,7 +33,15 @@ beforeEach(() => {
       saved = { id: 'default', revision: (saved?.revision || 0) + 1, created: 1, updated: 1, settings: body.settings };
       return ok(saved);
     }
-    if (url.includes('/projects/default/inputs?')) return ok({ sources: checkpoint ? [{ ...checkpoint, uploaded: offset, inspection: { format: 'file', conversions: [], extract: false } }] : [], total: checkpoint ? 1 : 0, scanned: checkpoint ? 1 : 0, unavailable: 0, nextCursor: null });
+    if (url.endsWith('/projects/default/inputs') && init?.method === 'PUT') {
+      selections = body.selections;
+      return ok({ saved: true });
+    }
+    if (url.includes('/projects/default/inputs?')) {
+      const sources = selections.map(source => ({ ...source, pending: true }));
+      return ok({ sources: checkpoint ? [...sources, { ...checkpoint, uploaded: offset, inspection: { format: 'file', conversions: [], extract: false } }] : sources,
+        total: sources.length + Number(!!checkpoint), scanned: sources.length + Number(!!checkpoint), unavailable: 0, nextCursor: null });
+    }
     if (/\/projects\/default\/inputs\/[a-f0-9]{32}$/.test(url) && init?.method === 'PUT') {
       expect(caps.recoverableUploads).toBe(false);
       checkpoint = { id: url.split('/').pop()!, upload: body.upload, name: 'resume.txt', size: 3, directory: false };
@@ -41,6 +51,7 @@ beforeEach(() => {
       if (caps.recoverableUploads) {
         expect(body.projectId).toBe('default');
         expect(body.sourceId).toMatch(/^[a-f0-9]{32}$/);
+        selections = selections.filter(source => source.id !== body.sourceId);
         checkpoint = { id: body.sourceId, upload: uploadId, name: body.name, size: body.size, directory: body.directory };
       }
       return ok({ id: uploadId });
@@ -177,6 +188,23 @@ it('restores an unstarted selection and requires the original before uploading',
   expect(localStorage.getItem('hamma-selection:test-owner:default')).toBeNull();
 });
 
+it('preserves a deselected browser draft when the processor also restores it', async () => {
+  caps.draftScope = 'test-owner';
+  caps.projectSelections = true;
+  saved = { id: 'default', revision: 1, created: 1, updated: 1, settings: defaultProjectSettings };
+  const draft = { id: 'b'.repeat(32), name: 'draft.txt', size: 3, directory: false };
+  selections = [draft];
+  localStorage.setItem('hamma-selection:test-owner:default', JSON.stringify({
+    expires: Date.now() + 60_000, sources: [draft], selected: [],
+  }));
+
+  await render();
+
+  const restored = host.querySelector<HTMLInputElement>('[aria-label="Select draft.txt"]');
+  expect(restored).not.toBeNull();
+  expect(restored?.checked).toBe(false);
+});
+
 it('lets the user remove a recovered entry whose upload has already expired', async () => {
   saved = { id: 'default', revision: 1, created: 1, updated: 1, settings: defaultProjectSettings };
   checkpoint = { id: 'a'.repeat(32), upload: uploadId, name: 'expired.txt', size: 3, directory: false };
@@ -247,4 +275,31 @@ it('refuses an incompatible restored group choice before submitting any work', a
   const run = Array.from(host.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Run grouped workflow')!;
   expect(run.disabled).toBe(true);
   expect(jobAttempts).toBe(0);
+});
+
+it('reopens an unstarted selection and queues it only after the original is picked', async () => {
+  caps.projectSelections = true;
+  caps.recoverableUploads = true;
+  rejectJob = false;
+  await render();
+  const original = new File(['abc'], 'draft.txt');
+  const input = host.querySelector<HTMLInputElement>('[aria-label="Add files to queue"]')!;
+  Object.defineProperty(input, 'files', { value: [original] });
+  await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })));
+  expect(selections).toHaveLength(1);
+  expect(chunkWrites).toBe(0);
+  expect(checkpoint).toBeUndefined();
+  await act(async () => root.unmount());
+  root = createRoot(host);
+  await render();
+  expect(host.textContent).toContain('Restored 1 selection from before upload.');
+  await act(async () => compress().click());
+  expect(jobAttempts).toBe(0);
+  const picker = host.querySelector<HTMLInputElement>('[aria-label="Select original file for draft.txt"]')!;
+  Object.defineProperty(picker, 'files', { value: [original] });
+  await act(async () => picker.dispatchEvent(new Event('change', { bubbles: true })));
+  await act(async () => compress().click());
+  expect(jobAttempts).toBe(1);
+  expect(chunkWrites).toBe(1);
+  expect(selections).toEqual([]);
 });

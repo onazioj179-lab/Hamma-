@@ -20,6 +20,8 @@ import { directoryPicker, readFolder } from '../../processing/folders';
 import '../../processing/processing.css';
 
 type Props = { visible: boolean; screen: 'workspace' | 'files' | 'history'; onHistory: () => void; spkResult?: { outputName: string; downloadUrl: string | null; historyId?: string; historyCreated?: number; originalSize?: number; resultSize?: number; operation?: 'compress' | 'extract' } | null; onSpkDownload?: () => void; spkReady?: boolean; spkBusy?: boolean; spkStatus?: ReactNode; onSpkSelect?: (files: File[], restore: boolean) => Promise<boolean> };
+const needsOriginal = (source: Source) =>
+  !source.directory && !source.file && (!source.upload || source.resume);
 const terminal = (job: Job) => !activeJob(job);
 const canRetry = (job: Job) => ['failed', 'interrupted', 'cancelled'].includes(job.state) && job.errorInfo?.retryEligible !== false;
 type SourceFailure = { message: string; retry?: Omit<TaskGroup, 'sources'> };
@@ -40,6 +42,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const [projectIds, setProjectIds] = useState(['default']);
   const recovery = useRef(new ProjectRecovery());
   const recoveryLoaded = useRef(false);
+  const selectionWrites = useRef<Promise<void> | null>(null);
   const currentProject = useRef('default');
   const recoveryController = useRef<AbortController | null>(null);
   const [recovering, setRecovering] = useState(false);
@@ -145,7 +148,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     void task.finally(() => { if (refreshController.current === controller) refreshFlight.current = null; }).catch(() => {});
     return task;
   }, []);
-  const restoreProject = useCallback(async (id: string, scope?: string) => {
+  const restoreProject = useCallback(async (id: string, scope?: string, includeSelections = false) => {
     const saved = recovery.current.get(id);
     if (!saved && !scope) return;
     recoveryController.current?.abort();
@@ -158,7 +161,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     setMetadataPolicy(settings.metadataPolicy); setRecursive(settings.recursive);
     setGroupActions(settings.groupActions || {});
     try {
-      const result = saved ? await recovery.current.sources(id, controller.signal) : { sources: [], unavailable: 0 };
+      const result = saved ? await recovery.current.sources(id, controller.signal, includeSelections) : { sources: [], unavailable: 0 };
       if (!mounted.current || controller.signal.aborted || generation !== ownerGeneration.current || currentProject.current !== id) return;
       const key = scope ? `hamma-selection:${scope}:${id}` : '';
       const draft = key ? readSelection(key) : { sources: [], selected: [] };
@@ -172,11 +175,16 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
         const pending = draft.sources.filter(source => !existing.has(source.id) && !uploadedIds.has(source.id));
         return [...current, ...allocateSourcePaths(current, pending)];
       });
-      setSelected(previous => new Set([...previous, ...draft.selected, ...uploadedIds]));
+      const localIds = new Set(draft.sources.map(source => source.id));
+      const restoredSelection = result.sources
+        .filter(source => !source.pending || !localIds.has(source.id))
+        .map(source => source.id);
+      setSelected(previous => new Set([...previous, ...draft.selected, ...restoredSelection]));
       setSelectionKey(key);
-      const incomplete = result.sources.filter(source => source.resume).length;
-      const complete = result.sources.length - incomplete;
+      const complete = result.sources.filter(source => source.upload && !source.resume).length;
+      const pending = result.sources.filter(source => source.pending).length;
       setRecoveryNotice([
+        pending ? `Restored ${pending} ${pending === 1 ? "selection" : "selections"} from before upload.` : '',
         complete ? `Recovered ${complete} uploaded ${complete === 1 ? 'file' : 'files'}.` : '',
         result.unavailable ? `Add the original files again for ${result.unavailable} expired or unavailable uploads.` : '',
       ].filter(Boolean).join(' '));
@@ -204,7 +212,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
           const projects = await recovery.current.list();
           if (generation !== ownerGeneration.current || accountChanging() || !mounted.current) return;
           setProjectIds(previous => [...new Set([...previous, ...projects.map(project => project.id)])]);
-          await restoreProject(currentProject.current, caps.draftScope);
+          await restoreProject(currentProject.current, caps.draftScope, caps.projectSelections);
           if (generation === ownerGeneration.current && mounted.current) setRecoveryReady(true);
         } catch (caught) {
           if (generation === ownerGeneration.current) recoveryLoaded.current = false;
@@ -229,7 +237,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     return () => { clearTimeout(timer); controller.abort(); };
   }, [capability, recoveryReady, recovering, busy, projectId, target, conversion, qualityMode, metadataPolicy, recursive, groupActions, zipProfile]);
   useEffect(() => {
-    const guard = (event: Event) => { if (busy || recovering || spkBusy || submitting.current || mutation.current || preparingDelete.current || savingRetention) event.preventDefault(); };
+    const guard = (event: Event) => { if (busy || recovering || spkBusy || selectionWrites.current || submitting.current || mutation.current || preparingDelete.current || savingRetention) event.preventDefault(); };
     const clear = () => {
       ownerGeneration.current += 1;
       recoveryController.current?.abort(); recoveryController.current = null; recovery.current = new ProjectRecovery(); recoveryLoaded.current = false;
@@ -290,8 +298,25 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     for (const source of incoming) {
       if (capability && source.size > capability.limits.input) { setError(source.name + ' exceeds the ' + formatFileSize(capability.limits.input) + ' upload limit. Choose a smaller file.'); return; }
     }
-    setError(''); setSources(previous => [...previous, ...allocateSourcePaths(previous, incoming)]);
-    setSelected(previous => new Set([...previous, ...incoming.map(s => s.id)]));
+    const allocated = allocateSourcePaths(liveSources.current, incoming);
+    setError('');
+    if (capability?.projectSelections && recoveryReady && !accountChanging()) {
+      const ownerRecovery = recovery.current;
+      const settings = { target, conversion, qualityMode, metadataPolicy, recursive, groupActions, ...(capability.projectZipProfiles ? { zipProfile } : {}) };
+      const write = (selectionWrites.current ?? Promise.resolve()).then(async () => {
+        if (!ownerRecovery.get(projectId)) await ownerRecovery.save(projectId, settings);
+        await ownerRecovery.remember(projectId, allocated);
+      }).catch(() => {
+        if (mounted.current && recovery.current === ownerRecovery) {
+          setError('Some selections could not be saved for reopening. They are still available in this tab.');
+        }
+      });
+      selectionWrites.current = write;
+      void write.finally(() => { if (selectionWrites.current === write) selectionWrites.current = null; });
+      allocated.forEach(source => { source.pending = true; });
+    }
+    setSources(previous => [...previous, ...allocated]);
+    setSelected(previous => new Set([...previous, ...allocated.map(source => source.id)]));
   };
   const choose = (files: File[]) => add(files.map(file => ({ id: randomId(), file, name: file.webkitRelativePath || file.name, size: file.size, directory: false })));
   const reselect = (source: Source, file: File) => {
@@ -360,7 +385,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     setProjectId(id); setPage(0); setScroll(0); setError(''); setJobSelected(new Set());
     currentProject.current = id; setRecoveryNotice('');
     setSelectionKey(draft && capability?.draftScope ? `hamma-selection:${capability.draftScope}:${id}` : '');
-    if (capability?.projectRecovery && !draft) void restoreProject(id, capability.draftScope).catch(caught => setError(caught instanceof Error ? caught.message : 'Project could not be restored.'));
+    if (capability?.projectRecovery && !draft) void restoreProject(id, capability.draftScope, capability.projectSelections).catch(caught => setError(caught instanceof Error ? caught.message : 'Project could not be restored.'));
   };
   const createProject = async () => {
     if (busy || recovering || spkBusy || projectIds.length >= 20 || accountChanging()) return;
@@ -375,7 +400,8 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     finally { setBusy(false); }
   };
   const chosen = useMemo(() => sources.filter(source => selected.has(source.id)), [sources, selected]);
-  const missingOriginals = sources.filter(source => !source.file && !source.directory && (!source.upload || source.resume)).length;
+  const missingSelections = sources.filter(source => needsOriginal(source) && !source.resume).length;
+  const incompleteUploads = sources.filter(source => source.resume && needsOriginal(source)).length;
   const singleSource = chosen.length === 1 ? chosen[0] : undefined;
   const zipSource = singleSource && !singleSource.directory && (singleSource.inspection && !singleSource.inspection.error
     ? singleSource.inspection.format === 'zip' : /\.zip$/i.test(singleSource.name)) ? singleSource : null;
@@ -404,7 +430,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     const inputs = planned ? planned.groups.flatMap(group => group.sources) : chosen;
     if (accountChanging()) return;
     if (submitting.current || recovering || capability?.projectRecovery && !recoveryReady || spkBusy || !inputs.length) return;
-    if (inputs.some(source => !source.file && !source.directory && (!source.upload || source.resume))) {
+    if (inputs.some(needsOriginal)) {
       setError('Select the original files for recovered selections, or deselect them before running this action.');
       return;
     }
@@ -426,6 +452,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       submitting.current = true; setBusy(true); setError('');
       const completed = new Set<string>();
       try {
+        await selectionWrites.current;
         if (operation === 'compress') {
           if (await onSpkSelect(chosen.map(source => source.file!), false)) chosen.forEach(source => completed.add(source.id));
         } else {
@@ -434,6 +461,11 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : 'SPK operation could not finish.');
       } finally {
+        for (const source of chosen) {
+          if (!completed.has(source.id) || !source.pending) continue;
+          try { await recovery.current.forgetSelection(projectId, source); }
+          catch { setError('SPK finished, but a saved selection could not be cleared.'); }
+        }
         if (completed.size) { setPage(0); setQuery(''); setFilter(''); setSort('newest'); }
         setSources(previous => previous.filter(source => !completed.has(source.id)));
         setSelected(previous => new Set([...previous].filter(id => !completed.has(id))));
@@ -447,6 +479,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     const generation = ownerGeneration.current;
     const submitted = new Set<string>();
     try {
+      await selectionWrites.current;
       if (capability.projectRecovery) await recovery.current.save(projectId, { target, conversion, qualityMode, metadataPolicy, recursive, ...(capability.projectZipProfiles ? { zipProfile } : {}), ...(capability.groupedWorkflows ? { groupActions } : {}) }, controller.signal);
       const report = operation === 'verify' || operation === 'inspect';
       const jobTarget = report ? 'json' : operation === 'extract' ? repack ? 'zip-deflate' : 'zip' : operation === 'compress' ? archiveTarget : conversionTarget;
@@ -458,6 +491,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
           if (source.resume) throw new ProcessorError('Resume this upload with a processor action, or add the file separately for SPK restoration.', 400);
           if (!onSpkSelect || !spkReady || !source.file) throw new Error('SPK engine is not ready.');
           if (!await onSpkSelect([source.file], true)) throw new Error('SPK restoration did not complete.');
+          if (source.pending) await recovery.current.forgetSelection(projectId, source);
         },
         prepare: async source => {
           const recoverOnUpload = capability.projectRecovery && capability.recoverableUploads;
@@ -629,16 +663,22 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     const captured = chosen.map(source => ({ ...source }));
     const uploaded = captured.filter(source => source.upload);
     const remove = async () => {
-      const outcomes = await Promise.allSettled(uploaded.map(async source => {
-        try { await request('/uploads/' + source.upload, { method: 'DELETE' }); }
-        catch (caught) { if (!(caught instanceof ProcessorError) || ![404, 410].includes(caught.status)) throw caught; }
+      await selectionWrites.current;
+      const outcomes = await Promise.allSettled(captured.map(async source => {
+        try {
+          if (source.upload) await request('/uploads/' + source.upload, { method: 'DELETE' });
+          if (source.pending || source.upload && capability?.projectSelections) {
+            await recovery.current.forgetSelection(projectId, source);
+          }
+        } catch (caught) {
+          if (!(caught instanceof ProcessorError) || ![404, 410].includes(caught.status)) throw caught;
+        }
       }));
-      const removed = new Set(captured.filter(source => !source.upload).map(source => source.id));
-      outcomes.forEach((outcome, index) => { if (outcome.status === 'fulfilled') removed.add(uploaded[index].id); });
+      const removed = new Set(captured.filter((_, index) => outcomes[index].status === 'fulfilled').map(source => source.id));
       setSources(previous => previous.filter(source => !removed.has(source.id)));
       setSelected(previous => new Set([...previous].filter(id => !removed.has(id))));
       const failed = outcomes.filter(outcome => outcome.status === 'rejected').length;
-      if (failed) setError(`${failed} uploaded ${failed === 1 ? 'item' : 'items'} could not be deleted. They remain selected so you can retry.`);
+      if (failed) setError(`${failed} ${failed === 1 ? 'item' : 'items'} could not be deleted. They remain selected so you can retry.`);
     };
     if (!uploaded.length) { void remove(); return; }
     setConfirmation({
@@ -692,7 +732,8 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       <div className="project-toolbar"><label>Project<SelectField aria-label="Current project" value={projectId} disabled={busy || recovering || !!spkBusy || acting || readingFolder} onChange={switchProject}>{projectIds.map((id, index) => <option key={id} value={id}>{id === 'default' ? 'Project 1' : 'Project ' + (index + 1)}</option>)}</SelectField></label><button className="button secondary" disabled={busy || recovering || !!spkBusy || acting || readingFolder || projectIds.length >= 20} onClick={() => void createProject()}>New project</button></div>
       {recovering && <p className="footnote" role="status">Restoring uploaded files…</p>}
       {recoveryNotice && <p className="footnote" role="status">{recoveryNotice} Files stay available until their upload retention expires.</p>}
-      {missingOriginals > 0 && <p className="footnote" role="status">Select the original files to continue {missingOriginals} {missingOriginals === 1 ? 'upload' : 'uploads'}.</p>}
+      {missingSelections > 0 && <p className="footnote" role="status">Select the original files for {missingSelections} {missingSelections === 1 ? 'saved selection' : 'saved selections'}.</p>}
+      {incompleteUploads > 0 && <p className="footnote" role="status">Select the original files to continue {incompleteUploads} {incompleteUploads === 1 ? 'upload' : 'uploads'}.</p>}
       <div className={`surface universal-drop ${dragging ? 'drag-active' : ''}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); if (busy || recovering || spkBusy) return; void droppedSources(event.dataTransfer, capability?.limits.files).then(add).catch(caught => setError(caught.message)); }}>
         <div className="universal-drop-icon"><FileArchive size={30} strokeWidth={1.2} /></div><h2>Add your files</h2><p>Drop files or folders</p>
         <details className="universal-picker"><summary className="button primary">+ Add Files or Folders</summary><div className="button-row"><button className="button secondary" disabled={busy || recovering || spkBusy} onClick={() => input.current?.click()}><Plus size={16} /> Add Files</button><button className="button secondary" disabled={busy || recovering || spkBusy} onClick={() => void chooseFolder()}><FolderPlus size={16} /> Add Folder</button></div></details>
@@ -709,7 +750,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
               <input type="checkbox" aria-label={`Select ${source.name}`} checked={selected.has(source.id)} onChange={() => toggleSource(source.id)} />
               <File size={19} strokeWidth={1.5} />
               <div><strong title={source.name}>{source.name}</strong><span>{source.directory ? 'Empty folder' : formatFileSize(source.size) + (capability?.inspection ? '  -  ' + (source.inspection?.error || source.inspection?.format || 'Detecting - ') : '')}</span></div>
-              {!source.directory && (!source.upload && !source.file || source.resume && (source.uploaded ?? 0) < source.size)
+              {!source.directory && (source.pending || !source.upload && !source.file || source.resume && (source.uploaded ?? 0) < source.size)
                 ? <label className="file-state source-reselect" title={sourceErrors[source.id]?.message}>
                   <input type="file" className="sr-only" aria-label={`Select original file for ${source.name}`} disabled={busy || recovering || !!spkBusy} onChange={event => {
                     const file = event.currentTarget.files?.[0];

@@ -163,6 +163,7 @@ class Store:
                                    ((owner, job_id, item["id"]) for item in input_rows))
             if project_input is not None:
                 project_id, source_id = project_input
+                db.execute("DELETE FROM project_selections WHERE owner=? AND project_id=? AND source_id=?", (owner, project_id, source_id))
                 db.execute("INSERT OR REPLACE INTO project_inputs VALUES (?,?,?,?,?)",
                            (owner, project_id, source_id, record["id"], record["created"]))
 
@@ -1293,7 +1294,7 @@ def handler(service):
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
                 return self.send(200, {"liveJobPolling": True, "groupedWorkflows": True, "projectRecovery": True, "projectZipProfiles": True, "recoverableUploads": True,
-                                       "pagedJobSelections": True,
+                                       "projectSelections": True, "pagedJobSelections": True,
                                        "draftScope": hashlib.sha256(("hamma-draft:" + self.owner).encode()).hexdigest(),
                                        "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(),
                                        "inspection": True, "zipVerification": True, "tarVerification": True, "zipSelection": True,
@@ -1350,6 +1351,21 @@ def handler(service):
                 project_id, input_route, source_id = project_route.groups()
                 is_inputs = input_route is not None
                 body = self.json_body() if method == 'PUT' else None
+                if is_inputs and not source_id and method == 'PUT':
+                    items = body.get('selections')
+                    if not isinstance(items, list) or not 1 <= len(items) <= 100:
+                        raise HTTPError(400, 'Invalid project selections')
+                    selections = []
+                    for item in items:
+                        if (not isinstance(item, dict) or not isinstance(item.get('id'), str) or
+                            not re.fullmatch(r'[a-f0-9]{32}', item['id']) or type(item.get('directory')) is not bool or
+                            type(item.get('size')) is not int or not 0 <= item['size'] <= self.plan['maxInputBytes'] or
+                            (item['directory'] and item['size'] != 0)):
+                            raise HTTPError(400, 'Invalid project selection')
+                        selections.append((item['id'], safe_path(item.get('name'), item['directory']), item['size'], item['directory']))
+                    with service.lock:
+                        service.projects.remember_selections(self.owner, project_id, selections)
+                    return self.send(200, {'saved': True})
                 with service.lock:
                     if not is_inputs and method == 'GET':
                         result = service.projects.get(self.owner, project_id)
@@ -1358,7 +1374,8 @@ def handler(service):
                     elif is_inputs and not source_id and method == 'GET':
                         query = parse_qs(url.query)
                         result = service.projects.inputs(self.owner, project_id, query.get('after', [''])[0],
-                                                        int(query.get('limit', [100])[0]), query.get('includeIncomplete') == ['1'])
+                                                        int(query.get('limit', [100])[0]), query.get('includeIncomplete') == ['1'],
+                                                        query.get('includeSelections') == ['1'])
                     elif is_inputs and source_id and method == 'PUT':
                         service.projects.checkpoint(self.owner, project_id, source_id, body.get('upload'))
                         result = {'saved': True}

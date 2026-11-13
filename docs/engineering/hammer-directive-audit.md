@@ -10,7 +10,7 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 
 ## HAMMA web backlog
 
-1. **Validate recovery across mixed batches.** Exercise unstarted, interrupted, and completed uploads together after reopening a project on supported browsers.
+1. **Verify selection recovery under load.** The workspace saves unstarted selections as project metadata, prompts for original files, and pages those selections alongside upload checkpoints. Exercise mixed batches with interrupted and completed uploads at workload scale.
 2. **Scale browser jobs.** Browser submissions above 100 uploads stage their selection in SQLite pages and submit by reference. The processor still materializes the sealed selection and job input list, and browser folder discovery retains its source list. Extend bounded traversal through the worker and validate multi-owner scheduling and per-file retry under sustained load.
 3. **Validate physical devices.** Test mobile and foldable layouts, folder picking, touch, keyboard access, reduced motion, and recovery on real devices.
 4. **Isolate processing workers.** Enforce filesystem and network isolation, verify tenant boundaries, and expand dependency advisories, SBOM coverage, and fuzz tests.
