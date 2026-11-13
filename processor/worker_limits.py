@@ -6,6 +6,10 @@ import sys
 class WorkerIsolationError(RuntimeError):
     """The operating system did not install the required worker filter."""
 
+    def __init__(self, message, *, public_message='Linux worker network isolation is unavailable'):
+        super().__init__(message)
+        self.public_message = public_message
+
 
 def restrict_worker_sockets():
     """Disable Linux worker socket creation and socket server/client setup."""

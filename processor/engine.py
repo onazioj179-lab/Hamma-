@@ -24,6 +24,7 @@ import unicodedata
 import zipfile
 import zlib
 
+from .codec_sandbox import check_codec_isolation, codec_command
 from .media_policy import AUDIO_TARGETS, H264_TARGET, validate_conversion_options
 
 BLOCK = 1024 * 1024
@@ -761,8 +762,8 @@ def probe(path: Path, count_frames=False):
     if count_frames:
         args += ["-count_frames"]
     args += ["-show_entries", "stream=index,codec_type,codec_name,sample_fmt,sample_rate,channels,bits_per_sample,bits_per_raw_sample,pix_fmt,width,height,duration,nb_frames,nb_read_frames:stream_disposition=attached_pic:stream_tags:format=format_name,duration:format_tags", "-of", "json", str(path)]
-    proc = subprocess.run(args, capture_output=True, timeout=30)
-    if proc.returncode or len(proc.stdout) > BLOCK:
+    proc = subprocess.run(codec_command(args, path), capture_output=True, timeout=30)
+    if check_codec_isolation(proc.returncode) or len(proc.stdout) > BLOCK:
         raise ProcessingError("Unsupported media")
     return json.loads(proc.stdout)
 
@@ -785,7 +786,7 @@ def decoded_digest(path: Path, ctx: Context, *, stream, encoding, container):
     else:
         args += ['-c:a', encoding]
     args += ['-f', container, 'pipe:1']
-    process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    process = subprocess.Popen(codec_command(args, path), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     digest, size = hashlib.sha256(), 0
     try:
         while chunk := process.stdout.read(BLOCK):
@@ -794,7 +795,7 @@ def decoded_digest(path: Path, ctx: Context, *, stream, encoding, container):
             if size > ctx.limits['expanded']:
                 raise ProcessingError('Decoded media verification limit reached')
             digest.update(chunk)
-        if process.wait() or not size:
+        if check_codec_isolation(process.wait()) or not size:
             raise ProcessingError('Decoded media verification failed')
         return size, digest.hexdigest()
     finally:
@@ -812,7 +813,7 @@ def verify_media_decode(path: Path, ctx: Context):
             "-map", "0:v?", "-map", "0:a?", "-threads", "2",
             "-abort_on", "empty_output+empty_output_stream",
             "-f", "null", "-"]
-    with subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as process:
+    with subprocess.Popen(codec_command(args, path), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as process:
         try:
             while True:
                 ctx.check()
@@ -821,7 +822,7 @@ def verify_media_decode(path: Path, ctx: Context):
                     break
                 except subprocess.TimeoutExpired:
                     continue
-            if status:
+            if check_codec_isolation(status):
                 raise ProcessingError("Converted media could not be decoded")
         finally:
             if process.poll() is None:
@@ -950,7 +951,7 @@ def convert(source: Path, output: Path, target: str, ctx: Context, quality_mode=
         args += ["-fs", str(remaining), "-progress", "pipe:1", str(destination)]
         log = ctx.root / "media.log"
         with log.open("wb") as stderr:
-            process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=stderr, text=True)
+            process = subprocess.Popen(codec_command(args, source, ctx.root), stdout=subprocess.PIPE, stderr=stderr, text=True)
             try:
                 for line in process.stdout:
                     ctx.check()
@@ -959,7 +960,7 @@ def convert(source: Path, output: Path, target: str, ctx: Context, quality_mode=
                             ctx.report(mediaSeconds=max(0, int(line.strip().split("=", 1)[1])) / 1e6, track=index + 1, tracks=len(tracks))
                         except ValueError:
                             pass
-                if process.wait() != 0:
+                if check_codec_isolation(process.wait()):
                     raise ProcessingError("Conversion failed")
             finally:
                 if process.poll() is None:
