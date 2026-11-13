@@ -31,7 +31,15 @@ slots available, a fresh 16-session run completed 48 jobs in 98.32 seconds,
 with 32 exact-byte downloads and 16 expected corrupt-input failures.
 
 On Python 3.13 the standard TAR reader avoids retaining a separate TarInfo
-cache. Output manifests still retain per-member state. Windows bsdtar 3.8.9
+cache. New verified outputs commit ordered manifest rows together with the
+completed job. The browser reads those rows by cursor, and existing inline
+manifests remain readable. The staged 201-file ZIP test checks three manifest
+pages against the downloaded archive's order and member digests. The
+container smoke checks the same manifest before and after recreation.
+Archive creation still holds per-member verification data in memory, and
+the legacy full-manifest route still returns the whole list. Use the
+pre-upgrade snapshot for rollback because earlier versions cannot read the
+new manifest rows. Windows bsdtar 3.8.9
 verified TAR.ZST in both directions, including nested paths, an empty file,
 an empty directory and member SHA-256 checks.
 

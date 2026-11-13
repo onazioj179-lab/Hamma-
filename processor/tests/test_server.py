@@ -493,8 +493,8 @@ class ServerTests(unittest.TestCase):
         job = self.execute(self.call('/jobs', {'uploads': [first['id'], second['id']],
                                               'operation': 'compress', 'target': 'zip'}, 'POST'))
         self.assertEqual(job['state'], 'completed')
-        self.assertEqual(job['manifestStorage'], 'inline')
-        self.assertEqual(self.call('/jobs')['jobs'][0]['manifestStorage'], 'inline')
+        self.assertEqual(job['manifestStorage'], 'paged')
+        self.assertEqual(self.call('/jobs')['jobs'][0]['manifestStorage'], 'paged')
         path = '/jobs/' + job['id'] + '/manifest'
         full = self.call(path)
         page = self.call(path + '?limit=1')
@@ -509,8 +509,33 @@ class ServerTests(unittest.TestCase):
         stranger = build_opener(HTTPCookieProcessor(CookieJar()))
         self.assert_status(404, lambda: self.call(path + '?limit=1', client=stranger))
         owner = self.service.store.list(kind='job')[0][0]
+        stored = self.service.store.get(owner, 'job', job['id'])
+        self.assertNotIn('manifest', stored)
+        self.assertEqual(stored['manifestCount'], 2)
         self.service.store.patch(owner, 'job', job['id'], fileExpires=0)
         self.assert_status(410, lambda: self.call(path + '?limit=1'))
+        self.service.cleanup()
+        self.assertEqual(self.service.store.full_paged_manifest(owner, job['id']), [])
+
+    def test_existing_inline_manifest_keeps_its_full_and_paged_responses(self):
+        job = self.job()
+        owner = self.service.store.list(kind='job')[0][0]
+        manifest = [{'name': 'older.txt', 'size': 3, 'sha256': hashlib.sha256(b'old').hexdigest()}]
+        self.service.store.patch(owner, 'job', job['id'], state='completed',
+                                 downloadAvailable=True, manifest=manifest)
+        path = '/jobs/' + job['id'] + '/manifest'
+        self.assertEqual(self.call('/jobs')['jobs'][0]['manifestStorage'], 'inline')
+        self.assertEqual(self.call(path)['files'], manifest)
+        self.assertEqual(self.call(path + '?limit=1')['files'], [{**manifest[0], 'id': 1}])
+
+    def test_cancelled_job_cannot_publish_manifest_rows(self):
+        job = self.job()
+        owner = self.service.store.list(kind='job')[0][0]
+        self.call('/jobs/' + job['id'] + '/cancel', {}, 'POST')
+        record = self.service.store.patch(owner, 'job', job['id'], expected_states=('verifying',),
+                                          state='completed', manifest_entries=[{'name': 'late.txt'}])
+        self.assertEqual(record['state'], 'cancelled')
+        self.assertEqual(self.service.store.full_paged_manifest(owner, job['id']), [])
 
     def test_paged_job_selection_submits_a_verified_archive_and_fences_replays(self):
         first = self.upload(b'first', 'first.txt')
@@ -556,6 +581,16 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(archive.namelist(), names)
             self.assertEqual(archive.read('first.txt'), b'first')
             self.assertTrue(all(archive.read(name) == name.encode() for name in names[1:]))
+            manifest_path = '/jobs/' + job['id'] + '/manifest'
+            for after in (0, 100, 200):
+                page = self.call(f'{manifest_path}?limit=100&after={after}')
+                expected = names[after:after + 100]
+                self.assertEqual(page['total'], len(names))
+                self.assertEqual([row['id'] for row in page['files']],
+                                 list(range(after + 1, after + 1 + len(expected))))
+                self.assertEqual([(row['name'], row['sha256']) for row in page['files']],
+                                 [(name, hashlib.sha256(archive.read(name)).hexdigest()) for name in expected])
+                self.assertEqual(page['nextCursor'], str(after + 100) if after < 200 else None)
 
         with self.service.store.connect() as db:
             db.execute('UPDATE job_selections SET expires=0 WHERE owner=? AND id=?', (owner, selection))
