@@ -53,6 +53,23 @@ it('opens and searches a ZIP directory without uploading the archive', async () 
   expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/uploads'))).toBe(false);
 });
 
+it('keeps the encrypted ZIP password in the browser and offers the verified download', async () => {
+  const run = vi.spyOn(await import('../processing/encrypted-zip'), 'createEncryptedZip')
+    .mockResolvedValue(new Blob(['verified archive']));
+  await render();
+  await select([new File(['fixture'], 'entry.txt')]);
+  await act(async () => button('Create password-protected ZIP').click());
+  const password = host.querySelector<HTMLInputElement>('[aria-label="ZIP password"]')!;
+  password.value = 'browser-only password';
+  await act(async () => password.form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+  expect(run).toHaveBeenCalledWith([expect.objectContaining({ name: 'entry.txt' })], 'browser-only password', expect.any(AbortSignal));
+  expect(password.value).toBe('');
+  expect(button('Download encrypted ZIP')).toBeDefined();
+  expect(fetchMock.mock.calls.some(([url]) => /\/(uploads|jobs)$/.test(String(url)))).toBe(false);
+  await act(async () => button('Close password options').click());
+  expect(host.querySelector('[aria-label="ZIP password"]')).toBeNull();
+});
+
 it('submits a ZIP comment with the compression request and its identity', async () => {
   const initial = fetchMock.getMockImplementation()!;
   fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')

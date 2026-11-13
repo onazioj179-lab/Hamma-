@@ -1,12 +1,15 @@
 import { useEffect, useId, useState } from 'react';
 import { inspectZip, type ZipDirectory } from '../../processing/zip-inspection';
 import { formatFileSize } from '../../utils/fileHelpers';
+import { ENCRYPTED_ZIP_LIMIT, unlockEncryptedZip } from '../../processing/encrypted-zip';
+import { ZipPassword } from './ZipPassword';
 
 const PAGE_SIZE = 50;
 
 interface Props {
   file: File;
   disabled?: boolean;
+  localDisabled?: boolean;
   onExtract?: (indexes: number[]) => void;
 }
 
@@ -21,7 +24,7 @@ export function ZipInspection(props: Props) {
   </div>;
 }
 
-function ZipMembers({ file, disabled, onExtract }: Props) {
+function ZipMembers({ file, disabled, localDisabled, onExtract }: Props) {
   const [directory, setDirectory] = useState<ZipDirectory | null>(null);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
@@ -45,6 +48,9 @@ function ZipMembers({ file, disabled, onExtract }: Props) {
     .filter(({ member }) => member.name.toLowerCase().includes(search));
   return <>
     <p className="footnote">Local directory listing. File contents and checksums are unchecked.</p>
+    {members.some(member => member.encrypted) && file.size <= ENCRYPTED_ZIP_LIMIT &&
+      <ZipPassword unlock disabled={localDisabled} filename={file.name.replace(/\.zip$/i, '') + '-unlocked.zip'}
+        run={(password, signal) => unlockEncryptedZip(file, password, signal)} />}
     {comment && <details><summary>Archive comment</summary><p className="zip-comment-preview"><bdi>{comment}</bdi></p></details>}
     <label className="search-field"><input aria-label="Search ZIP entries" placeholder="Search ZIP entries" value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} /></label>
     <p role="status">{matches.length.toLocaleString()} of {members.length.toLocaleString()} entries</p>

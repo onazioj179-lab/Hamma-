@@ -1,6 +1,8 @@
 import { inspectSources } from '../../processing/inspection';
 import { allocateSourcePaths } from '../../processing/selection';
 import { ZipInspection } from './ZipInspection';
+import { ZipPassword } from './ZipPassword';
+import { createEncryptedZip, ENCRYPTED_ZIP_LIMIT } from '../../processing/encrypted-zip';
 import { VerifiedFiles } from './VerifiedFiles';
 import { ProjectRecovery, defaultProjectSettings, needsOriginal, readSelection, saveSelection } from '../../processing/projects';
 import { requiresLossyConsent, resolveActions, resolveArchiveTargets } from '../../processing/actions';
@@ -460,6 +462,9 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     : !tarSource && streamSource && capability?.streamVerification ? 'Test stream integrity' : '';
   const archiveTargets = resolveArchiveTargets(chosen, capability);
   const browserInputs = chosen.every(source => !!source.file && !source.resume);
+  const canEncryptZip = chosen.length <= 5000 && chosen.some(source => source.file) &&
+    chosen.every(source => source.directory || source.file) &&
+    chosen.reduce((sum, source) => sum + source.size, 0) <= ENCRYPTED_ZIP_LIMIT;
   const archiveTarget = target === 'spk' && browserInputs || archiveTargets.includes(target) ? target : archiveTargets[0] || 'zip';
   const actions = resolveActions(chosen, capability);
   const canExtract = chosen.length > 0 && chosen.every(source => /\.spk$/i.test(source.name) ? !!source.file && !source.resume && !!spkReady && projectId === 'default' : resolveActions([source], capability).extract);
@@ -862,8 +867,13 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
             <p className="footnote">The ZIP stores this comment in plain text. Use up to 1,024 printable ASCII characters.</p>
           </details>
         </div>}
+        {visible && archiveTarget === 'zip' && canEncryptZip && <ZipPassword
+          key={projectId + ':' + chosen.map(source => source.id).join(',')}
+          disabled={busy || recovering || !!spkBusy} filename="encrypted.zip"
+          run={(password, signal) => createEncryptedZip(chosen, password, signal)} />}
         {visible && zipSource?.file && <ZipInspection key={projectId + ':' + zipSource.id} file={zipSource.file}
           disabled={busy || recovering || spkBusy || offline}
+          localDisabled={busy || recovering || !!spkBusy}
           onExtract={capability?.zipSelection ? indexes => void submit('extract', { zipIndexes: indexes }) : undefined} />}
         {canRepack && <div className="zip-inspection">
           <button className="button secondary" disabled={busy || recovering || spkBusy || offline}

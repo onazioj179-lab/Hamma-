@@ -73,8 +73,15 @@ processor uses a bounded temporary TAR file for native encoding and decoding.
 The archive must fit the configured expansion and ratio limits. Files named
 `.zst` or `.zstd` restore a single file.
 
+In the workspace, use **Create password-protected ZIP** to write an AES-256
+ZIP, or open **Inspect ZIP** and choose **Unlock ZIP** for an AES archive.
+The browser verifies the output before offering a download. Passwords and
+contents stay in the browser during these actions. File and folder names
+remain visible in the encrypted archive. The browser workflow allows up to
+5,000 entries and 64 MiB of file data. Unlocking produces a regular ZIP.
+
 Any file can be compressed as opaque data. That does **not** mean every format
-can be extracted or converted. RAR/7Z, unknown archives, password protection,
+can be extracted or converted. RAR/7Z, unknown archives, server-side encrypted ZIP extraction,
 corruption, incompatible codecs, missing audio and engine failures produce failed
 jobs, never fake downloads. Media actions are unavailable without FFmpeg/FFprobe.
 Document-to-PDF is not implemented. Video conversion is remuxing, not transcoding.

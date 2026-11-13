@@ -65,7 +65,8 @@ function memberSizes(view: DataView, position: number, extra: number, extraSize:
 /** Read ZIP metadata only. Member data is never opened or decompressed. */
 export async function inspectZip(file: Blob): Promise<ZipDirectory> {
   const tailStart = Math.max(0, file.size - END_SIZE - MAX_COMMENT - ZIP64_LOCATOR - ZIP64_END);
-  const tail = new DataView(await readFileAsArrayBuffer(file.slice(tailStart)));
+  const read = (blob: Blob) => typeof blob.arrayBuffer === 'function' ? blob.arrayBuffer() : readFileAsArrayBuffer(blob);
+  const tail = new DataView(await read(file.slice(tailStart)));
   let end = tail.byteLength - END_SIZE;
   while (end >= 0) {
     if (tail.getUint32(end, true) === 0x06054b50 &&
@@ -100,7 +101,7 @@ export async function inspectZip(file: Blob): Promise<ZipDirectory> {
   if (count > MAX_ENTRIES || size > MAX_DIRECTORY) throw new Error('ZIP directory exceeds the preview limit');
   if (offset !== tailStart + end - size || size < count * MEMBER_SIZE) throw invalid();
 
-  const buffer = await readFileAsArrayBuffer(file.slice(offset, offset + size));
+  const buffer = await read(file.slice(offset, offset + size));
   const directory = new DataView(buffer);
   const utf8 = new TextDecoder('utf-8', { fatal: true });
   const members: ZipMember[] = [];
