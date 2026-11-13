@@ -5,10 +5,11 @@ before the browser can continue.
 """
 import json
 import re
+import stat
 import time
 
-from .capabilities import inspect_headers
-from .engine import Context, ZIP_PROFILES, detect, file_digest
+from .capabilities import inspect_formats
+from .engine import Context, ZIP_PROFILES, detect, detect_header, file_digest
 
 
 class ProjectError(Exception):
@@ -181,7 +182,7 @@ class Projects:
                     WHERE owner=? AND project_id=? AND source_id>?"""
                 params += params
             rows = db.execute(query + ' ORDER BY source_id LIMIT ?', (*params, limit)).fetchall()
-        sources, inspected_sources, headers, unavailable = [], [], [], 0
+        sources, inspected_sources, formats, unavailable = [], [], [], 0
         for row in rows:
             if row['name'] is not None:
                 sources.append({'id': row['source_id'], 'name': row['name'], 'size': row['size'],
@@ -192,18 +193,26 @@ class Projects:
                 unavailable += 1
                 continue
             path = self.store.folder(owner, upload['id']) / 'input'
-            offset = path.stat().st_size if path.is_file() else -1
-            if offset < 0 or offset > upload['size'] or (offset < upload['size'] and not include_incomplete):
+            try:
+                info = path.stat()
+                offset = info.st_size
+                if (not stat.S_ISREG(info.st_mode) or offset > upload['size'] or
+                        (offset < upload['size'] and not include_incomplete)):
+                    unavailable += 1
+                    continue
+                format_hint = upload.get('format')
+                if offset != upload['size'] or not upload.get('sha256') or not isinstance(format_hint, str):
+                    with path.open('rb') as stream:
+                        format_hint = detect_header(stream.read(512))
+            except FileNotFoundError:
+                # Upload cleanup can race the database snapshot used for this page.
                 unavailable += 1
                 continue
-            with path.open('rb') as stream:
-                headers.append({'head': stream.read(512).hex()})
+            formats.append(format_hint)
             sources.append({'id': row[0], 'name': upload['name'], 'size': upload['size'], 'directory': upload['directory'],
                             'upload': upload['id'], 'uploaded': offset, 'expires': upload['expires']})
             inspected_sources.append(sources[-1])
-        inspections = []
-        for start in range(0, len(headers), 32):
-            inspections.extend(inspect_headers(headers[start:start + 32]))
+        inspections = inspect_formats(formats) if formats else []
         for source, inspection in zip(inspected_sources, inspections):
             source['inspection'] = inspection
         return {'sources': sources, 'total': total, 'scanned': len(rows), 'unavailable': unavailable,
