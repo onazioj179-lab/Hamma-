@@ -337,7 +337,8 @@ it('merges unstarted selections with partial and completed uploads across recove
     await render();
     expect(cursors).toEqual(['', sources[99].id]);
     expect(host.textContent).toContain('Recovered 104 uploaded files.');
-    expect(host.textContent).toContain('Select the original files to continue 2 uploads.');
+    expect(host.textContent).toContain('Select the original files for 1 saved selection.');
+    expect(host.textContent).toContain('Select the original files to continue 1 upload.');
     expect(host.querySelector('[aria-label="Select original file for partial.txt"]')).not.toBeNull();
     expect(host.querySelectorAll('.source-row').length).toBeLessThan(106);
     await act(async () => compress().click());
