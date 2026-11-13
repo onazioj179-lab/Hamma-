@@ -30,3 +30,47 @@
 @media(max-width:650px) { .list-toolbar { flex-wrap:wrap; } .list-toolbar .search-field { flex:1 1 100%; } .list-toolbar .select-field { flex:1; } }
 
 .dark .universal-workspace input[type='checkbox'] { color-scheme: dark; }
+
+.history-views {
+  display: inline-flex;
+  max-width: 100%;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid rgb(var(--border));
+  border-radius: 12px;
+  background: rgb(var(--card-elevated));
+}
+.history-views button {
+  min-height: 44px;
+  padding: 8px 18px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: rgb(var(--muted));
+}
+.history-views button[aria-pressed="true"] {
+  border-color: rgb(var(--border));
+  background: rgb(var(--card));
+  color: rgb(var(--foreground));
+}
+.universal-search:has(.history-filters) { grid-template-columns: minmax(0, 1fr); }
+.universal-search .search-field, .history-filter-fields .select-trigger { min-height: 44px; }
+.universal-search .search-field:focus-within { border-color: rgb(var(--accent)); }
+.history-filters summary, .job-details summary {
+  align-content: center;
+  min-height: 44px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.history-filter-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 155px), 1fr));
+  gap: 8px;
+}
+.processing-job-line .icon-button, .history-pagination .icon-button {
+  min-width: 44px;
+  min-height: 44px;
+}
+.universal-workspace .selection-label { min-height: 44px; }
+.universal-workspace .bulk-actions .button { min-height: 44px; font-size: 13px; }

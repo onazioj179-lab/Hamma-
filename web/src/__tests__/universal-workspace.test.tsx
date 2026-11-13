@@ -709,13 +709,14 @@ it('shows the H.264 preset and blocks submission until lossy conversion is allow
   const initial = fetchMock.getMockImplementation()!;
   const video = { mime: ['video/x-matroska'], extensions: ['mkv'], conversions: ['mp4-h264'], extract: false };
   fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
-    ? { ok: true, json: async () => ({ ...caps, actionRegistry: [video], conversions: ['mp4-h264'] }) } : initial(url));
+    ? { ok: true, json: async () => ({ ...caps, actionRegistry: [video], conversions: ['mp4-h264'], zipProfiles: ['balanced'] }) } : initial(url));
   const upload = vi.spyOn(processingClient, 'upload').mockResolvedValue('uploaded-video');
   vi.spyOn(processingClient, 'requestId').mockResolvedValue('h264-request');
   const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({ id: 'h264-job' });
   await render();
   await select([new File(['fixture'], 'source.mkv', { type: 'video/x-matroska' })]);
   expect(host.querySelector('[aria-label="Conversion format"]')?.textContent).toContain('MP4 (H.264)');
+  expect(host.textContent).toContain('Already compressed video usually saves little space.');
   await act(async () => button('Convert').click());
   expect(host.querySelector('[role=alert]')?.textContent).toContain('Choose Allow quality loss');
   expect(upload).not.toHaveBeenCalled();
@@ -726,6 +727,20 @@ it('shows the H.264 preset and blocks submission until lossy conversion is allow
   expect(submit).toHaveBeenCalledWith('/jobs', expect.objectContaining({
     operation: 'convert', target: 'mp4-h264', qualityMode: 'lossy', uploads: ['uploaded-video'],
   }), 'POST', { signal: expect.any(AbortSignal) });
+});
+
+it('shows the actual size change for ZIP and H.264 outputs', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  const shared = { state: 'completed', inputSize: 10000, created: 1, fileExpires: 2, fileCount: 1, downloadAvailable: false };
+  const jobs = [
+    { ...shared, id: 'zip', name: 'video.zip', operation: 'compress', target: 'zip', outputSize: 9999 },
+    { ...shared, id: 'mp4', name: 'video.mp4', operation: 'convert', target: 'mp4-h264', outputSize: 10050 },
+  ];
+  fetchMock.mockImplementation(async (url: string) => url.includes('/jobs?')
+    ? { ok: true, json: async () => ({ jobs, total: jobs.length }) } : initial(url));
+  await render('history');
+  expect(host.textContent).toContain('1 B smaller (<0.1%)');
+  expect(host.textContent).toContain('50 B larger (0.5%)');
 });
 
 it('cancels a deletion preview when the user leaves the processing page', async () => {
@@ -787,9 +802,8 @@ it('keeps a hidden processor output discoverable through Available downloads aft
     await act(async () => confirmButton('Clear history').click());
     expect(host.querySelectorAll('.processing-job')).toHaveLength(0);
     expect(counts[counts.length - 1]).toBe(0);
-    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Filter by operation"]')!.click());
-    const available = [...document.querySelectorAll<HTMLElement>('[role=option]')].find(option => option.textContent === 'Available downloads')!;
-    await act(async () => available.click());
+    await act(async () => button('Downloads').click());
+    expect(button('Downloads').getAttribute('aria-pressed')).toBe('true');
     expect(host.querySelectorAll('.processing-job')).toHaveLength(1);
     expect(host.querySelector('[aria-label="Download retained.zip"]')).not.toBeNull();
   } finally { window.removeEventListener('hamma-job-count', count); }

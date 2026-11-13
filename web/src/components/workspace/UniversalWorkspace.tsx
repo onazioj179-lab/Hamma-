@@ -2,6 +2,7 @@ import { inspectSources } from '../../processing/inspection';
 import { allocateSourcePaths } from '../../processing/selection';
 import { ZipInspection } from './ZipInspection';
 import { EncryptedZip, UnlockZip } from './EncryptedZip';
+import { SplitZip } from './SplitZip';
 import { VerifiedFiles } from './VerifiedFiles';
 import { ProjectRecovery, defaultProjectSettings, needsOriginal, readSelection, saveSelection } from '../../processing/projects';
 import { requiresLossyConsent, resolveActions, resolveArchiveTargets } from '../../processing/actions';
@@ -26,7 +27,14 @@ const canRetry = (job: Job) => ['failed', 'interrupted', 'cancelled'].includes(j
 type SourceFailure = { message: string; retry?: Omit<TaskGroup, 'sources'> };
 
 const label = (state: string) => ({ queued: 'Waiting', paused: 'Paused', processing: 'Processing', verifying: 'Verifying', completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted' }[state] || state);
-const savings = (job: Job) => `${(Math.abs(1 - job.outputSize! / job.inputSize) * 100).toFixed(1)}% ${job.outputSize! <= job.inputSize ? 'smaller' : 'larger'}`;
+const sizeChange = (input: number, output: number) => {
+  if (input === output) return 'Same size';
+  const bytes = Math.abs(input - output);
+  const percent = bytes / input * 100;
+  const label = percent < 0.1 ? '<0.1%' : `${percent.toFixed(1)}%`;
+  return `${formatFileSize(bytes)} ${output < input ? 'smaller' : 'larger'} (${label})`;
+};
+const videoFormats = new Set(['mp4', 'mkv', 'webm']);
 
 export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSpkDownload, spkReady, spkBusy, spkStatus, onSpkSelect }: Props) {
   const archives = useAppStore(state => state.recentArchives);
@@ -58,6 +66,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState('newest');
+  const [showDownloads, setShowDownloads] = useState(false);
   const [operationFilter, setOperationFilter] = useState('');
   const [savingRetention, setSavingRetention] = useState(false);
   const [target, setTarget] = useState('zip');
@@ -470,6 +479,8 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const browserInputs = chosen.every(source => !!source.file && !source.resume);
   const archiveTarget = target === 'spk' && browserInputs || archiveTargets.includes(target) ? target : archiveTargets[0] || 'zip';
   const actions = resolveActions(chosen, capability);
+  const selectedVideo = chosen.some(source => videoFormats.has(source.inspection?.format ?? '') ||
+    (!source.inspection && source.file?.type.startsWith('video/')));
   const canExtract = chosen.length > 0 && chosen.every(source => /\.spk$/i.test(source.name) ? !!source.file && !source.resume && !!spkReady && projectId === 'default' : resolveActions([source], capability).extract);
   const canRepack = capability?.archiveRepack && singleSource && !/\.spk$/i.test(singleSource.name) && canExtract;
   const officeSource = singleSource && !singleSource.directory &&
@@ -774,7 +785,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   const toggleSource = (id: string) => setSelected(previous => { const next = new Set(previous); next.has(id) ? next.delete(id) : next.add(id); return next; });
   const rowStart = Math.min(Math.max(0, sources.length - 14), Math.max(0, Math.floor(scroll / 64) - 3));
   const rendered = sources.slice(rowStart, rowStart + 14);
-  const downloadsOnly = screen === 'files' || operationFilter === 'downloads';
+  const downloadsOnly = screen === 'files' || (screen === 'history' ? showDownloads : operationFilter === 'downloads');
   const allActivity = combineActivity(jobs, archives, outputs, downloadsOnly);
   const combined = screen === 'workspace' ? allActivity.filter(job => (job.projectId || 'default') === projectId) : allActivity;
   let latestLocal = spkResult?.historyId ? combined.find(job => job.localId === spkResult.historyId) : undefined;
@@ -789,7 +800,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   if (latestLocal && spkResult?.downloadUrl) {
     latestLocal.downloadAvailable = true; latestLocal.outputName = spkResult.outputName; latestLocal.download = spkResult.downloadUrl;
   }
-  const matching = filterActivity(combined.filter(job => downloadsOnly ? job.downloadAvailable : !operationFilter || job.operation === operationFilter), query, filter, sort);
+  const matching = filterActivity(combined.filter(job => (!downloadsOnly || job.downloadAvailable) && (!operationFilter || operationFilter === 'downloads' || job.operation === operationFilter)), query, filter, sort);
   const total = matching.length;
   const lastPage = Math.max(0, Math.ceil(total / 50) - 1);
   useEffect(() => { if (page > lastPage) setPage(lastPage); }, [page, lastPage]);
@@ -811,6 +822,12 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       const a = document.createElement('a'); a.href = url; a.download = 'hamma-history.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch { setError('Export failed'); }
   };
+
+  const historyFilters = <>
+    <SelectField aria-label="Filter processing history" value={filter} onChange={value => { setFilter(value); setPage(0); setJobSelected(new Set()); }}><option value="">All statuses</option>{['queued', 'processing', 'verifying', 'completed', 'failed', 'cancelled', 'interrupted', 'paused'].map(state => <option value={state} key={state}>{label(state)}</option>)}</SelectField>
+    <SelectField aria-label="Filter by operation" value={operationFilter === 'downloads' && screen === 'history' ? '' : operationFilter} onChange={value => { setOperationFilter(value); setPage(0); setJobSelected(new Set()); }}><option value="">All operations</option><option value="compress">Compression</option><option value="extract">Extraction</option><option value="convert">Conversion</option>{screen !== 'history' && <option value="downloads">Available downloads</option>}</SelectField>
+    <SelectField aria-label="Sort processing history" value={sort} onChange={value => { setSort(value); setPage(0); setJobSelected(new Set()); }}><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="name">Name</option><option value="size">Largest first</option></SelectField>
+  </>;
 
   return <section hidden={!visible} className="universal-workspace" aria-label="Universal file processing">
     <div className="page-heading universal-heading">
@@ -872,6 +889,8 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
               {capability.zipProfiles.map(profile => <option key={profile} value={profile}>{profile[0].toUpperCase() + profile.slice(1)}</option>)}
             </SelectField>
           </label>
+          {selectedVideo && <p className="footnote">ZIP keeps the original video quality. Already compressed video usually saves little space.
+            {actions.conversions.includes('mp4-h264') && ' To reduce video size, try MP4 (H.264) with Allow quality loss and compare the result.'}</p>}
         </div>}
         {archiveTarget === 'zip' && capability?.zipComments && <div className="zip-inspection">
           <details>
@@ -887,6 +906,10 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
           onExtract={capability?.zipSelection ? indexes => void submit('extract', { zipIndexes: indexes }) : undefined} />}
         {visible && zipSource?.file && <UnlockZip key={projectId + ':unlock:' + zipSource.id}
           archive={zipSource.file} disabled={busy || recovering || !!spkBusy} />}
+        {visible && chosen.some(source => source.file) && chosen.every(source => source.file || source.directory) &&
+          <SplitZip key={projectId + ':volumes:' + chosen.map(source => source.id).join(',')}
+            sources={chosen} disabled={busy || recovering || !!spkBusy ||
+              chosen.some(source => source.directory) && chosen.some(source => /\.z\d{2,3}$/i.test(source.name))} />}
         {visible && archiveTarget === 'zip' && chosen.some(source => source.file) && chosen.every(source => source.file || source.directory) &&
           <EncryptedZip key={projectId + ':encrypt:' + chosen.map(source => source.id).join(',')}
             sources={chosen} disabled={busy || recovering || !!spkBusy} />}
@@ -934,21 +957,50 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     </>}
     {screen === 'workspace' && spkStatus}
     <section className="processing-history" aria-label="Processing jobs">
-      <div className="section-line"><h2>{screen === 'workspace' ? 'Processing queue' : screen === 'files' ? 'Available files' : 'All operations'}</h2><div className="button-row">{screen === 'workspace' && <button className="text-button" onClick={onHistory}><History size={14} /> History</button>}<button className="text-button" onClick={() => void exportHistory()} disabled={!combined.length}><Download size={14} /> Export</button></div></div>
+      {screen === 'history' ? (
+        <div className="history-views" role="group" aria-label="Files and history view">
+          {[false, true].map(downloads => (
+            <button key={String(downloads)} type="button" aria-pressed={showDownloads === downloads} onClick={() => {
+              if (showDownloads === downloads) return;
+              setShowDownloads(downloads);
+              setFilter('');
+              setOperationFilter('');
+              setPage(0);
+              setJobSelected(new Set());
+            }}>{downloads ? 'Downloads' : 'All activity'}</button>
+          ))}
+        </div>
+      ) : (
+        <div className="section-line">
+          <h2>{screen === 'workspace' ? 'Processing queue' : 'Available files'}</h2>
+          <div className="button-row">
+            {screen === 'workspace' && <button className="text-button" onClick={onHistory}><History size={14} /> Files &amp; History</button>}
+            <button className="text-button" onClick={() => void exportHistory()} disabled={!combined.length}><Download size={14} /> Export</button>
+          </div>
+        </div>
+      )}
       {screen === 'workspace' && combined.length > 0 && <div className="project-summary"><span role="status">{combined.filter(job => job.state === 'completed').length} completed · {combined.filter(job => ['failed', 'interrupted'].includes(job.state)).length} failed · {combined.filter(activeJob).length} remaining</span><div className="button-row"><button className="button secondary" disabled={acting || !combined.some(job => job.state === 'queued')} onClick={() => void bulk('pause', 'POST', combined.filter(job => job.state === 'queued')).catch(caught => setError(caught.message))}>Pause waiting</button><button className="button secondary" disabled={acting || !combined.some(job => job.state === 'paused')} onClick={() => void bulk('resume', 'POST', combined.filter(job => job.state === 'paused')).catch(caught => setError(caught.message))}>Resume waiting</button><button className="button secondary" disabled={acting || !combined.some(activeJob)} onClick={() => void bulk('cancel', 'POST', combined.filter(activeJob)).catch(caught => setError(caught.message))}>Cancel project jobs</button><button className="button secondary" disabled={acting || !combined.some(job => job.state !== 'cancelled' && canRetry(job))} onClick={() => void bulk('retry', 'POST', combined.filter(job => job.state !== 'cancelled' && canRetry(job))).catch(caught => setError(caught.message))}>Retry failed</button><button className="button secondary" disabled={!combined.some(job => job.downloadAvailable)} onClick={() => combined.filter(job => job.downloadAvailable).forEach(download)}>Download completed</button></div></div>}
-      <div className="history-tools universal-search"><label className="search-field"><Search size={16} /><input aria-label="Search processing history" placeholder="Search files" value={query} onChange={event => { setQuery(event.target.value); setPage(0); setJobSelected(new Set()); }} /></label><SelectField aria-label="Filter processing history" value={filter} onChange={value => { setFilter(value); setPage(0); setJobSelected(new Set()); }}><option value="">All statuses</option>{['queued', 'processing', 'verifying', 'completed', 'failed', 'cancelled', 'interrupted', 'paused'].map(state => <option value={state} key={state}>{label(state)}</option>)}</SelectField><SelectField aria-label="Filter by operation" value={operationFilter} onChange={value => { setOperationFilter(value); setPage(0); setJobSelected(new Set()); }}><option value="">All operations</option><option value="compress">Compression</option><option value="extract">Extraction</option><option value="convert">Conversion</option><option value="downloads">Available downloads</option></SelectField><SelectField aria-label="Sort processing history" value={sort} onChange={value => { setSort(value); setPage(0); setJobSelected(new Set()); }}><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="name">Name</option><option value="size">Largest first</option></SelectField></div>
+      <div className="history-tools universal-search">
+        <label className="search-field"><Search size={16} /><input aria-label="Search processing history" placeholder="Search files" value={query} onChange={event => { setQuery(event.target.value); setPage(0); setJobSelected(new Set()); }} /></label>
+        {screen === 'history' ? (
+          <details className="history-filters">
+            <summary>Filters &amp; sort{(filter || (operationFilter && operationFilter !== 'downloads') || sort !== 'newest') && ' · Active'}</summary>
+            <div className="history-filter-fields">{historyFilters}</div>
+          </details>
+        ) : historyFilters}
+      </div>
       {visibleJobs.length > 0 && <div className="job-bulk"><label className="selection-label"><input ref={jobSelection} aria-label="Select all visible jobs" type="checkbox" checked={visibleSelectedCount === visibleJobs.length} onChange={event => setJobSelected(event.target.checked ? new Set(visibleJobs.map(j => j.id)) : new Set())} />Select page</label>{visibleSelectedCount > 0 && <span>{visibleSelectedCount} selected</span>}</div>}
       {jobSelected.size > 0 && <div className="processing-actions bulk-actions"><button className="button secondary" disabled={!selectedJobs.some(j => j.downloadAvailable)} onClick={() => selectedJobs.filter(j => j.downloadAvailable).forEach(download)}><Download size={14} /> Download</button><button className="button secondary" disabled={!selectedJobs.every(j => j.state === 'queued')} onClick={() => void bulk('pause').catch(e => setError(e.message))}><Pause size={14} /> Pause queue</button><button className="button secondary" disabled={!selectedJobs.every(j => j.state === 'paused')} onClick={() => void bulk('resume').catch(e => setError(e.message))}><Play size={14} /> Resume</button><button className="button secondary" disabled={!selectedJobs.every(activeJob)} onClick={() => void bulk('cancel').catch(e => setError(e.message))}><X size={14} /> Cancel</button><button className="button secondary" disabled={!selectedJobs.every(canRetry)} onClick={() => void bulk('retry').catch(e => setError(e.message))}><RefreshCw size={14} /> Retry</button><button className="button secondary" disabled={busy || recovering || spkBusy || acting || preparingDeletion || !selectedJobs.every(terminal)} onClick={() => confirmBulk('')}><Trash2 size={14} /> Delete history</button><button className="button secondary" disabled={busy || recovering || spkBusy || acting || preparingDeletion || !selectedJobs.length || !selectedJobs.every(job => terminal(job) && (!job.localId || job.downloadAvailable))} onClick={() => confirmBulk('files')}><Trash2 size={14} /> Delete files</button></div>}
       <div className="surface job-list" aria-busy={loadingJobs && !offline}>{loadingJobs && !offline && <p className="queue-loading" role="status"><Loader2 size={16} className="animate-spin" /> Loading your jobs</p>}{visibleJobs.length ? visibleJobs.map(job => <article className="processing-job" key={job.id}>
-        <div className="processing-job-line"><input type="checkbox" aria-label={`Select job ${job.name}`} checked={jobSelected.has(job.id)} onChange={() => setJobSelected(previous => { const next = new Set(previous); next.has(job.id) ? next.delete(job.id) : next.add(job.id); return next; })} /><span className="job-glyph" data-state={job.state === 'completed' ? 'done' : activeJob(job) && job.state !== 'queued' && job.state !== 'paused' ? 'working' : 'idle'} aria-hidden="true"><Check size={18} className="job-icon-done" /><span className="job-icon-working"><Loader2 size={18} className="animate-spin" /></span><FileArchive size={18} className="job-icon-idle" /></span><div className="processing-job-name"><strong title={job.name}>{job.outputName || job.name}</strong><span><b className={`operation-tag tag-${job.operation}`}>{job.localId ? 'SPK' : (job.target || job.format || 'file').toUpperCase()} / {job.operation}</b> · {formatFileSize(job.inputSize)}{job.outputSize !== null ? ` → ${formatFileSize(job.outputSize)}` : ''}{job.operation === 'compress' && job.outputSize !== null && job.inputSize > 0 ? ` · ${savings(job)}` : ''}</span></div><span className={`file-state state-${job.state}`} role="status">{label(job.state)}</span>{job.downloadAvailable && (job.localId ? <a className="icon-button" href={job.download} download={job.outputName} aria-label={`Download ${job.outputName}`} title="Download"><Download size={17} /><span className="sr-only">Download</span></a> : <button className="icon-button" aria-label={`Download ${job.outputName}`} title="Download" onClick={() => download(job)}><Download size={17} /><span className="sr-only">Download</span></button>)}{activeJob(job) && <button className="icon-button" aria-label={`Cancel ${job.name}`} onClick={() => runAction(job, 'cancel')}><X size={16} /></button>}{canRetry(job) && <button className="icon-button" aria-label={`Retry ${job.name}`} onClick={() => runAction(job, 'retry')}><RefreshCw size={16} /></button>}</div>
+        <div className="processing-job-line"><input type="checkbox" aria-label={`Select job ${job.name}`} checked={jobSelected.has(job.id)} onChange={() => setJobSelected(previous => { const next = new Set(previous); next.has(job.id) ? next.delete(job.id) : next.add(job.id); return next; })} /><span className="job-glyph" data-state={job.state === 'completed' ? 'done' : activeJob(job) && job.state !== 'queued' && job.state !== 'paused' ? 'working' : 'idle'} aria-hidden="true"><Check size={18} className="job-icon-done" /><span className="job-icon-working"><Loader2 size={18} className="animate-spin" /></span><FileArchive size={18} className="job-icon-idle" /></span><div className="processing-job-name"><strong title={job.name}>{job.outputName || job.name}</strong><span><b className={`operation-tag tag-${job.operation}`}>{job.localId ? 'SPK' : (job.target || job.format || 'file').toUpperCase()} / {job.operation}</b> · {formatFileSize(job.inputSize)}{job.outputSize !== null ? ` → ${formatFileSize(job.outputSize)}` : ''}{(job.operation === 'compress' || job.operation === 'convert' && job.target === 'mp4-h264') && job.outputSize !== null && job.inputSize > 0 ? ` · ${sizeChange(job.inputSize, job.outputSize)}` : ''}</span></div><span className={`file-state state-${job.state}`} role="status">{label(job.state)}</span>{job.downloadAvailable && (job.localId ? <a className="icon-button" href={job.download} download={job.outputName} aria-label={`Download ${job.outputName}`} title="Download"><Download size={17} /><span className="sr-only">Download</span></a> : <button className="icon-button" aria-label={`Download ${job.outputName}`} title="Download" onClick={() => download(job)}><Download size={17} /><span className="sr-only">Download</span></button>)}{activeJob(job) && <button className="icon-button" aria-label={`Cancel ${job.name}`} onClick={() => runAction(job, 'cancel')}><X size={16} /></button>}{canRetry(job) && <button className="icon-button" aria-label={`Retry ${job.name}`} onClick={() => runAction(job, 'retry')}><RefreshCw size={16} /></button>}</div>
         {activeJob(job) && <div className="job-measurement">{job.operation === 'compress' && job.state === 'processing' ? <><progress aria-label={`Progress for ${job.name}`} max={Math.max(1, job.inputSize)} value={Math.min(job.inputSize, job.processed)} /><span>{formatFileSize(job.processed)} / {formatFileSize(job.inputSize)}</span></> : <span>{job.state === 'verifying' ? 'Checking output' : job.expanded ? `${job.entries} entries · ${formatFileSize(job.expanded)} expanded` : job.mediaSeconds ? `${job.mediaSeconds.toFixed(1)}s converted · track ${job.track}/${job.tracks}` : label(job.state)}</span>}</div>}
         {job.error && <p className="job-error">{job.error}</p>}
         {job.manifestStorage && job.downloadAvailable && <VerifiedFiles jobId={job.id} />}
         <details className="job-details"><summary>Details</summary><dl><dt>Job</dt><dd>{job.id}</dd><dt>Input</dt><dd>{job.format} · {job.fileCount} entries</dd><dt>Created</dt><dd>{new Date(job.created * 1000).toLocaleString()}</dd><dt>Finished</dt><dd>{job.finished != null ? new Date(job.finished * 1000).toLocaleString() : job.localId ? new Date(job.created * 1000).toLocaleString() : "—"}</dd><dt>Duration</dt><dd>{job.duration === undefined || job.duration === null ? '—' : `${job.duration.toFixed(2)}s`}</dd><dt>Files expire</dt><dd>{job.localId ? job.savedToDevice ? 'Saved directly to your device' : job.downloadAvailable ? 'Available until this page closes or you delete it' : 'Not retained in this browser' : new Date(job.fileExpires * 1000).toLocaleString()}</dd><dt>History expires</dt><dd>{job.historyExpires ? new Date(job.historyExpires * 1000).toLocaleString() : 'Never'}</dd></dl>{job.localId && job.localId !== 'current' && <button className="text-button" onClick={() => confirmLocalHistory(job.localId!)}><Trash2 size={14} /> Remove record</button>}</details>
-      </article>) : (!loadingJobs || offline) && <div className="processing-empty"><History size={22} strokeWidth={1.3} /><p>{query || filter || operationFilter ? 'No matching files' : screen === 'files' ? 'No downloads available' : 'No jobs yet'}</p></div>}</div>
+      </article>) : (!loadingJobs || offline) && <div className="processing-empty"><History size={22} strokeWidth={1.3} /><p>{query || filter || (operationFilter && operationFilter !== 'downloads') ? 'No matching files' : downloadsOnly ? 'No downloads available' : 'No jobs yet'}</p></div>}</div>
       <div className="history-pagination"><span>{total.toLocaleString()} operations</span><div><button className="icon-button" aria-label="Previous history page" disabled={!page} onClick={() => { setPage(page - 1); setJobSelected(new Set()); }}><ChevronLeft size={17} /></button><span>{page + 1} / {Math.max(1, Math.ceil(total / 50))}</span><button className="icon-button" aria-label="Next history page" disabled={(page + 1) * 50 >= total} onClick={() => { setPage(page + 1); setJobSelected(new Set()); }}><ChevronRight size={17} /></button></div></div>
     </section>
-    {screen === 'history' && <details className="processing-options"><summary>Retention</summary><div className="options-grid"><label>History<SelectField disabled={savingRetention || offline} aria-label="History retention" value={retention.historyRetention} onChange={value => void saveRetention({ ...retention, historyRetention: value })}>{[['24h', '24 Hours'], ['7d', '7 Days'], ['30d', '30 Days'], ['never', 'Never']].map(([value, name]) => <option key={value} value={value}>{name}</option>)}</SelectField></label><label>Files<SelectField disabled={savingRetention || offline} aria-label="File retention" value={retention.fileRetention} onChange={value => void saveRetention({ ...retention, fileRetention: value })}>{[['24h', '24 Hours'], ['7d', '7 Days'], ['30d', '30 Days']].map(([value, name]) => <option key={value} value={value}>{name}</option>)}</SelectField></label></div><p>Applies to new jobs. Deleting history keeps files until their expiry. Deleting files removes inputs and outputs when no other job uses them. Downloaded copies stay on your device. Browser SPK outputs stay available until you close this page or delete them.</p><div className="button-row"><button className="button secondary" disabled={busy || recovering || spkBusy || acting || preparingDeletion || ((!capability || offline) && !archives.length && !legacyHistory.length && !Object.keys(outputs).length)} onClick={() => void confirmClear('history')}><Trash2 size={14} /> Clear history</button><button className="button secondary" disabled={busy || recovering || spkBusy || acting || preparingDeletion || ((!capability || offline) && !Object.values(outputs).some(output => output.downloadUrl))} onClick={() => void confirmClear('files')}><Trash2 size={14} /> Delete all files</button></div></details>}
+    {screen === 'history' && <details className="processing-options"><summary>Storage &amp; history settings</summary><div className="options-grid"><label>History<SelectField disabled={savingRetention || offline} aria-label="History retention" value={retention.historyRetention} onChange={value => void saveRetention({ ...retention, historyRetention: value })}>{[['24h', '24 Hours'], ['7d', '7 Days'], ['30d', '30 Days'], ['never', 'Never']].map(([value, name]) => <option key={value} value={value}>{name}</option>)}</SelectField></label><label>Files<SelectField disabled={savingRetention || offline} aria-label="File retention" value={retention.fileRetention} onChange={value => void saveRetention({ ...retention, fileRetention: value })}>{[['24h', '24 Hours'], ['7d', '7 Days'], ['30d', '30 Days']].map(([value, name]) => <option key={value} value={value}>{name}</option>)}</SelectField></label></div><p>Applies to new jobs. Deleting history keeps files until their expiry. Deleting files removes inputs and outputs when no other job uses them. Downloaded copies stay on your device. Browser SPK outputs stay available until you close this page or delete them.</p><div className="button-row"><button className="button secondary" onClick={() => void exportHistory()} disabled={!combined.length}><Download size={16} /> Export history</button><button className="button secondary" disabled={busy || recovering || spkBusy || acting || preparingDeletion || ((!capability || offline) && !archives.length && !legacyHistory.length && !Object.keys(outputs).length)} onClick={() => void confirmClear('history')}><Trash2 size={14} /> Clear history</button><button className="button secondary" disabled={busy || recovering || spkBusy || acting || preparingDeletion || ((!capability || offline) && !Object.values(outputs).some(output => output.downloadUrl))} onClick={() => void confirmClear('files')}><Trash2 size={14} /> Delete all files</button></div></details>}
     {confirmation && <ConfirmAction {...confirmation} onCancel={() => setConfirmation(null)} />}
   </section>;
 }

@@ -49,7 +49,7 @@ export function LocalOverview({ onHistory }: {
   const latest = [...(overview?.jobs ?? []), ...local]
     .sort((a, b) => b.created - a.created || a.id.localeCompare(b.id)).slice(0, 5);
   return <section className="overview-page">
-    <div className="page-heading"><div><h1>Overview</h1><p className="page-description">Your files, activity, and measured space savings.</p></div><button className="button secondary" onClick={onHistory}>View history <ArrowRight size={15} /></button></div>
+    <div className="page-heading"><div><h1>Overview</h1><p className="page-description">Your files, activity, and measured space savings.</p></div><button className="button secondary" onClick={onHistory}>Files &amp; History <ArrowRight size={15} /></button></div>
     {status === 'offline' && <div className="processor-notice" role="status"><span>Processor unavailable. Showing browser records and the last loaded jobs.</span><button className="button secondary" onClick={() => setAttempt(value => value + 1)}><RefreshCw size={15} /> Retry</button></div>}
     {status === 'loading' && <p className="footnote" role="status">Loading activity…</p>}
     <div className="overview-grid">

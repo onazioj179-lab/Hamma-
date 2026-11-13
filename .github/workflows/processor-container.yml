@@ -15,7 +15,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y poppler-utils
       - name: Start the local deployment
         run: docker compose -f compose.local.yml up --build --detach --wait --wait-timeout 60
-      - name: Verify web assets and Zstandard jobs through the deployed service
+      - name: Verify web assets and file operations through the deployed service
         run: python3 scripts/smoke-container.py http://127.0.0.1:5010 --state "$RUNNER_TEMP/hamma-smoke.json"
       - name: Recreate the service with its existing volume
         run: docker compose -f compose.local.yml up --detach --force-recreate --wait --wait-timeout 60
