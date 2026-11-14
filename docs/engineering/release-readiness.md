@@ -152,6 +152,20 @@ compresses its PAX archive with Python XZ before HAMMA verifies and extracts it.
 
 ## Load and retention verification — 2026-11-13
 
+The staged upload benchmark uses the batch reservation route and normal
+worker, then downloads the ZIP and checks all ordered member and manifest
+hashes. A 201-file Windows control on the batch-reservation build verified
+6,586,368 distinct payload bytes. Upload and staging took 26.38 seconds,
+admission took 9.47 seconds, and queueing through internal verification took
+8.54 seconds. The disposable run used a 20,000-request-per-minute limit.
+
+An earlier 5,000-file run on `209bd97` uploaded all 163,840,000 bytes and
+admitted the job, but the benchmark's eight-minute processing deadline expired
+before ZIP publication. The fixture now uses the configured worker time limit
+plus startup grace. Run `python -m processor.upload_scale_benchmark --report
+report.json` to repeat the full loopback workload. Sparse HTTP regressions
+separately verify reads and resumed writes beyond the 4 GiB offset.
+
 The Windows loopback burst completed 48 jobs across 16 sessions in 77.34 seconds
 after the per-peer connection allowance increased from 16 to 24. It verified
 32 ZIP and gzip downloads, exact restored bytes, ranges, duplicate submission,
