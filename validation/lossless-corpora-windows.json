@@ -1,0 +1,129 @@
+{
+  "platform": "Windows-11-10.0.26300-SP0",
+  "python": "3.13.14",
+  "tools": {
+    "revision": "2a262e2fbc72478b9c08e0a75ddcd0afef971ea0",
+    "native": {
+      "protocol": 1,
+      "engine": "shante-core",
+      "version": "0.1.0",
+      "codec": "zstd",
+      "cores": 8,
+      "codecVersion": "1.5.7",
+      "availableMemory": 488062976,
+      "workers": 0,
+      "avx2": true,
+      "avx512": false,
+      "neon": false,
+      "gpuAcceleration": false
+    },
+    "bsdtar": "bsdtar 3.8.9 - libarchive 3.8.9 zlib/1.2.13.1-motley liblzma/5.8.3 bz2lib/1.0.8 libzstd/1.5.7 cng/2.0 libb2/bundled"
+  },
+  "scope": "One local run per case. Python allocations exclude native and external process memory.",
+  "settings": {
+    "zip": "Deflate level 6",
+    "tar.zst": "SHANTE native default",
+    "tar.xz": "One LZMA2 stream over TAR, preset 6"
+  },
+  "results": [
+    {
+      "corpus": "shared-blocks",
+      "codec": "zip",
+      "files": 128,
+      "inputBytes": 16777216,
+      "outputBytes": 16798230,
+      "secondsThroughWriteAndBuiltInChecks": 20.4534,
+      "secondsThroughIndependentVerification": 21.2026,
+      "peakPythonAllocationBytes": 1582170,
+      "verified": true
+    },
+    {
+      "corpus": "shared-blocks",
+      "codec": "tar.zst",
+      "files": 128,
+      "inputBytes": 16777216,
+      "outputBytes": 4235378,
+      "secondsThroughWriteAndBuiltInChecks": 5.9231,
+      "secondsThroughIndependentVerification": 17.1781,
+      "peakPythonAllocationBytes": 2015950,
+      "verified": true
+    },
+    {
+      "corpus": "shared-blocks",
+      "codec": "tar.xz",
+      "files": 128,
+      "inputBytes": 16777216,
+      "outputBytes": 4289864,
+      "secondsThroughWriteAndBuiltInChecks": 11.1507,
+      "secondsThroughIndependentVerification": 25.552,
+      "peakPythonAllocationBytes": 97817731,
+      "verified": true
+    },
+    {
+      "corpus": "unique-random",
+      "codec": "zip",
+      "files": 128,
+      "inputBytes": 16777216,
+      "outputBytes": 16798230,
+      "secondsThroughWriteAndBuiltInChecks": 27.0506,
+      "secondsThroughIndependentVerification": 27.5702,
+      "peakPythonAllocationBytes": 1566172,
+      "verified": true
+    },
+    {
+      "corpus": "unique-random",
+      "codec": "tar.zst",
+      "files": 128,
+      "inputBytes": 16777216,
+      "outputBytes": 16843179,
+      "secondsThroughWriteAndBuiltInChecks": 7.677,
+      "secondsThroughIndependentVerification": 20.6297,
+      "peakPythonAllocationBytes": 1409882,
+      "verified": true
+    },
+    {
+      "corpus": "unique-random",
+      "codec": "tar.xz",
+      "files": 128,
+      "inputBytes": 16777216,
+      "outputBytes": 16891036,
+      "secondsThroughWriteAndBuiltInChecks": 27.7279,
+      "secondsThroughIndependentVerification": 40.3934,
+      "peakPythonAllocationBytes": 97854219,
+      "verified": true
+    },
+    {
+      "corpus": "already-compressed",
+      "codec": "zip",
+      "files": 128,
+      "inputBytes": 16784640,
+      "outputBytes": 16805756,
+      "secondsThroughWriteAndBuiltInChecks": 15.8649,
+      "secondsThroughIndependentVerification": 16.3774,
+      "peakPythonAllocationBytes": 1565980,
+      "verified": true
+    },
+    {
+      "corpus": "already-compressed",
+      "codec": "tar.zst",
+      "files": 128,
+      "inputBytes": 16784640,
+      "outputBytes": 16908689,
+      "secondsThroughWriteAndBuiltInChecks": 4.2789,
+      "secondsThroughIndependentVerification": 10.4309,
+      "peakPythonAllocationBytes": 1410783,
+      "verified": true
+    },
+    {
+      "corpus": "already-compressed",
+      "codec": "tar.xz",
+      "files": 128,
+      "inputBytes": 16784640,
+      "outputBytes": 16895764,
+      "secondsThroughWriteAndBuiltInChecks": 19.6422,
+      "secondsThroughIndependentVerification": 28.0201,
+      "peakPythonAllocationBytes": 97784740,
+      "verified": true
+    }
+  ]
+}
