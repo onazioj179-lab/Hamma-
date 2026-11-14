@@ -86,3 +86,39 @@ it.skipIf(!libarchive)('exchanges AES ZIP files with libarchive', async () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+it.skipIf(!libarchive)('unlocks an independent ZipCrypto archive and rejects damaged data', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'hamma-zipcrypto-'));
+  const data = new Uint8Array([0, 255, 19, 128, 0]);
+  try {
+    writeFileSync(join(root, 'file.bin'), data);
+    const packed = spawnSync(tar, [
+      '-acf', 'legacy.zip', '--options', 'zip:encryption=zipcrypt,zip:compression=store',
+      '--passphrase', password, 'file.bin',
+    ], { cwd: root });
+    expect(packed.status, packed.stderr.toString()).toBe(0);
+    const bytes = Uint8Array.from(readFileSync(join(root, 'legacy.zip')));
+    const archive = new Blob([bytes]);
+    const reader = new ZipReader(new BlobReader(archive), { useWebWorkers: false });
+    try {
+      const [entry] = await reader.getEntries();
+      expect(entry.zipCrypto).toBe(true);
+    } finally {
+      await reader.close();
+    }
+    const output = await unlockEncryptedZip(archive, password, signal);
+    writeFileSync(join(root, 'unlocked.zip'), new Uint8Array(await output.arrayBuffer()));
+    const verified = spawnSync(tar, ['-xOf', 'unlocked.zip', 'file.bin'], { cwd: root });
+    expect(verified.status, verified.stderr.toString()).toBe(0);
+    expect(new Uint8Array(verified.stdout)).toEqual(data);
+
+    await expect(unlockEncryptedZip(archive, 'wrong password', signal)).rejects.toThrow('password is incorrect');
+    const header = new DataView(bytes.buffer);
+    const encryptedData = 30 + header.getUint16(26, true) + header.getUint16(28, true) + 12;
+    bytes[encryptedData] ^= 1;
+    await expect(unlockEncryptedZip(new Blob([bytes]), password, signal)).rejects.toThrow('ZIP data is damaged');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

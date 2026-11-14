@@ -75,6 +75,30 @@ it('shows a bounded archive comment preview with nonprintable bytes escaped', as
   expect(result.members).toHaveLength(1);
 });
 
+it('reads bounded UTF-8 and legacy file comments without opening payloads', async () => {
+  const firstComment = 'a'.repeat(4095) + 'é' + 'more';
+  const bytes = new Uint8Array(zipSync({
+    'folder/世界.txt': [new Uint8Array(300_000), { level: 0, comment: firstComment }],
+    'safe.txt': [new Uint8Array([1]), { comment: 'Visiblé\u202e\u0000' }],
+    'legacy.txt': [new Uint8Array([2]), { comment: 'é' }],
+    'plain.txt': new Uint8Array([3]),
+  }));
+  const view = new DataView(bytes.buffer);
+  const offset = view.getUint32(bytes.length - 6, true);
+  // A ZIP writer outside UTF-8 mode can store the same bytes as a legacy comment.
+  const second = offset + 46 + view.getUint16(offset + 28, true) + view.getUint16(offset + 30, true) + view.getUint16(offset + 32, true);
+  const third = second + 46 + view.getUint16(second + 28, true) + view.getUint16(second + 30, true) + view.getUint16(second + 32, true);
+  view.setUint16(third + 8, view.getUint16(third + 8, true) & ~0x800, true);
+  const file = new Blob([bytes]);
+  const slice = vi.spyOn(file, 'slice');
+  const { members } = await inspectZip(file);
+  expect(members.map(member => member.comment)).toEqual([
+    'a'.repeat(4095) + '…', 'Visiblé\uFFFD\uFFFD', '\\xc3\\xa9', undefined,
+  ]);
+  expect(slice).toHaveBeenCalledTimes(2);
+  expect(slice.mock.calls[1][0]).toBe(offset);
+});
+
 it('rejects forged counts and truncated records', async () => {
   const bytes = fixture();
   const footer = bytes.length - 22;

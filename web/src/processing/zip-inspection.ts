@@ -5,6 +5,7 @@ export interface ZipMember {
   size: number;
   packedSize: number;
   encrypted: boolean;
+  comment?: string;
 }
 
 export interface ZipDirectory {
@@ -23,6 +24,24 @@ const ZIP64_LOCATOR = 20;
 const LARGE = 0xffffffff;
 const invalid = () => new Error('Invalid ZIP directory');
 const split = () => new Error('Split ZIP previews are unavailable');
+const unsafeText = /[\u0000-\u001f\u007f-\u009f\u061c\u200e-\u200f\u202a-\u202e\u2066-\u2069]/g;
+
+function previewComment(buffer: ArrayBuffer, offset: number, size: number, isUtf8 = false) {
+  const truncated = size > COMMENT_PREVIEW;
+  const bytes = new Uint8Array(buffer, offset, Math.min(size, COMMENT_PREVIEW));
+  const suffix = truncated ? '…' : '';
+  if (isUtf8) {
+    const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+    try {
+      // Skip an incomplete UTF-8 sequence at the preview boundary.
+      return utf8.decode(bytes, { stream: truncated }).replace(unsafeText, '\uFFFD') + suffix;
+    } catch {
+      // Show the original bytes when the UTF-8 flag disagrees with the data.
+    }
+  }
+  return Array.from(bytes, byte => byte >= 0x20 && byte <= 0x7e
+    ? String.fromCharCode(byte) : '\\x' + byte.toString(16).padStart(2, '0')).join('') + suffix;
+}
 
 function safeUint64(view: DataView, offset: number): number {
   const value = view.getBigUint64(offset, true);
@@ -74,11 +93,7 @@ export async function inspectZip(file: Blob): Promise<ZipDirectory> {
     end--;
   }
   if (end < 0) throw invalid();
-  const commentLength = tail.getUint16(end + 20, true);
-  const commentBytes = new Uint8Array(tail.buffer, end + END_SIZE, Math.min(commentLength, COMMENT_PREVIEW));
-  const comment = Array.from(commentBytes, byte => byte >= 0x20 && byte <= 0x7e
-    ? String.fromCharCode(byte) : '\\x' + byte.toString(16).padStart(2, '0')).join('')
-    + (commentLength > COMMENT_PREVIEW ? '…' : '');
+  const comment = previewComment(tail.buffer, end + END_SIZE, tail.getUint16(end + 20, true));
   let count = tail.getUint16(end + 10, true);
   let size = tail.getUint32(end + 12, true);
   let offset = tail.getUint32(end + 16, true);
@@ -120,17 +135,22 @@ export async function inspectZip(file: Blob): Promise<ZipDirectory> {
     const { size: unpackedSize, packedSize, offset: localOffset } = memberSizes(directory, member, start + nameSize, extraSize);
     if (localOffset > offset - 30) throw invalid();
 
+    const isUtf8 = Boolean(flags & 0x800);
     const nameBytes = new Uint8Array(buffer, start, nameSize);
     // Legacy non-ASCII bytes are displayed as escapes instead of guessing a code page.
     let name: string;
     try {
-      name = flags & 0x800 ? utf8.decode(nameBytes) : Array.from(nameBytes, byte =>
+      name = isUtf8 ? utf8.decode(nameBytes) : Array.from(nameBytes, byte =>
         byte < 0x80 ? String.fromCharCode(byte) : '\\x' + byte.toString(16).padStart(2, '0')).join('');
     } catch {
       throw invalid();
     }
-    name = name.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '\uFFFD');
-    members.push({ name, size: unpackedSize, packedSize, encrypted: !!(flags & 1) });
+    name = name.replace(unsafeText, '\uFFFD');
+    const entry: ZipMember = { name, size: unpackedSize, packedSize, encrypted: !!(flags & 1) };
+    if (commentSize) {
+      entry.comment = previewComment(buffer, position - commentSize, commentSize, isUtf8);
+    }
+    members.push(entry);
   }
   if (members.length !== count) throw invalid();
   return { members, comment };

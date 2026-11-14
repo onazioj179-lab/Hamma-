@@ -74,10 +74,16 @@ The archive must fit the configured expansion and ratio limits. Files named
 `.zst` or `.zstd` restore a single file.
 
 Use **Create password-protected ZIP** to write an AES-256 ZIP, or select an
-encrypted archive and choose **Unlock ZIP** to download a regular ZIP. Both
-actions run in the browser. Passwords and file contents stay in the browser
-during processing. File and folder names remain visible in the encrypted
-archive. The browser accepts up to 1,000 entries and 128 MiB of file data.
+single-volume AES or legacy ZipCrypto archive and choose **Unlock ZIP** to
+download a regular ZIP. Both actions run in the browser, where passwords and
+file contents stay during processing. File and folder names remain visible in
+the encrypted archive. The browser accepts up to 1,000 entries and 128 MiB of
+file data.
+ZipCrypto is supported for opening existing archives. Use AES-256 for new
+password-protected archives.
+
+**Inspect ZIP** shows archive and file comments, when present, from the ZIP
+directory without reading or uploading file contents.
 
 Any file can be compressed as opaque data. That does **not** mean every format
 can be extracted or converted. RAR/7Z, unknown archives, server-side encrypted ZIP extraction,
