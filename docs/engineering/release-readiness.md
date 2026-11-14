@@ -125,29 +125,6 @@ compresses its PAX archive with Python XZ before HAMMA verifies and extracts it.
 
 ## Load and retention verification — 2026-11-13
 
-Paged ZIP jobs now store member names and verification digests in SQLite,
-hash uploads during packing, and compare the reopened ZIP's ordered entries
-with the persisted rows. Python's ZIP central directory still scales with
-member count. A Windows comparison verified 5,000 ZIP members with 156.25 MiB
-of payload from 64 deterministic files. Peak traced Python allocations fell
-from 8.02 MiB to 5.90 MiB. The in-memory and disk-backed runs took 62.63 and
-38.43 seconds, respectively. These timings describe one run per path.
-
-Paged uploaded TAR jobs now use a temporary SQLite registry for member paths
-and verification digests. They hash each payload while packing, compare it to
-the admitted digest, and publish manifest rows only after verifying the
-archive. The HTTP regression checks member bytes, a manifest page, and rejection
-of a same-size input mutation after admission.
-
-A Windows TAR.GZ worker-path comparison used 5,000 unique archive names and
-156.25 MiB of payload from 64 repeated deterministic source files. An
-independent read verified every member. Traced peak Python allocations fell
-from 4.35 MiB to 1.97 MiB compared with the in-memory registry using the same
-writer. Packing and internal verification took 85.45 and 94.16 seconds
-respectively. Tracing excludes SQLite, native memory, and OS caches. ZIP
-metadata, browser-side selection memory, and large HTTP transfer tests remain
-open.
-
 On Windows 11 with Python 3.13.14 and SHANTE 0.1.0, the loopback
 `processor.mixed_workload` completed 28 jobs across four owners and 24
 projects. It resumed 12 uploads, verified 214,794,240 bytes of mixed
@@ -192,3 +169,30 @@ Lint status: FAILED. The existing npm lint command invokes ESLint, but neither
 its dependency nor a configuration is present. This is an unresolved repository
 check, not a successful lint result. Full native sanitizers and physical device
 QA were not performed.
+
+## Paged ZIP verification
+
+Paged ZIP jobs store member names and verification digests in SQLite,
+hash uploads during packing, and compare the reopened ZIP's ordered entries
+with the persisted rows. Python's ZIP central directory still scales with
+member count. A Windows comparison verified 5,000 ZIP members with 156.25 MiB
+of payload from 64 deterministic files. Peak traced Python allocations fell
+from 8.02 MiB to 5.90 MiB. The in-memory and disk-backed runs took 62.63 and
+38.43 seconds, respectively. These timings describe one run per path.
+
+## Paged TAR verification
+
+Paged uploaded TAR jobs now use a temporary SQLite registry for member paths
+and verification digests. They hash each payload while packing, compare it to
+the admitted digest, and publish manifest rows only after verifying the
+archive. The HTTP regression checks member bytes, a manifest page, and rejection
+of a same-size input mutation after admission.
+
+A Windows TAR.GZ worker-path comparison used 5,000 unique archive names and
+156.25 MiB of payload from 64 repeated deterministic source files. An
+independent read verified every member. Traced peak Python allocations fell
+from 4.35 MiB to 1.97 MiB compared with the in-memory registry using the same
+writer. Packing and internal verification took 85.45 and 94.16 seconds
+respectively. Tracing excludes SQLite, native memory, and OS caches. ZIP
+metadata, browser-side selection memory, and large HTTP transfer tests remain
+open.
