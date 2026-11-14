@@ -2,6 +2,11 @@
 
 ## Remaining web release acceptance
 
+XLSX-to-PDF remains open. The Linux container's XLSX export failed inside the
+processor worker. The rollback restores the previously verified DOCX and PPTX
+export path. The XLSX acceptance test must render both worksheets and verify
+their cell values in the downloaded PDF with worker isolation enabled.
+
 Use the six areas in the [web backlog](hammer-directive-audit.md) as the
 release checklist. Run the checks against the same candidate build and record
 the revision, platform, fixture, outcome and skipped cases.

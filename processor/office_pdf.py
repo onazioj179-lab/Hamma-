@@ -16,42 +16,31 @@ from .pdf_pages import pdf_page_count
 
 
 TARGET = 'office-pdf'
-RENDERER_LIBRARIES = {
-    '.docx': ('libswlo.so',),
-    '.pptx': ('libsdlo.so',),
-    '.xlsx': ('libsclo.so', 'libscfiltlo.so'),
-}
+SUFFIXES = frozenset(('.docx', '.pptx'))
 INPUT_LIMIT = 32 * 1024**2
 WORK_LIMIT = 128 * 1024**2
 PROGRAM = '/usr/lib/libreoffice/program'
 
 
-def office_tools(suffix=None):
+def office_tools():
     if sys.platform != 'linux':
         return None
-    if suffix == '.xlsx':
-        executable = Path(PROGRAM) / 'soffice.bin'
-        helper = str(executable) if os.access(executable, os.X_OK) else None
-    else:
-        helper = shutil.which('hamma-office-pdf')
+    helper = shutil.which('hamma-office-pdf')
     pdfinfo = shutil.which('pdfinfo')
-    application_parts = ('libmergedlo.so', *RENDERER_LIBRARIES.get(suffix, ()))
+    application_parts = ('libmergedlo.so', 'libswlo.so', 'libsdlo.so')
     if helper and pdfinfo and all((Path(PROGRAM) / part).is_file() for part in application_parts):
         return helper, pdfinfo
     return None
 
 
 def convert_office(source, name, output, ctx):
-    suffix = Path(name).suffix.lower()
-    if suffix not in RENDERER_LIBRARIES:
-        raise ProcessingError('Unsupported Office filename for this package')
-    tools = office_tools(suffix)
+    tools = office_tools()
     if not tools:
         raise ProcessingError('Unsupported Office export without the Linux document renderer')
     if source.stat().st_size > INPUT_LIMIT:
         raise ProcessingError('Office input size limit reached')
     kind = validate_office_source(source, ctx)
-    if suffix != '.' + kind:
+    if '.' + kind not in SUFFIXES or Path(name).suffix.lower() != '.' + kind:
         raise ProcessingError('Unsupported Office filename for this package')
 
     helper, pdfinfo = tools
@@ -66,19 +55,7 @@ def convert_office(source, name, output, ctx):
         profile = work / 'profile'
         profile.mkdir()
         candidate = work / 'document.pdf'
-        if kind == 'xlsx':
-            user = profile / 'user'
-            user.mkdir()
-            (user / 'registrymodifications.xcu').write_text(
-                '<oor:items xmlns:oor="http://openoffice.org/2001/registry">'
-                '<item oor:path="/org.openoffice.Office.Common/Security/Scripting">'
-                '<prop oor:name="DisableMacrosExecution" oor:op="fuse"><value>true</value></prop>'
-                '</item></oor:items>', encoding='utf-8',
-            )
-            command = [helper, f'-env:UserInstallation={profile.as_uri()}', '--headless',
-                       '--convert-to', 'pdf:calc_pdf_Export', '--outdir', str(work), str(staged)]
-        else:
-            command = [helper, PROGRAM, profile.as_uri(), staged.as_uri(), candidate.as_uri()]
+        command = [helper, PROGRAM, profile.as_uri(), staged.as_uri(), candidate.as_uri()]
         with subprocess.Popen(codec_command(command, staged, work), cwd=work,
                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                               stderr=subprocess.DEVNULL) as process:
