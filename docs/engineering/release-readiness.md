@@ -61,6 +61,15 @@ new manifest rows. Windows bsdtar 3.8.9
 verified TAR.ZST in both directions, including nested paths, an empty file,
 an empty directory and member SHA-256 checks.
 
+## Archive admission limits
+
+The upload reservation rejects an individual file above the configured
+input limit. The browser checks the aggregate size before starting an
+archive upload, and the server checks both inline and staged selections
+before hashing their payloads. In-flight job admission allows one new
+submission per owner. A competing submission receives HTTP 429 with
+Retry-After, and replay of a committed request still returns the original job.
+
 ## Web release evidence — 2026-11-12
 
 The release remains open. The [web engineering audit](hammer-directive-audit.md)
@@ -124,13 +133,6 @@ tested Windows code page. When inbox tar lacks the XZ write filter, the fixture
 compresses its PAX archive with Python XZ before HAMMA verifies and extracts it.
 
 ## Load and retention verification — 2026-11-13
-
-The upload reservation rejects an individual file above the configured
-input limit. The browser checks the aggregate size before starting an
-archive upload, and the server checks both inline and staged selections
-before hashing their payloads. In-flight job admission allows one new
-submission per owner. A competing submission receives HTTP 429 with
-Retry-After, and replay of a committed request still returns the original job.
 
 On Windows 11 with Python 3.13.14 and SHANTE 0.1.0, the loopback
 `processor.mixed_workload` completed 28 jobs across four owners and 24
