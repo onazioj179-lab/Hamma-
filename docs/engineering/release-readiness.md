@@ -125,7 +125,20 @@ compresses its PAX archive with Python XZ before HAMMA verifies and extracts it.
 
 ## Load and retention verification — 2026-11-13
 
-### Lossless 100 GB compression fixture
+On Windows 11 with Python 3.13.14 and SHANTE 0.1.0, the loopback
+`processor.mixed_workload` completed 28 jobs across four owners and 24
+projects. It resumed 12 uploads, verified 214,794,240 bytes of mixed
+batch inputs, confirmed output digests and ranges, and denied all eight
+cross-owner checks. The candidate run took 75.44 seconds, and the run on
+main at `72b227b` took 76.91 seconds. These single-run times do not establish
+a throughput gain.
+
+Regression cases cover an expired folder that remains in use, preservation
+of readiness through retention failure and API rate limiting, rejection of
+invalid request bodies, and a job retry racing a file deletion. Readiness
+continues to check the scheduler heartbeat and configured web build.
+
+## Lossless 100 GB compression fixture
 
 On Windows, SHANTE 0.1.0 with Zstandard 1.5.7 compressed a 100,000,000,000-byte
 sparse zero-filled file to 3,814,715 bytes. The codec decoded and compared
@@ -142,19 +155,6 @@ The browser and HTTP processor retain their current safety limits. The
 529-byte Zstandard archive for repeated text and a 4,194,413-byte archive for
 deterministic random data. Comparison with the reported WinRAR result still
 requires the same source bytes and settings.
-
-On Windows 11 with Python 3.13.14 and SHANTE 0.1.0, the loopback
-`processor.mixed_workload` completed 28 jobs across four owners and 24
-projects. It resumed 12 uploads, verified 214,794,240 bytes of mixed
-batch inputs, confirmed output digests and ranges, and denied all eight
-cross-owner checks. The candidate run took 75.44 seconds, and the run on
-main at `72b227b` took 76.91 seconds. These single-run times do not establish
-a throughput gain.
-
-Regression cases cover an expired folder that remains in use, preservation
-of readiness through retention failure and API rate limiting, rejection of
-invalid request bodies, and a job retry racing a file deletion. Readiness
-continues to check the scheduler heartbeat and configured web build.
 
 ## Historical baseline — 2026-11-04
 
