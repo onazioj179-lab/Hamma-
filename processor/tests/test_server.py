@@ -49,10 +49,10 @@ class ServerTests(unittest.TestCase):
         self.thread.join(3)
         self.temp.cleanup()
 
-    def call(self, path, data=None, method="GET", headers=None, client=None, raw=False):
+    def call(self, path, data=None, method="GET", headers=None, client=None, raw=False, *, timeout=15):
         body = json.dumps(data).encode() if data is not None and not raw else data
         request = Request(self.base + path, data=body, method=method, headers={"X-Hamma-Request": "1", **({"Content-Type": "application/json"} if data is not None and not raw else {}), **(headers or {})})
-        with (client or self.client).open(request, timeout=15) as response:
+        with (client or self.client).open(request, timeout=timeout) as response:
             result = response.read()
             return result if raw else json.loads(result)
 
@@ -65,6 +65,27 @@ class ServerTests(unittest.TestCase):
                     self.assertEqual(caught.exception.code, 400)
                     self.assertIn("error", json.loads(caught.exception.read()))
         self.assertIn("id", self.upload())
+
+    def test_request_body_rejects_truncated_json_and_ambiguous_lengths(self):
+        for lengths in (("10",), ("2", "2")):
+            with self.subTest(lengths=lengths), closing(
+                HTTPConnection("127.0.0.1", self.server.server_port, timeout=5)
+            ) as client:
+                client.putrequest("POST", "/api/process/uploads")
+                client.putheader("X-Hamma-Request", "1")
+                client.putheader("Content-Type", "application/json")
+                for length in lengths:
+                    client.putheader("Content-Length", length)
+                client.endheaders(b"{}")
+                client.sock.shutdown(socket.SHUT_WR)
+                with client.getresponse() as response:
+                    self.assertEqual(response.status, 400)
+        self.assertIn("id", self.upload())
+
+    def test_deeply_nested_json_is_a_client_error(self):
+        payload = b'{"value":' + b"[" * 2000 + b"0" + b"]" * 2000 + b"}"
+        self.assert_status(400, lambda: self.call(
+            "/uploads", payload, "POST", {"Content-Type": "application/json"}, raw=True))
 
     def test_disconnected_clients_close_without_a_false_storage_error(self):
         request = object.__new__(self.server.RequestHandlerClass)
@@ -238,6 +259,23 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 429)
         self.assertTrue(1 <= int(raised.exception.headers["Retry-After"]) <= 60)
         self.assertNotIn("expired-client", self.service.rates)
+
+    def test_retention_failure_does_not_stall_readiness_or_retry_every_tick(self):
+        self.service.requests_per_minute = 1
+        self.call("/health")
+        self.assert_status(429, lambda: self.call("/health"))
+        stop = Mock()
+        stop.wait.side_effect = (False, False, True)
+        stop.is_set.return_value = False
+        with (patch.object(self.service, "stop", stop),
+              patch.object(self.service, "cleanup", side_effect=PermissionError) as cleanup,
+              patch.object(self.service, "tick") as tick,
+              self.assertLogs("hamma.processor", level="ERROR")):
+            self.service.loop()
+            self.assertEqual(self.call("/ready"), {"ready": True})
+            self.assertEqual(self.call("/ready"), {"ready": True})
+        cleanup.assert_called_once()
+        self.assertEqual(tick.call_count, 2)
 
     def test_sqlite_busy_returns_retryable_error(self):
         import sqlite3
@@ -569,7 +607,7 @@ class ServerTests(unittest.TestCase):
         self.assert_status(404, lambda: self.call('/jobs', request, 'POST', client=stranger))
 
         with patch.object(self.service.store, 'get_uploads', wraps=self.service.store.get_uploads) as reads:
-            job = self.call('/jobs', request, 'POST')
+            job = self.call('/jobs', request, 'POST', timeout=60)
         self.assertEqual([len(call.args[1]) for call in reads.call_args_list], [100, 100, 1])
         self.assertEqual(job['inputMode'], 'upload-pages')
         self.assertEqual(self.call('/jobs', request, 'POST')['id'], job['id'])
@@ -1186,6 +1224,24 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(first["id"], second["id"])
         self.assertEqual(self.call("/jobs")["total"], 1)
         self.assert_status(409, lambda: self.job(upload, requestId="a" * 64, target="tar"))
+
+    def test_file_deletion_rechecks_job_state_after_a_concurrent_retry(self):
+        job = self.job()
+        job_id = job["id"]
+        store = self.service.store
+        owner = store.list()[0][0]
+        store.patch(owner, "job", job_id, state="failed")
+        get = store.get
+
+        def retry_after_read(owner, kind, record_id):
+            record = get(owner, kind, record_id)
+            if kind == "job" and record_id == job_id and record["state"] == "failed":
+                store.patch(owner, kind, record_id, state="queued")
+            return record
+
+        with patch.object(store, "get", side_effect=retry_after_read):
+            self.assert_status(409, lambda: self.call(f"/jobs/{job_id}/files", method="DELETE"))
+        self.assertEqual(self.execute(job)["state"], "completed")
 
     def test_worker_start_failure_does_not_strand_jobs_or_stop_queue(self):
         jobs = [self.job(), self.job()]
