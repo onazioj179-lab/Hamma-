@@ -29,7 +29,11 @@ PROGRAM = '/usr/lib/libreoffice/program'
 def office_tools(suffix=None):
     if sys.platform != 'linux':
         return None
-    helper = shutil.which('hamma-office-pdf')
+    if suffix == '.xlsx':
+        executable = Path(PROGRAM) / 'soffice.bin'
+        helper = str(executable) if os.access(executable, os.X_OK) else None
+    else:
+        helper = shutil.which('hamma-office-pdf')
     pdfinfo = shutil.which('pdfinfo')
     application_parts = ('libmergedlo.so', *RENDERER_LIBRARIES.get(suffix, ()))
     if helper and pdfinfo and all((Path(PROGRAM) / part).is_file() for part in application_parts):
@@ -62,7 +66,19 @@ def convert_office(source, name, output, ctx):
         profile = work / 'profile'
         profile.mkdir()
         candidate = work / 'document.pdf'
-        command = [helper, PROGRAM, profile.as_uri(), staged.as_uri(), candidate.as_uri()]
+        if kind == 'xlsx':
+            user = profile / 'user'
+            user.mkdir()
+            (user / 'registrymodifications.xcu').write_text(
+                '<oor:items xmlns:oor="http://openoffice.org/2001/registry">'
+                '<item oor:path="/org.openoffice.Office.Common/Security/Scripting">'
+                '<prop oor:name="DisableMacrosExecution" oor:op="fuse"><value>true</value></prop>'
+                '</item></oor:items>', encoding='utf-8',
+            )
+            command = [helper, f'-env:UserInstallation={profile.as_uri()}', '--headless',
+                       '--convert-to', 'pdf:calc_pdf_Export', '--outdir', str(work), str(staged)]
+        else:
+            command = [helper, PROGRAM, profile.as_uri(), staged.as_uri(), candidate.as_uri()]
         with subprocess.Popen(codec_command(command, staged, work), cwd=work,
                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                               stderr=subprocess.DEVNULL) as process:
