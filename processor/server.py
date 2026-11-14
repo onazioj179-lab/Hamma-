@@ -70,10 +70,12 @@ JOB_PROGRESS_RESET = dict(processed=0, entries=0, expanded=0, mediaSeconds=0, tr
 
 
 class Store:
-    def __init__(self, root):
+    def __init__(self, root, *, initialize=True):
         self.root = Path(root).resolve()
-        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.database = self.root / "metadata.sqlite3"
+        if not initialize:
+            return
+        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         with self.connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.execute("BEGIN IMMEDIATE")
@@ -263,10 +265,13 @@ class Store:
                                 for index, entry in enumerate(manifest_entries, 1)))
                 record.update(manifestStorage="paged", manifestCount=len(manifest_entries))
                 record.pop("manifest", None)
-            if kind == "job" and updates.get("filesCleaned") and record.get("manifestStorage") == "paged":
-                db.execute("DELETE FROM job_manifest_entries WHERE owner=? AND job_id=?", (owner, record_id))
-                record.pop("manifestStorage")
-                record.pop("manifestCount")
+            if kind == "job" and updates.get("filesCleaned"):
+                if record.get("manifestStorage") == "paged":
+                    db.execute("DELETE FROM job_manifest_entries WHERE owner=? AND job_id=?", (owner, record_id))
+                    record.pop("manifestStorage")
+                    record.pop("manifestCount")
+                if record.get("inputMode") == "directory-index":
+                    db.execute("DELETE FROM local_index_sources WHERE owner=? AND job_id=?", (owner, record_id))
             db.execute("UPDATE records SET data=? WHERE id=? AND owner=? AND kind=?", (json.dumps(record), record_id, owner, kind))
             if kind == "job" and "inputs" in updates:
                 self._sync_inputs(db, owner, record)
@@ -292,10 +297,6 @@ class Store:
         with self.connect() as db:
             row = db.execute('SELECT root FROM local_index_sources WHERE owner=? AND job_id=?', (owner, job_id)).fetchone()
         return Path(row[0]) if row else None
-
-    def forget_local_source(self, owner, job_id):
-        with self.connect() as db:
-            db.execute('DELETE FROM local_index_sources WHERE owner=? AND job_id=?', (owner, job_id))
 
     def count(self, owner=None, kind="job", states=None, visible=False):
         where, parameters = ["kind=?"], [kind]
@@ -396,13 +397,39 @@ class Store:
             """, (owner, job_id, after, after + limit)).fetchall()
         return metadata, [{**json.loads(row['entry']), 'id': row['position'] + 1} for row in rows]
 
-    def full_manifest(self, owner, job_id):
-        record = self.get(owner, "job", job_id)
-        if not record or not record.get("downloadAvailable") or record["fileExpires"] <= time.time():
-            raise HTTPError(410, "Verified manifest unavailable")
-        if record.get("manifestStorage") == "paged":
-            return self.full_paged_manifest(owner, job_id)
-        return record.get("manifest", [])
+    def write_full_manifest(self, owner, job_id, output):
+        """Serialize a consistent manifest before sending anything to the client."""
+        with self.connect() as db:
+            db.execute("BEGIN")
+            record = db.execute("""
+                SELECT json_extract(data,'$.inputMode') AS mode,
+                       json_extract(data,'$.manifestStorage') AS storage,
+                       json_extract(data,'$.downloadAvailable') AS available,
+                       json_extract(data,'$.fileExpires') AS expires,
+                       json_extract(data,'$.sha256') AS sha256
+                FROM records WHERE owner=? AND kind='job' AND id=?
+            """, (owner, job_id)).fetchone()
+            if record is None:
+                raise HTTPError(404, "Job unavailable")
+            if not record["available"] or (record["expires"] or 0) <= time.time():
+                raise HTTPError(410, "Verified manifest unavailable")
+            if record["mode"] == "directory-index":
+                return False
+            if record["storage"] == "paged":
+                rows = db.execute("""SELECT data FROM job_manifest_entries
+                    WHERE owner=? AND job_id=? ORDER BY position""", (owner, job_id))
+            else:
+                rows = db.execute("""SELECT member.value
+                    FROM records, json_each(records.data,'$.manifest') AS member
+                    WHERE owner=? AND kind='job' AND records.id=?""", (owner, job_id))
+            header = json.dumps({"id": job_id, "sha256": record["sha256"]})
+            output.write((header[:-1] + ', "files":[').encode())
+            separator = b""
+            for (entry,) in rows:
+                output.write(separator + entry.encode("utf-8"))
+                separator = b","
+            output.write(b"]}")
+            return True
 
     def full_paged_manifest(self, owner, job_id):
         with self.connect() as db:
@@ -548,7 +575,9 @@ def run_job(root, owner, job_id, limits, isolated=False):
     if isolated and os.name != "nt":
         os.setsid()
         apply_worker_limits(limits)
-    store = Store(root)
+    # The service migrates the store before starting workers. Opening an
+    # existing store here avoids taking the schema write lock on every job.
+    store = Store(root, initialize=False)
     job = store.get(owner, "job", job_id)
     directory = store.folder(owner, job_id)
     started = time.time()
@@ -903,6 +932,7 @@ class Service:
         self.job_selections.cleanup()
         now = time.time()
         jobs = self.store.expired_jobs(now)
+        jobs_cleaned = 0
         for owner, candidate in jobs:
             with self.lock:
                 job = self.store.get(owner, "job", candidate["id"])
@@ -913,30 +943,37 @@ class Service:
                 if job["id"] in self.running:
                     continue
                 if job["fileExpires"] <= now:
-                    directory = self.store.folder(owner, job["id"])
-                    if directory.exists():
-                        shutil.rmtree(directory)
-                    self.store.patch(owner, "job", job["id"], downloadAvailable=False, outputFile=None, filesCleaned=True, indexBytes=0)
-                    self.store.forget_local_source(owner, job['id'])
+                    if not job.get("filesCleaned"):
+                        if not self.remove_expired_folder(owner, job["id"]):
+                            continue
+                        self.store.patch(owner, "job", job["id"], downloadAvailable=False, outputFile=None, filesCleaned=True, indexBytes=0)
                 if job.get("historyExpires") is not None and job["historyExpires"] <= now:
                     # History expires independently; file cleanup remains tracked by a tombstone.
                     self.store.patch(owner, "job", job["id"], hidden=True)
                     if job["fileExpires"] <= now:
-                        directory = self.store.folder(owner, job["id"])
-                        if directory.exists():
-                            shutil.rmtree(directory)
                         self.store.delete(owner, job["id"])
                 elif job.get("hidden") and job["fileExpires"] <= now:
                     self.store.delete(owner, job["id"])
+                jobs_cleaned += 1
         uploads = self.store.expired_uploads(now)
+        uploads_cleaned = 0
         for owner, upload in uploads:
             with self.lock:
-                if not self.store.upload_referenced(owner, upload["id"], now=now):
-                    directory = self.store.folder(owner, upload["id"])
-                    if directory.exists():
-                        shutil.rmtree(directory)
+                if (not self.store.upload_referenced(owner, upload["id"], now=now)
+                        and self.remove_expired_folder(owner, upload["id"])):
                     self.store.delete(owner, upload["id"])
-        return len(jobs) >= 100 or len(uploads) >= 100
+                    uploads_cleaned += 1
+        return (len(jobs) >= 100 and jobs_cleaned > 0) or (len(uploads) >= 100 and uploads_cleaned > 0)
+
+    def remove_expired_folder(self, owner, record_id):
+        directory = self.store.folder(owner, record_id)
+        try:
+            if directory.exists():
+                shutil.rmtree(directory)
+        except OSError:
+            LOG.exception("Could not remove expired files: %s", record_id)
+            return False
+        return True
 
     def terminate(self, job_id):
         entry = self.running.get(job_id)
@@ -991,7 +1028,6 @@ class Service:
         if directory.exists():
             shutil.rmtree(directory, ignore_errors=False)
         self.store.patch(owner, "job", record["id"], downloadAvailable=False, outputFile=None, filesCleaned=True, fileExpires=time.time(), indexBytes=0)
-        self.store.forget_local_source(owner, record['id'])
         for upload in self.store.iter_job_inputs(owner, record):
             if not self.store.upload_referenced(owner, upload["id"], now=time.time(), exclude_job=record["id"]):
                 folder = self.store.folder(owner, upload["id"])
@@ -1070,11 +1106,16 @@ class Service:
         while not self.stop.wait(.25):
             try:
                 self.tick()
-                if time.monotonic() - last_cleanup > 30:
-                    last_cleanup = 0 if self.cleanup() else time.monotonic()
                 self.last_scheduler_tick = time.monotonic()
             except Exception:
                 LOG.exception("Scheduler error")
+            if time.monotonic() - last_cleanup > 30:
+                last_cleanup = time.monotonic()
+                try:
+                    if self.cleanup():
+                        last_cleanup = 0
+                except Exception:
+                    LOG.exception("Retention cleanup failed")
 
     def close(self):
         self.stop.set()
@@ -1187,6 +1228,23 @@ def handler(service):
             if self.command != "HEAD":
                 self.wfile.write(data)
 
+        def send_full_manifest(self, job_id):
+            # Spill large responses to disk and release the read transaction
+            # before writing to a potentially slow client.
+            with tempfile.SpooledTemporaryFile(max_size=BLOCK, dir=service.store.root) as body:
+                if not service.store.write_full_manifest(self.owner, job_id, body):
+                    return False
+                size = body.tell()
+                body.seek(0)
+                self.send_response(200)
+                self.headers_common()
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(size))
+                self.end_headers()
+                self.response_started = True
+                shutil.copyfileobj(body, self.wfile, BLOCK)
+                return True
+
         def headers_common(self):
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
@@ -1270,7 +1328,13 @@ def handler(service):
                 raise HTTPError(413, "Request too large")
             def reject_constant(value):
                 raise ValueError("Non-finite JSON number")
-            value = json.loads(self.rfile.read(length), parse_constant=reject_constant)
+            raw = self.rfile.read(length)
+            if len(raw) != length:
+                raise HTTPError(400, "Request interrupted")
+            try:
+                value = json.loads(raw, parse_constant=reject_constant)
+            except RecursionError as error:
+                raise HTTPError(400, "JSON is nested too deeply") from error
             if not isinstance(value, dict):
                 raise HTTPError(400, "Expected a JSON object")
             return value
@@ -1383,10 +1447,8 @@ def handler(service):
             self.validate_origin()
             url = urlsplit(self.path)
             path, method = url.path, self.command
-            if path == "/api/process" or path.startswith("/api/process/"):
-                service.admit_request(self.client_address[0])
-                if method in ("POST", "PUT", "DELETE") and self.headers.get("X-Hamma-Request") != "1":
-                    raise HTTPError(403, "Request authorization required")
+            if self.headers.get_all("Transfer-Encoding") or len(self.headers.get_all("Content-Length", [])) > 1:
+                raise HTTPError(400, "Unsupported request framing")
             if path == "/api/process/ready" and method == "GET":
                 tick = service.last_scheduler_tick
                 if service.stop.is_set() or tick is None or time.monotonic() - tick > 30:
@@ -1394,6 +1456,10 @@ def handler(service):
                 if service.web is not None and not (service.web / "index.html").is_file():
                     return self.send(503, {"ready": False, "reason": "web-build"})
                 return self.send(200, {"ready": True})
+            if path == "/api/process" or path.startswith("/api/process/"):
+                service.admit_request(self.client_address[0])
+                if method in ("POST", "PUT", "DELETE") and self.headers.get("X-Hamma-Request") != "1":
+                    raise HTTPError(403, "Request authorization required")
             self.identity()
             if path == "/api/process/prepare-restart" and method == "POST":
                 if not ipaddress.ip_address(self.client_address[0]).is_loopback:
@@ -1930,6 +1996,8 @@ def handler(service):
                 directory = service.store.folder(self.owner, job_id)
                 query = parse_qs(url.query)
                 if action == "manifest" and method == "GET":
+                    if "limit" not in query and "after" not in query and self.send_full_manifest(job_id):
+                        return
                     after = int(query.get("after", [0])[0])
                     limit = min(1000, max(1, int(query.get("limit", [100])[0])))
                     if not 0 <= after <= 2**63 - 1 - limit:
@@ -1939,10 +2007,6 @@ def handler(service):
                         raise HTTPError(404, "Job unavailable")
                     if not metadata["available"] or (metadata["expires"] or 0) <= time.time():
                         raise HTTPError(410, "Verified manifest unavailable")
-                    paginated = "limit" in query or "after" in query
-                    if not paginated and metadata["mode"] != "directory-index":
-                        return self.send(200, {"id": job_id, "sha256": metadata["sha256"],
-                                               "files": service.store.full_manifest(self.owner, job_id)})
                     if metadata["mode"] == "directory-index":
                         from .indexed_archive import manifest_page
                         files = manifest_page(directory / "discovery.sqlite3", after, limit, lookahead=True)
@@ -1967,21 +2031,26 @@ def handler(service):
                 if action is None and method == "GET":
                     return self.send(200, service.public(self.owner, record))
                 if method == "DELETE" and action in (None, "files"):
-                    if record["state"] not in TERMINAL:
-                        raise HTTPError(409, "Cancel the job first")
-                    if job_id in service.running:
-                        raise HTTPError(409, "Worker stopping")
-                    if action == "files":
-                        with service.lock:
+                    with service.lock:
+                        record = service.store.get(self.owner, "job", job_id)
+                        if not record:
+                            raise HTTPError(404, "Job unavailable")
+                        if record["state"] not in TERMINAL:
+                            raise HTTPError(409, "Cancel the job first")
+                        if job_id in service.running:
+                            raise HTTPError(409, "Worker stopping")
+                        if action == "files":
                             if directory.exists():
                                 service.delete_files(self.owner, record)
-                    else:
-                        service.store.patch(self.owner, "job", job_id, hidden=True)
+                        else:
+                            service.store.patch(self.owner, "job", job_id, hidden=True)
                     LOG.info("Deleted %s for job %s", action or "history", job_id)
                     return self.send(200, {"deleted": True})
                 if method == "POST":
                     with service.lock:
                         record = service.store.get(self.owner, "job", job_id)
+                        if not record:
+                            raise HTTPError(404, "Job unavailable")
                         if action == "cancel" and record["state"] in (*ACTIVE, "paused"):
                             (directory / "cancel").touch()
                             cancelled = service.store.patch(self.owner, "job", job_id, expected_states=(*ACTIVE, "paused"),

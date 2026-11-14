@@ -2,6 +2,7 @@
 import json
 from http.cookiejar import CookieJar
 from pathlib import Path
+import shutil
 import sqlite3
 import statistics
 import sys
@@ -10,6 +11,7 @@ import time
 import tracemalloc
 import unittest
 import threading
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, build_opener, HTTPCookieProcessor
 
@@ -22,11 +24,9 @@ LIMITS = {'expanded': 32 * 1024**2, 'files': 5000, 'ratio': 1000, 'depth': 3,
 class StoreQueries(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
         self.store = Store(self.temp.name)
         self.owner, self.other = 'a' * 64, 'b' * 64
-
-    def tearDown(self):
-        self.temp.cleanup()
 
     def put(self, index, owner=None, **fields):
         record = {'id': f'{index:032x}', 'created': index, 'name': f'file-{index}.txt',
@@ -211,6 +211,31 @@ class StoreQueries(unittest.TestCase):
             self.assertEqual(service.store.count(self.owner), 101)
         finally:
             service.close()
+
+    def test_expiry_defers_a_busy_folder_and_cleans_other_records(self):
+        service = Service(self.temp.name, limits=LIMITS)
+        self.addCleanup(service.close)
+        blocked, available = [self.put(i, fileExpires=0) for i in (1, 2)]
+        blocked_dir = service.store.folder(self.owner, blocked["id"])
+        available_dir = service.store.folder(self.owner, available["id"])
+        blocked_dir.mkdir(parents=True)
+        available_dir.mkdir(parents=True)
+        rmtree = shutil.rmtree
+
+        def remove(path):
+            if path == blocked_dir:
+                raise PermissionError("file in use")
+            rmtree(path)
+
+        with (patch("processor.server.shutil.rmtree", side_effect=remove),
+              self.assertLogs("hamma.processor", level="ERROR")):
+            self.assertFalse(service.cleanup())
+        self.assertTrue(blocked_dir.is_dir())
+        self.assertFalse(available_dir.exists())
+        self.assertFalse(self.store.get(self.owner, "job", available["id"])["downloadAvailable"])
+        self.assertEqual([row["id"] for _, row in self.store.expired_jobs(time.time())], [blocked["id"]])
+        service.cleanup()
+        self.assertFalse(blocked_dir.exists())
 
 
 class DeletionPreviewRoutes(unittest.TestCase):

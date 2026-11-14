@@ -2,6 +2,11 @@
 
 ## Remaining web release acceptance
 
+XLSX-to-PDF remains open. The Linux container's XLSX export failed inside the
+processor worker. The rollback restores the previously verified DOCX and PPTX
+export path. The XLSX acceptance test must render both worksheets and verify
+their cell values in the downloaded PDF with worker isolation enabled.
+
 The output handoff passed in Chromium at 375 px. A retained ZIP was selected
 from Files & History, recovered after a browser reload, and extracted. A
 Windows loopback restart using the container smoke script also recovered the
@@ -25,8 +30,8 @@ the revision, platform, fixture, outcome and skipped cases.
 | Browser job scale | Verify ordered manifest pages and exact outputs at the supported selection limit. Measure browser, worker and disk use with real payloads and check that an interactive job gets a turn during bulk work. |
 | UI and devices | Check every view in both themes, with keyboard navigation, reduced motion, and meaningful empty, running, failed and recovered states. Verify file picking, downloads and recovery on physical phones and foldables. |
 | Worker isolation and dependencies | Run worker boundary and owner checks. Confirm the deployed inventory and test worker filesystem isolation on the target platform. |
-| Formats and fidelity | Check advertised archive round trips with independent tools and compare decoded media with source fixtures. Exercise the outstanding encryption, split/join, and document conversion cases. |
-| Production operations | Check readiness, retention, interrupted uploads and downloads across service recreation. Rehearse backup restoration, migrations and alerting in the target environment. Multi-node recovery requires the intended compute and storage. |
+| Formats and fidelity | Expand independent round trips, decoded-media comparisons, encrypted archive variants and spreadsheet PDF export. |
+| Production operations | Rehearse migrations, restore, retention and alerting in the target environment. Multi-node recovery requires the intended compute and storage. |
 
 The Windows candidate passed 112 headless Chromium layout cases across eight
 views, seven widths and two themes, and the skip link moved focus to main content
@@ -60,8 +65,10 @@ completed job. The browser reads those rows by cursor, and existing inline
 manifests remain readable. The staged 201-file ZIP test checks three manifest
 pages against the downloaded archive's order and member digests. The
 container smoke checks the same manifest before and after recreation.
-Archive creation still holds per-member verification data in memory, and
-the legacy full-manifest route still returns the whole list. Use the
+Archive creation can still hold per-member verification data in memory.
+The legacy full-manifest route serializes rows from a single SQLite snapshot,
+spills large responses to a temporary file, and releases the snapshot before
+sending the response. The browser continues to request cursor pages. Use the
 pre-upgrade snapshot for rollback because earlier versions cannot read the
 new manifest rows. Windows bsdtar 3.8.9
 verified TAR.ZST in both directions, including nested paths, an empty file,
@@ -79,8 +86,8 @@ for measured results.
 | Browser job scale | The 5,000-file staged ZIP used 50 reads of 100 records and restored every file in order. Chromium verified a 205-file archive at 375 px. The workspace bounds folder traversal and can cancel a pending folder drop. The Windows mixed workload processed 214,794,240 input bytes across 12 batches and denied all eight cross-owner requests. | Bound archive-library memory and measure larger payloads and sustained browser workloads. |
 | Responsive UI and devices | Chromium, Firefox, and WebKit each passed 112 layouts across eight views, seven widths, and two themes with reduced motion. The skip link moved focus to the main content in all three. Headless WebKit required explicit focus on the link. In Chromium at 375 px, the folder picker fallback preserved a nested path and file bytes. | Verify native Tab order in Safari, plus file picking, touch, fold transitions, and recovery on the physical device matrix. Reproducing the reported image failures requires the original files and phone diagnostics. |
 | Worker isolation and dependencies | Linux CI verified the socket filter in workers and their child processes. The Linux processor container passed its HTTP smoke test and published the installed package inventory. CI also publishes source SBOMs for npm and pinned processor components. | Enforce worker filesystem isolation, validate network isolation on the target host, and expand fuzz and system-package advisory coverage. |
-| Formats and fidelity | TIFF round-trips 16-bit RGBA pixels and rejects a multipage source. HAMMA and bsdtar verified exact extraction in both directions for ZIP, TAR, TAR.GZ, TAR.BZ2, TAR.XZ, and TAR.ZST. TAR.ZST also passed the Linux container create, integrity and extract checks. | Expand interoperability fixtures and cover encryption, split/join, broader codecs, and isolated PDF and Office conversion. |
-| Production operations | A disposable Windows loopback upgrade added the dispatch index and passed SQLite quick_check. The guest downloaded the same ZIP after upgrade and snapshot restore. A session-free readiness probe detects a stalled scheduler or missing web build. CI verified the health probe and job execution in the Linux container. | Repeat the drill in the target environment. Verify monitoring alerts, retention, backup restore, and multi-node recovery with authorized infrastructure. |
+| Formats and fidelity | TIFF round-trips 16-bit RGBA pixels and rejects a multipage source. HAMMA and bsdtar verified exact extraction in both directions for ZIP, TAR, TAR.GZ, TAR.BZ2, TAR.XZ, and TAR.ZST. The workspace supports AES-256 ZIP, unencrypted split ZIP, and ZIP archive comments. Poppler renders PDF pages, and the Linux container verifies isolated DOCX and PPTX export. | Expand interoperability fixtures and codec coverage. Verify encrypted split sets, ZipCrypto, member comments, lossless policy, and hardware fallback. Add spreadsheet export and broader Office layout checks. |
+| Production operations | The Windows loopback upgrade and snapshot restore preserved a known download. Linux CI verified readiness, service recreation, and restoration into a fresh volume with the original signed download, retention setting, and upload offset. | Rehearse rollback and migration on the target deployment and verify retention, backup restoration, alert delivery, and authorized multi-node recovery. |
 
 For a local rollback drill, finish the test jobs and wait for the worker count
 to reach zero. Stop the processor, copy its complete data directory, and keep
@@ -98,6 +105,12 @@ restores into a fresh Compose volume. The restored SQLite store must pass
 signed download, compare the paged manifest, check retention and owner
 boundaries, and complete the upload from its backed-up offset. The workflow
 uses the same application image for the source and restored service.
+
+The workflow also runs the image's readiness probe in a disposable container
+with networking disabled. It removes the mounted web entry point, checks for
+HTTP 503 with reason `web-build`, restores the entry point, and verifies that
+Docker emitted healthy, unhealthy and healthy events in order. Monitoring
+notification delivery still needs a test in the target environment.
 
 Reproduce the two-owner worker test with
 `python -m processor.scheduler_benchmark --multiple-owners --output report.json`.
@@ -122,6 +135,21 @@ Unix fixtures include a Unicode filename. The Windows fixture uses an ASCII
 filename because inbox tar could not round-trip the Unicode name under the
 tested Windows code page. When inbox tar lacks the XZ write filter, the fixture
 compresses its PAX archive with Python XZ before HAMMA verifies and extracts it.
+
+## Load and retention verification — 2026-11-13
+
+On Windows 11 with Python 3.13.14 and SHANTE 0.1.0, the loopback
+`processor.mixed_workload` completed 28 jobs across four owners and 24
+projects. It resumed 12 uploads, verified 214,794,240 bytes of mixed
+batch inputs, confirmed output digests and ranges, and denied all eight
+cross-owner checks. The candidate run took 75.44 seconds, and the run on
+main at `72b227b` took 76.91 seconds. These single-run times do not establish
+a throughput gain.
+
+Regression cases cover an expired folder that remains in use, preservation
+of readiness through retention failure and API rate limiting, rejection of
+invalid request bodies, and a job retry racing a file deletion. Readiness
+continues to check the scheduler heartbeat and configured web build.
 
 ## Historical baseline — 2026-11-04
 
