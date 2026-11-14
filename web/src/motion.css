@@ -48,9 +48,6 @@
   from { opacity: 0; clip-path: inset(0 0 30% 0); }
   to { opacity: 1; clip-path: inset(0); }
 }
-@keyframes motion-confirm {
-  50% { color: rgb(var(--accent)); scale: 1.025; }
-}
 @keyframes motion-knob {
   50% { scale: 1.12 .96; }
 }
@@ -65,8 +62,6 @@
 }
 .job-details[open] > :nth-child(3),
 .processing-options[open] > :nth-child(3) { animation-delay: var(--motion-stagger); }
-.job-toast { animation: motion-arrive var(--motion-open) var(--motion-enter) both; }
-.job-toast-success { animation: motion-confirm 300ms var(--motion-move); }
 .job-glyph[data-state] { display: grid; place-items: center; }
 .job-glyph[data-state] > * {
   grid-area: 1 / 1;
@@ -99,7 +94,7 @@
   .hamma-shell :is(.button, .icon-button, .select-trigger, .primary-navigation button):not(:disabled):active {
     scale: 1;
   }
-  .hamma-shell :is(.processing-job, .job-toast, .job-toast-success),
+  .hamma-shell .processing-job,
   .hamma-shell :is(.job-details, .processing-options)[open] > :not(summary),
   .hamma-shell .preference-row input:checked + .switch-track::after {
     animation: none;

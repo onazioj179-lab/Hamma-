@@ -33,6 +33,7 @@
 
 .history-views {
   display: inline-flex;
+  flex-wrap: wrap;
   max-width: 100%;
   gap: 4px;
   padding: 4px;
@@ -53,6 +54,12 @@
   border-color: rgb(var(--border));
   background: rgb(var(--card));
   color: rgb(var(--foreground));
+}
+@media (max-width: 650px) {
+  .history-views button {
+    padding-inline: 10px;
+    font-size: 13px;
+  }
 }
 .universal-search:has(.history-filters) { grid-template-columns: minmax(0, 1fr); }
 .universal-search .search-field, .history-filter-fields .select-trigger { min-height: 44px; }

@@ -1,19 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import {
-  HelpCircle,
   FileArchive,
-  Files,
   FolderOpen,
   LayoutGrid,
   Loader2,
   Settings2,
-  UserRound,
 } from 'lucide-react';
 import { useCompression } from './hooks/useCompression';
 import { useAppStore } from './store/app';
 import { usePreferences } from './store/preferences';
-import { browserStorage } from './store/storage';
 import {
   SettingsPanel,
   type SettingsSection,
@@ -45,9 +41,8 @@ function readRoute(): Route {
 
 const navigation = [
   { key: 'process', label: 'Workspace', icon: LayoutGrid },
-  { key: 'files', label: 'Files & History', icon: FolderOpen },
-  { key: 'overview', label: 'Overview', icon: Files },
-  { key: 'account', label: 'Account', icon: UserRound },
+  { key: 'files', label: 'Files', icon: FolderOpen },
+  { key: 'settings', label: 'Settings', icon: Settings2 },
 ] as const;
 
 export default function App() {
@@ -64,26 +59,18 @@ export default function App() {
   const previousView = useRef(view);
   const [announcement, setAnnouncement] = useState('');
   const [jobCount, setJobCount] = useState(0);
-  const [processorStatus, setProcessorStatus] = useState('connecting');
-  const [notice, setNotice] = useState<{ message: string; success: boolean } | null>(null);
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
     const notify = (event: Event) => {
-      const detail = (event as CustomEvent<{ message: string; success: boolean }>).detail;
-      setAnnouncement(detail.message); setNotice(detail);
-      clearTimeout(timer); timer = setTimeout(() => setNotice(null), 8000);
+      setAnnouncement((event as CustomEvent<{ message: string }>).detail.message);
     };
     const count = (event: Event) => setJobCount((event as CustomEvent<number>).detail);
-    const connection = (event: Event) => setProcessorStatus((event as CustomEvent<string>).detail);
-    const clearOwner = () => { clearTimeout(timer); setNotice(null); setAnnouncement(''); setJobCount(0); };
+    const clearOwner = () => { setAnnouncement(''); setJobCount(0); };
     window.addEventListener('hamma-owner-clearing', clearOwner);
-    window.addEventListener('hamma-processor-status', connection);
     window.addEventListener('hamma-job-notice', notify);
     window.addEventListener('hamma-job-count', count);
-    return () => { clearTimeout(timer); window.removeEventListener('hamma-owner-clearing', clearOwner); window.removeEventListener('hamma-job-notice', notify); window.removeEventListener('hamma-job-count', count); window.removeEventListener('hamma-processor-status', connection); };
+    return () => { window.removeEventListener('hamma-owner-clearing', clearOwner); window.removeEventListener('hamma-job-notice', notify); window.removeEventListener('hamma-job-count', count); };
   }, []);
 
-  const [termsAccepted, setTermsAccepted] = useState(() => browserStorage.getItem('hamma-terms-v1') === 'accepted');
   const navigate = useCallback((next: View, section: SettingsSection = 'general') => {
     const url = new URL(window.location.href);
     if (next === 'process') url.searchParams.delete('view');
@@ -94,6 +81,7 @@ export default function App() {
     setRoute({ view: next, section });
   }, []);
   const openSettings = (next: SettingsSection) => navigate('settings', next);
+  const activeTab = view === 'overview' ? 'files' : view === 'account' ? 'settings' : view;
   useEffect(() => {
     const restore = () => setRoute(readRoute());
     window.addEventListener('popstate', restore);
@@ -177,13 +165,13 @@ export default function App() {
           {navigation.map(({ key, label, icon: Icon }) => (
             <button
               key={key}
-              aria-current={view === key ? 'page' : undefined}
+              aria-current={activeTab === key ? 'page' : undefined}
               onClick={() => navigate(key)}
             >
               <Icon size={17} strokeWidth={1.7} />
               <span>{label}</span>
               {key === 'files' && localCount + jobCount > 0 && (
-                <small>{localCount + jobCount}</small>
+                <small aria-hidden="true">{localCount + jobCount}</small>
               )}
               {key === 'process' && isProcessing && (
                 <span className="running-dot" />
@@ -192,22 +180,6 @@ export default function App() {
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <button
-            className={`sidebar-utility ${view === 'settings' && section !== 'about' ? 'selected' : ''}`}
-            onClick={() => openSettings('general')}
-            aria-current={view === 'settings' && section !== 'about' ? 'page' : undefined}
-          >
-            <Settings2 size={17} />
-            <span>Settings</span>
-          </button>
-          <button
-            className={`sidebar-utility ${view === 'settings' && section === 'about' ? 'selected' : ''}`}
-            onClick={() => openSettings('about')}
-            aria-current={view === 'settings' && section === 'about' ? 'page' : undefined}
-          >
-            <HelpCircle size={17} />
-            <span>About HAMMA</span>
-          </button>
           <div className="watermark">
             <span>By Onazi Treasure Oj</span>
           </div>
@@ -215,14 +187,7 @@ export default function App() {
       </aside>
       <div className="workspace-body">
         <header className="workspace-header">
-          <span className="mobile-brand">HAMMA</span>
-          <span className="engine-status" role="status">
-            <span
-              className={processorStatus === 'ready' ? 'status-dot' : 'status-dot pending'}
-              aria-hidden="true"
-            />
-            {processorStatus === 'ready' ? 'Processor connected' : processorStatus === 'offline' ? 'Processor offline' : 'Connecting to processor'}
-          </span>
+          HAMMA
         </header>
         <main
           id="workspace-main"
@@ -230,7 +195,6 @@ export default function App() {
           tabIndex={-1}
           className="workspace-main"
         >
-          {!termsAccepted && <aside className="processor-notice first-run-note" aria-label="File privacy"><div><strong>Your file privacy</strong><p>Standard jobs run on the computer hosting HAMMA. SPK runs in this browser. Each person has a separate file history.</p><button className="text-button" onClick={() => openSettings('privacy')}>Privacy details</button></div><button className="button secondary" onClick={() => { browserStorage.setItem('hamma-terms-v1', 'accepted'); setTermsAccepted(true); setPrivacyChoice('essential'); }}>Got it</button></aside>}
           <UniversalWorkspace
             spkReady={workerReady}
             spkBusy={isProcessing}
@@ -241,6 +205,7 @@ export default function App() {
             visible={view === 'process' || view === 'files'}
             screen={view === 'files' ? 'history' : 'workspace'}
             onHistory={() => navigate('files')}
+            onOverview={() => navigate('overview')}
           />
               {view === 'account' && <AccountPanel />}
               {view === 'overview' && (
@@ -254,11 +219,11 @@ export default function App() {
                   onSectionChange={openSettings}
                   busy={isProcessing}
                   onHistory={() => navigate('files')}
+                  onAccount={() => navigate('account')}
                 />
               )}
         </main>
       </div>
-      {notice && <aside className="job-toast" aria-label="Job update"><span key={notice.message} className={notice.success ? "job-toast-success" : undefined}>{notice.message}</span><button className="button secondary" onClick={() => { navigate('files'); setNotice(null); }}>View files</button><button className="text-button" aria-label="Dismiss job update" onClick={() => setNotice(null)}>Dismiss</button></aside>}
       <span className="sr-only" role="status">
         {announcement}
       </span>

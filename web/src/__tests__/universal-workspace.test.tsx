@@ -377,7 +377,7 @@ it('renders a new selection after removing a scrolled 5000-file batch', async ()
 it('shows unavailable processing without fabricating progress or downloads', async () => {
   fetchMock.mockRejectedValue(new Error('Offline'));
   await render(); await select([new File(['data'], 'data.txt')]);
-  expect(host.textContent).toContain('Local processor unavailable');
+  expect(host.textContent).toContain('Processor offline');
   expect(button('Compress').disabled).toBe(true);
   expect(host.querySelector('progress')).toBeNull();
   expect(host.querySelector('a[download]')).toBeNull();
@@ -554,11 +554,11 @@ it('reconnects and refreshes the list after an initial job-list failure', async 
     return { ok: true, json: async () => url.endsWith('/capabilities') ? caps : url.endsWith('/settings') ? { fileRetention: '24h', historyRetention: '30d' } : { jobs: [{ id: 'recovered', name: 'recovered.zip', operation: 'compress', target: 'zip', state: 'completed', inputSize: 10, outputSize: 5, created: 1, fileExpires: 2, historyExpires: null, format: 'zip', fileCount: 1, entries: 1, downloadAvailable: false }], total: 1 } };
   });
   await render();
-  expect(host.textContent).toContain('Local processor unavailable');
+  expect(host.textContent).toContain('Processor offline');
   unavailable = false;
   await act(async () => button('Reconnect').click());
   expect(host.textContent).toContain('recovered.zip');
-  expect(host.textContent).not.toContain('Local processor unavailable');
+  expect(host.textContent).not.toContain('Processor offline');
 });
 
 it('reports a disconnect after bulk retry without an unhandled rejection', async () => {
@@ -572,7 +572,7 @@ it('reports a disconnect after bulk retry without an unhandled rejection', async
   disconnected = true;
   await act(async () => button('Retry').click());
   expect(host.querySelector('[role=alert]')?.textContent).toContain('Connection lost after retry');
-  expect(host.textContent).toContain('Local processor unavailable');
+  expect(host.textContent).toContain('Processor offline');
 });
 
 it('bounds rendered history rows while paging and searching 500 retained jobs', async () => {
@@ -722,7 +722,6 @@ it('shows the H.264 preset and blocks submission until lossy conversion is allow
   await render();
   await select([new File(['fixture'], 'source.mkv', { type: 'video/x-matroska' })]);
   expect(host.querySelector('[aria-label="Conversion format"]')?.textContent).toContain('MP4 (H.264)');
-  expect(host.textContent).toContain('Already compressed video usually saves little space.');
   await act(async () => button('Convert').click());
   expect(host.querySelector('[role=alert]')?.textContent).toContain('Choose Allow quality loss');
   expect(upload).not.toHaveBeenCalled();
