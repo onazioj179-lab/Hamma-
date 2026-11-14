@@ -7,11 +7,10 @@
    isolation and fairness under sustained load. Make reuse owner-scoped and
    dependent on verified content. Preserve distinct filenames and independent
    deletion and retention.
-2. **Verify large and unique data.** Run 5,000 distinct payloads end to end.
-   Measure sustained transfer, memory, disk pressure, recovery and small-job
-   latency. Validate large offsets with fixtures before attempting a real
-   1 TB transfer in a suitably provisioned environment. Continue bounding
-   browser selection memory and ZIP central-directory allocations.
+2. **Verify larger transfers.** Measure sustained transfer, memory, disk
+   pressure, recovery and small-job latency. Run a real 1 TB transfer in a
+   suitably provisioned environment. Continue bounding browser selection
+   memory and ZIP central-directory allocations.
 3. **Measure smaller archives.** Compare lossless ZIP, TAR.ZST and solid
    archive approaches on the same repetitive, unique and already-compressed
    corpora. Record restoration hashes, archive size, memory and time. Use

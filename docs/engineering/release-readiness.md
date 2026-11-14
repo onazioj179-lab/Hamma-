@@ -166,6 +166,14 @@ plus startup grace. Run `python -m processor.upload_scale_benchmark --report
 report.json` to repeat the full loopback workload. Sparse HTTP regressions
 separately verify reads and resumed writes beyond the 4 GiB offset.
 
+On 2026-11-14 the Windows loopback run on `b5cc021` with the batch-reservation
+harness verified 5,000 distinct 32 KiB uploads (156.25 MiB). Downloaded ZIP
+members and all 50 manifest pages matched the source hashes in order. The
+ZIP was 164,620,026 bytes. Upload and staging took 519.03 seconds, admission
+145.69 seconds, queueing through internal verification 148.53 seconds, and
+download plus independent verification 7.70 seconds. This run preceded the
+in-memory upload spool change and used a 20,000-request-per-minute limit.
+
 The Windows loopback burst completed 48 jobs across 16 sessions in 77.34 seconds
 after the per-peer connection allowance increased from 16 to 24. It verified
 32 ZIP and gzip downloads, exact restored bytes, ranges, duplicate submission,
