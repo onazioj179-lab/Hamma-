@@ -12,8 +12,8 @@ the revision, platform, fixture, outcome and skipped cases.
 | Browser job scale | Verify ordered manifest pages and exact outputs at the supported selection limit. Measure browser, worker and disk use with real payloads and check that an interactive job gets a turn during bulk work. |
 | UI and devices | Check every view in both themes, with keyboard navigation, reduced motion, and meaningful empty, running, failed and recovered states. Verify file picking, downloads and recovery on physical phones and foldables. |
 | Worker isolation and dependencies | Run worker boundary and owner checks. Confirm the deployed inventory and test worker filesystem isolation on the target platform. |
-| Formats and fidelity | Check advertised archive round trips with independent tools and compare decoded media with source fixtures. Exercise the outstanding encryption, split/join, and document conversion cases. |
-| Production operations | Check readiness, retention, interrupted uploads and downloads across service recreation. Rehearse backup restoration, migrations and alerting in the target environment. Multi-node recovery requires the intended compute and storage. |
+| Formats and fidelity | Expand independent round trips, decoded-media comparisons, encrypted archive variants and spreadsheet PDF export. |
+| Production operations | Rehearse migrations, restore, retention and alerting in the target environment. Multi-node recovery requires the intended compute and storage. |
 
 The Windows candidate passed 112 headless Chromium layout cases across eight
 views, seven widths and two themes, and the skip link moved focus to main content
@@ -115,6 +115,21 @@ Unix fixtures include a Unicode filename. The Windows fixture uses an ASCII
 filename because inbox tar could not round-trip the Unicode name under the
 tested Windows code page. When inbox tar lacks the XZ write filter, the fixture
 compresses its PAX archive with Python XZ before HAMMA verifies and extracts it.
+
+## Load and retention verification — 2026-11-13
+
+On Windows 11 with Python 3.13.14 and SHANTE 0.1.0, the loopback
+`processor.mixed_workload` completed 28 jobs across four owners and 24
+projects. It resumed 12 uploads, verified 214,794,240 bytes of mixed
+batch inputs, confirmed output digests and ranges, and denied all eight
+cross-owner checks. The candidate run took 75.44 seconds, and the run on
+main at `72b227b` took 76.91 seconds. These single-run times do not establish
+a throughput gain.
+
+Regression cases cover an expired folder that remains in use, preservation
+of readiness through retention failure and API rate limiting, rejection of
+invalid request bodies, and a job retry racing a file deletion. Readiness
+continues to check the scheduler heartbeat and configured web build.
 
 ## Historical baseline — 2026-11-04
 
