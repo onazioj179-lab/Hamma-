@@ -556,6 +556,20 @@ class ServerTests(unittest.TestCase):
         self.service.cleanup()
         self.assertEqual(self.service.store.full_paged_manifest(owner, job['id']), [])
 
+    def test_full_manifest_spills_large_responses_and_preserves_legacy_json(self):
+        job = self.job()
+        owner = self.service.store.list(kind="job")[0][0]
+        entries = [{"name": f"{i:04d}-世界.txt", "size": 1, "sha256": "a" * 64} for i in range(250)]
+        self.service.store.patch(owner, "job", job["id"], state="completed",
+                                 downloadAvailable=True, sha256="b" * 64,
+                                 manifest_entries=entries)
+        with patch("processor.server.BLOCK", 1024):
+            with self.client.open(self.base + f"/jobs/{job['id']}/manifest", timeout=10) as response:
+                body = response.read()
+                self.assertGreater(len(body), 1024)
+                self.assertEqual(int(response.headers["Content-Length"]), len(body))
+        self.assertEqual(json.loads(body), {"id": job["id"], "sha256": "b" * 64, "files": entries})
+
     def test_existing_inline_manifest_keeps_its_full_and_paged_responses(self):
         job = self.job()
         owner = self.service.store.list(kind='job')[0][0]
