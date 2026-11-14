@@ -546,6 +546,13 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       return;
     }
     if (!capability) return;
+    const archiveInputs = planned
+      ? planned.groups.filter(group => group.operation === 'compress').map(group => group.sources)
+      : operation === 'compress' ? [inputs] : [];
+    if (!capability.uploadBatch && archiveInputs.some(group => group.reduce((total, source) => total + source.size, 0) > capability.limits.input)) {
+      setError(`Selected files exceed the ${formatFileSize(capability.limits.input)} per-job limit.`);
+      return;
+    }
     submitting.current = true; setBusy(true); setError('');
     const controller = new AbortController(); abort.current = controller;
     const generation = ownerGeneration.current;

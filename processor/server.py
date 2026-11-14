@@ -793,6 +793,7 @@ class Service:
         self.job_selections = JobSelections(self.store, self.limits["files"])
         self.running = {}
         self.upload_chunks = Counter()
+        self.admitting_owners = set()
         self.restart_until = 0
         self.stop = threading.Event()
         self.last_scheduler_tick = None
@@ -1932,8 +1933,14 @@ def handler(service):
                     if existing:
                         return self.send(200, service.public(self.owner, existing))
                     check_queue_capacity()
+                    if self.owner in service.admitting_owners:
+                        raise HTTPError(429, "Another submission is being checked", retry_after=1)
+                    service.admitting_owners.add(self.owner)
+                    self.admitting_owner = self.owner
 
                 if paged_admission:
+                    if staged.input_bytes(time.time()) > service.limits["input"]:
+                        raise HTTPError(413, "Selected files exceed the total job input limit")
                     with tempfile.TemporaryDirectory(prefix='hamma-admission-') as temp:
                         spool = Path(temp) / 'inputs.sqlite3'
                         with closing(sqlite3.connect(spool)) as db:
@@ -1966,6 +1973,9 @@ def handler(service):
                     LOG.info("Job queued: %s %s", job_id, operation)
                     return self.send(202, service.public(self.owner, record))
                 uploads = service.store.get_uploads(self.owner, ids)
+                input_size = sum(upload["size"] for upload in uploads.values())
+                if input_size > service.limits["input"]:
+                    raise HTTPError(413, "Selected files exceed the total job input limit")
 
                 inputs, verified_uploads, seen = [], [], set()
                 source_stamps = {}
@@ -2008,7 +2018,7 @@ def handler(service):
                         if not unchanged:
                             raise HTTPError(409, "Upload changed during verification. Retry the job.")
                     record = make_record(inputs[0]["name"] if count == 1 else f"{count} files",
-                                         sum(i["size"] for i in inputs),
+                                         input_size,
                                          inputs[0]["format"] if count == 1 else "batch", now)
                     record["inputs"] = inputs
                     service.store.folder(self.owner, record["id"]).mkdir(mode=0o700, parents=True)
@@ -2224,6 +2234,11 @@ def handler(service):
             except Exception:
                 LOG.exception("Request failed")
                 self.send_failure(500, "Request failed")
+            finally:
+                owner = getattr(self, "admitting_owner", None)
+                if owner is not None:
+                    with service.lock:
+                        service.admitting_owners.discard(owner)
 
         do_GET = do_POST = do_PUT = do_DELETE = do_HEAD = handle_request
 

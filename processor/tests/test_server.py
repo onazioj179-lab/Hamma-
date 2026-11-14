@@ -716,6 +716,32 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(db.execute('SELECT count(*) FROM project_inputs WHERE owner=?', (owner,)).fetchone()[0], 0)
             self.assertEqual(db.execute('SELECT count(*) FROM job_input_pages').fetchone()[0], 101)
 
+    def test_job_input_budget_applies_before_hashing_inline_and_paged(self):
+        self.assert_status(413, lambda: self.call("/uploads", {
+            "name": "one-terabyte.bin", "size": 10**12,
+        }, "POST"))
+        first = self.upload(b"1234")
+        owner = self.service.store.list(kind="upload")[0][0]
+        ids = [first["id"]]
+        for i in range(101):
+            upload_id = f"{i:032x}"
+            ids.append(upload_id)
+            self.service.store.put(owner, "upload", {
+                "id": upload_id, "created": time.time(), "expires": time.time() + 60,
+                "name": f"{i}.bin", "size": 4,
+            })
+        selection = "c" * 32
+        for offset in (0, 100):
+            self.call(f"/job-selections/{selection}", {"offset": offset, "uploads": ids[offset:offset+100]}, "PUT")
+        self.service.limits = {**self.service.limits, "input": 7}
+        with patch("processor.server.file_digest", side_effect=AssertionError("Over-budget job read payload")):
+            for source in ({"uploads": ids[:2]}, {"selectionId": selection, "selectionCount": len(ids)}):
+                self.assert_status(413, lambda: self.call("/jobs", {
+                    **source, "operation": "compress", "target": "zip",
+                }, "POST"))
+        self.assertEqual(self.service.store.count(owner), 0)
+        self.assertEqual(self.job(first)["state"], "queued")
+
     def test_batch_admission_keeps_other_requests_responsive_during_hashing(self):
         from processor.server import file_digest
 
@@ -753,6 +779,9 @@ class ServerTests(unittest.TestCase):
                 self.assertTrue(hashing.wait(10))
                 history = pool.submit(self.call, '/jobs')
                 self.assertEqual(history.result(timeout=5)['total'], 0)
+                self.assert_status(429, lambda: self.call('/jobs', {
+                    'uploads': uploads, 'operation': 'compress', 'target': 'zip',
+                }, 'POST'))
             finally:
                 release.set()
             job = admission.result(timeout=60)

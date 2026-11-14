@@ -61,6 +61,15 @@ new manifest rows. Windows bsdtar 3.8.9
 verified TAR.ZST in both directions, including nested paths, an empty file,
 an empty directory and member SHA-256 checks.
 
+## Archive admission limits
+
+The upload reservation rejects an individual file above the configured
+input limit. The browser checks the aggregate size before starting an
+archive upload, and the server checks both inline and staged selections
+before hashing their payloads. In-flight job admission allows one new
+submission per owner. A competing submission receives HTTP 429 with
+Retry-After, and replay of a committed request still returns the original job.
+
 ## Web release evidence — 2026-11-12
 
 The release remains open. The [web engineering audit](hammer-directive-audit.md)
