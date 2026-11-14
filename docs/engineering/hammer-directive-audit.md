@@ -17,7 +17,7 @@ scope. These are the remaining acceptance tasks.
 2. **Browser job scale.** Bound browser selection and archive-library memory, and extend bounded input and output handling to the remaining workflows. Measure large payloads, multi-owner scheduling, and storage and memory pressure.
 3. **UI and physical devices.** Verify touch, fold transitions, native Safari keyboard order, and reduced motion on phones and foldables. Reproduce the reported image failures with the original files and phone diagnostics.
 4. **Worker isolation and dependencies.** Extend filesystem isolation to the remaining worker paths. Verify resource limits, network isolation, and owner boundaries on the target host. Expand advisory coverage, SBOM coverage, and fuzz testing.
-5. **Formats and fidelity.** Verify additional codecs and archive fixtures, including encrypted split ZIP, legacy ZipCrypto, and member comments. Add spreadsheet export and validate Office layout fidelity across a broader fixture set. Verify lossless policy and hardware fallback on supported configurations.
+5. **Formats and fidelity.** Verify additional codecs and archive fixtures, including encrypted split ZIP. Add spreadsheet export and validate Office layout fidelity across a broader fixture set. Verify lossless policy and hardware fallback on supported configurations.
 6. **Production operations.** Rehearse rollback and migration on the target deployment. Verify retention, backup restoration, and alert delivery there. Distributed recovery requires authorized compute and object storage.
 
 The Linux local and LAN container health checks use `GET /api/process/ready`.

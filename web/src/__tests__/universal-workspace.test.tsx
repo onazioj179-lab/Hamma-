@@ -32,7 +32,10 @@ const select = async (files: File[]) => {
 
 it('opens and searches a ZIP directory without uploading the archive', async () => {
   await render();
-  const bytes = new Uint8Array(zipSync({ 'first.txt': new Uint8Array([1]), 'second.txt': new Uint8Array([2]) }));
+  const bytes = new Uint8Array(zipSync({
+    'first.txt': [new Uint8Array([1]), { comment: 'File release notes' }],
+    'second.txt': new Uint8Array([2]),
+  }));
   const comment = new TextEncoder().encode('Release archive');
   new DataView(bytes.buffer).setUint16(bytes.length - 2, comment.length, true);
   await select([new File([bytes, comment], 'example.zip')]);
@@ -42,6 +45,8 @@ it('opens and searches a ZIP directory without uploading the archive', async () 
     expect(host.textContent).toContain('2 of 2 entries');
   });
   expect(host.querySelector('.zip-comment-preview')?.textContent).toBe('Release archive');
+  expect(host.querySelector('.zip-member-comment summary')?.textContent).toBe('File comment');
+  expect(host.querySelector('.zip-member-comment bdi')?.textContent).toBe('File release notes');
   const search = host.querySelector<HTMLInputElement>('[aria-label="Search ZIP entries"]')!;
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, 'SECOND');

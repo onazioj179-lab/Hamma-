@@ -1,5 +1,5 @@
 import { BlobReader, BlobWriter, ZipReader, ZipWriter, type FileEntry, ERR_INVALID_AUTHENTICATION_CODE,
-  ERR_INVALID_PASSWORD } from '@zip.js/zip.js';
+  ERR_INVALID_CRC32, ERR_INVALID_PASSWORD, ERR_UNSUPPORTED_ENCRYPTION } from '@zip.js/zip.js';
 import { archivePath } from '../utils/archiveFiles';
 import { inspectZip } from './zip-inspection';
 
@@ -115,8 +115,8 @@ export async function unlockEncryptedZip(input: Blob, password: string, signal: 
     if (entries.length !== directory.members.length || !entries.some(entry => entry.encrypted)) {
       throw new Error('Choose a password-protected ZIP.');
     }
-    if (entries.some(entry => entry.encrypted && (entry.zipCrypto || entry.directory || !entry.extraFieldAES))) {
-      throw new Error('This ZIP uses unsupported encryption. Use an AES-encrypted ZIP.');
+    if (entries.some(entry => entry.encrypted && entry.directory)) {
+      throw new Error('This ZIP contains an unsupported encrypted directory.');
     }
     if (entries.some(entry => entry.symlink)) throw new Error('The ZIP contains a symbolic link.');
     checkLimits(entries.map(entry => entry.uncompressedSize));
@@ -150,8 +150,13 @@ export async function unlockEncryptedZip(input: Blob, password: string, signal: 
     }
     return output;
   } catch (error) {
-    if (error instanceof Error && [ERR_INVALID_PASSWORD, ERR_INVALID_AUTHENTICATION_CODE].includes(error.message)) {
-      throw new Error('The password is incorrect or the ZIP data is damaged.');
+    if (error instanceof Error) {
+      if ([ERR_INVALID_PASSWORD, ERR_INVALID_AUTHENTICATION_CODE, ERR_INVALID_CRC32].includes(error.message)) {
+        throw new Error('The password is incorrect or the ZIP data is damaged.');
+      }
+      if (error.message === ERR_UNSUPPORTED_ENCRYPTION) {
+        throw new Error('This ZIP uses unsupported encryption. Unlock supports AES and legacy ZipCrypto.');
+      }
     }
     throw error;
   } finally {

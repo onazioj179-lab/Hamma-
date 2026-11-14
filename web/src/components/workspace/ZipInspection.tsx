@@ -60,6 +60,10 @@ function ZipMembers({ file, disabled, onExtract }: Props) {
           }} />}
         <bdi>{member.name.length > 1024 ? member.name.slice(0, 1024) + '…' : member.name}</bdi>
         <small>{member.name.endsWith('/') ? 'Folder' : `${formatFileSize(member.size)} · ${formatFileSize(member.packedSize)} packed`}{member.encrypted ? ' · Encrypted' : ''}</small>
+        {member.comment && <details className="zip-member-comment">
+          <summary>File comment</summary>
+          <p className="zip-comment-preview"><bdi>{member.comment}</bdi></p>
+        </details>}
       </li>)}
     </ul>
     {matches.length > PAGE_SIZE && <div className="button-row">

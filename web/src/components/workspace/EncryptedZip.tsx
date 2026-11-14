@@ -46,7 +46,7 @@ export function EncryptedZip({ sources, archive, disabled }: Props) {
         ? archive.name.replace(/\.zip$/i, '') + '.unlocked.zip' : 'protected.zip' });
     } catch {
       if (!controller.signal.aborted) setError(archive
-        ? 'Could not unlock this ZIP. Check the password and use a supported AES ZIP.'
+        ? 'Could not unlock this ZIP. Check the password and use an AES or legacy ZipCrypto ZIP.'
         : 'Could not create the encrypted ZIP. Check the file names and selection size.');
     } finally {
       if (task.current === controller) {

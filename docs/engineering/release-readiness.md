@@ -2,6 +2,11 @@
 
 ## Remaining web release acceptance
 
+The browser opens single-volume legacy ZipCrypto archives. A libarchive
+fixture verifies exact bytes in the unlocked download and rejects a wrong
+password and modified ciphertext. ZIP inspection shows bounded file-comment
+previews from the central directory alongside the archive comment.
+
 XLSX-to-PDF remains open. The Linux container's XLSX export failed inside the
 processor worker. The rollback restores the previously verified DOCX and PPTX
 export path. The XLSX acceptance test must render both worksheets and verify
@@ -73,7 +78,7 @@ for measured results.
 | Browser job scale | The 5,000-file staged ZIP used 50 reads of 100 records and restored every file in order. Chromium verified a 205-file archive at 375 px. The workspace bounds folder traversal and can cancel a pending folder drop. The Windows mixed workload processed 214,794,240 input bytes across 12 batches and denied all eight cross-owner requests. | Bound archive-library memory and measure larger payloads and sustained browser workloads. |
 | Responsive UI and devices | Chromium, Firefox, and WebKit each passed 112 layouts across eight views, seven widths, and two themes with reduced motion. The skip link moved focus to the main content in all three. Headless WebKit required explicit focus on the link. In Chromium at 375 px, the folder picker fallback preserved a nested path and file bytes. | Verify native Tab order in Safari, plus file picking, touch, fold transitions, and recovery on the physical device matrix. Reproducing the reported image failures requires the original files and phone diagnostics. |
 | Worker isolation and dependencies | Linux CI verified the socket filter in workers and their child processes. The Linux processor container passed its HTTP smoke test and published the installed package inventory. CI also publishes source SBOMs for npm and pinned processor components. | Enforce worker filesystem isolation, validate network isolation on the target host, and expand fuzz and system-package advisory coverage. |
-| Formats and fidelity | TIFF round-trips 16-bit RGBA pixels and rejects a multipage source. HAMMA and bsdtar verified exact extraction in both directions for ZIP, TAR, TAR.GZ, TAR.BZ2, TAR.XZ, and TAR.ZST. The workspace supports AES-256 ZIP, unencrypted split ZIP, and ZIP archive comments. Poppler renders PDF pages, and the Linux container verifies isolated DOCX and PPTX export. | Expand interoperability fixtures and codec coverage. Verify encrypted split sets, ZipCrypto, member comments, lossless policy, and hardware fallback. Add spreadsheet export and broader Office layout checks. |
+| Formats and fidelity | TIFF round-trips 16-bit RGBA pixels and rejects a multipage source. HAMMA and bsdtar verified exact extraction in both directions for ZIP, TAR, TAR.GZ, TAR.BZ2, TAR.XZ, and TAR.ZST. The workspace supports AES-256 ZIP, legacy ZipCrypto unlocking, unencrypted split ZIP, and ZIP archive and file comment previews. Poppler renders PDF pages, and the Linux container verifies isolated DOCX and PPTX export. | Expand interoperability fixtures and codec coverage. Verify encrypted split sets, lossless policy, and hardware fallback. Add spreadsheet export and broader Office layout checks. |
 | Production operations | The Windows loopback upgrade and snapshot restore preserved a known download. Linux CI verified readiness, service recreation, and restoration into a fresh volume with the original signed download, retention setting, and upload offset. | Rehearse rollback and migration on the target deployment and verify retention, backup restoration, alert delivery, and authorized multi-node recovery. |
 
 For a local rollback drill, finish the test jobs and wait for the worker count
