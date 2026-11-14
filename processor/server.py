@@ -1040,6 +1040,7 @@ class HTTPError(Exception):
 
 class LocalHTTPServer(ThreadingHTTPServer):
     request_queue_size = 64
+    max_peer_connections = 24
     daemon_threads = True
     allow_reuse_address = os.name != "nt"
     tls_context = None
@@ -1063,7 +1064,8 @@ class LocalHTTPServer(ThreadingHTTPServer):
         # A TLS overload cannot safely receive a plaintext HTTP error response.
         peer = client_address[0]
         with self.peer_lock:
-            admitted = self.peer_slots[peer] < 16 and self.request_slots.acquire(blocking=False)
+            # Leave room for overlapping connection teardown in a 16-client burst.
+            admitted = self.peer_slots[peer] < self.max_peer_connections and self.request_slots.acquire(blocking=False)
             if admitted:
                 self.peer_slots[peer] += 1
         if not admitted:

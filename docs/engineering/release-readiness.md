@@ -123,6 +123,13 @@ compresses its PAX archive with Python XZ before HAMMA verifies and extracts it.
 
 ## Load and retention verification — 2026-11-13
 
+The Windows loopback burst completed 48 jobs across 16 sessions in 77.34 seconds
+after the per-peer connection allowance increased from 16 to 24. It verified
+32 ZIP and gzip downloads, exact restored bytes, ranges, duplicate submission,
+and owner isolation. All 16 corrupt inputs were rejected. The global limit is
+64 connections. This run closes the observed 16-session loopback check.
+Sustained load and production proxy behavior remain open.
+
 On Windows 11 with Python 3.13.14 and SHANTE 0.1.0, the loopback
 `processor.mixed_workload` completed 28 jobs across four owners and 24
 projects. It resumed 12 uploads, verified 214,794,240 bytes of mixed

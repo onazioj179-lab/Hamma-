@@ -314,16 +314,16 @@ class ServerTests(unittest.TestCase):
     def test_connection_slots_leave_capacity_for_another_peer(self):
         primary, other = ("127.0.0.1", 1234), ("127.0.0.2", 1234)
         with patch.object(ThreadingMixIn, "process_request") as start, patch.object(self.server, "shutdown_request") as reject:
-            for _ in range(16):
+            for _ in range(24):
                 self.server.process_request(Mock(), primary)
             overflow = Mock()
             self.server.process_request(overflow, primary)
             self.server.process_request(Mock(), other)
-            self.assertEqual(start.call_count, 17)
+            self.assertEqual(start.call_count, 25)
             reject.assert_called_once_with(overflow)
             self.server.release_slot(primary[0])
             self.server.process_request(Mock(), primary)
-            self.assertEqual(start.call_count, 18)
+            self.assertEqual(start.call_count, 26)
             for peer, count in self.server.peer_slots.copy().items():
                 for _ in range(count):
                     self.server.release_slot(peer)
