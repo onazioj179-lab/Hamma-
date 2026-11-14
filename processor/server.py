@@ -329,6 +329,15 @@ class Store:
         with self.connect() as db:
             return db.execute("SELECT count(*) FROM records WHERE " + " AND ".join(where), parameters).fetchone()[0]
 
+    def live_input_bytes(self, owner):
+        placeholders = ",".join("?" for _ in LIVE_STATES)
+        with self.connect() as db:
+            # Python integers also handle configured limits above SQLite's SUM range.
+            return sum(row[0] or 0 for row in db.execute(
+                f"""SELECT json_extract(data,'$.inputSize') FROM records
+                    WHERE owner=? AND kind='job' AND json_extract(data,'$.state') IN ({placeholders})""",
+                (owner, *LIVE_STATES)))
+
     def job_revision(self, owner):
         with self.connect() as db:
             row = db.execute("SELECT token FROM job_revisions WHERE owner=?", (owner,)).fetchone()
@@ -861,6 +870,17 @@ class Service:
     def owner_plan(self, owner):
         account = self.accounts.by_owner(owner)
         return account_plan(account['tier'] if account else 'guest', self.limits)
+
+    def check_job_capacity(self, owner, plan, incoming_bytes=0):
+        # Budget work by logical input bytes, including repeated jobs on one retained upload.
+        if self.store.count(owner, states=LIVE_STATES) >= plan['maxQueuedJobs']:
+            hint = " Sign in for a larger queue." if plan['tier'] == 'guest' else ""
+            raise HTTPError(429, "Queue limit reached. Wait for jobs to finish or cancel queued jobs." + hint)
+        if self.store.count(states=LIVE_STATES) >= self.max_queued_jobs:
+            raise HTTPError(429, 'Processor queue full')
+        budget = 2 * plan['maxConcurrentJobs'] * self.limits['input']
+        if incoming_bytes and self.store.live_input_bytes(owner) + incoming_bytes > budget:
+            raise HTTPError(429, 'Workspace queue byte limit reached. Wait for jobs to finish or cancel a waiting job.')
 
     def active_working_bytes(self):
         copies = 0
@@ -2000,12 +2020,6 @@ def handler(service):
                             service.projects.forget_uploads(self.owner, project_id, ids)
                     return existing
 
-                def check_queue_capacity():
-                    if service.store.count(self.owner, states=(*ACTIVE, "paused")) >= self.plan['maxQueuedJobs']:
-                        raise HTTPError(429, "Queue limit reached. Wait for jobs to finish or cancel queued jobs." + (" Sign in for a larger queue." if not self.account else ""))
-                    if service.store.count(kind='job', states=(*ACTIVE, 'paused')) >= service.max_queued_jobs:
-                        raise HTTPError(429, 'Processor queue full')
-
                 def make_record(name, size, format_hint, now):
                     settings = service.defaults(self.owner)
                     retention = RETENTION[settings["historyRetention"]]
@@ -2031,15 +2045,18 @@ def handler(service):
                     existing = existing_job()
                     if existing:
                         return self.send(200, service.public(self.owner, existing))
-                    check_queue_capacity()
+                    service.check_job_capacity(self.owner, self.plan)
                     if self.owner in service.admitting_owners:
                         raise HTTPError(429, "Another submission is being checked", retry_after=1)
                     service.admitting_owners.add(self.owner)
                     self.admitting_owner = self.owner
 
                 if paged_admission:
-                    if staged.input_bytes(time.time()) > service.limits["input"]:
+                    input_size = staged.input_bytes(time.time())
+                    if input_size > service.limits["input"]:
                         raise HTTPError(413, "Selected files exceed the total job input limit")
+                    with service.lock:
+                        service.check_job_capacity(self.owner, self.plan, input_size)
                     with tempfile.TemporaryDirectory(prefix='hamma-admission-') as temp:
                         spool = Path(temp) / 'inputs.sqlite3'
                         with closing(sqlite3.connect(spool)) as db:
@@ -2053,7 +2070,7 @@ def handler(service):
                                 existing = existing_job()
                                 if existing:
                                     return self.send(200, service.public(self.owner, existing))
-                                check_queue_capacity()
+                                service.check_job_capacity(self.owner, self.plan, admission.size)
                                 admission.check_files(service.store, self.owner)
                                 record = make_record(f"{count} files", admission.size, "batch", time.time())
                                 record.update(inputMode="upload-pages", fileCount=count)
@@ -2076,6 +2093,8 @@ def handler(service):
                 if input_size > service.limits["input"]:
                     raise HTTPError(413, "Selected files exceed the total job input limit")
 
+                with service.lock:
+                    service.check_job_capacity(self.owner, self.plan, input_size)
                 inputs, verified_uploads, seen = [], [], set()
                 source_stamps = {}
                 for upload_id in ids:
@@ -2105,7 +2124,7 @@ def handler(service):
                     existing = existing_job()
                     if existing:
                         return self.send(200, service.public(self.owner, existing))
-                    check_queue_capacity()
+                    service.check_job_capacity(self.owner, self.plan, input_size)
                     now = time.time()
                     if service.store.count_available_uploads(self.owner, ids, now) != len(ids):
                         raise HTTPError(410, "Upload expired or unavailable")
@@ -2239,10 +2258,7 @@ def handler(service):
                         elif action == "retry" and record["state"] in ("failed", "cancelled", "interrupted"):
                             if job_id in service.running:
                                 raise HTTPError(409, "Worker stopping")
-                            if service.store.count(self.owner, states=(*ACTIVE, "paused")) >= self.plan['maxQueuedJobs']:
-                                raise HTTPError(429, "Queue limit reached. Wait for jobs to finish or cancel queued jobs." + (" Sign in for a larger queue." if not self.account else ""))
-                            if service.store.count(kind='job', states=(*ACTIVE, 'paused')) >= service.max_queued_jobs:
-                                raise HTTPError(429, 'Processor queue full')
+                            service.check_job_capacity(self.owner, self.plan, record.get("inputSize", 0))
                             if record["fileExpires"] <= time.time() or any(not (service.store.folder(self.owner, i["id"]) / "input").exists() for i in service.store.iter_job_inputs(self.owner, record)):
                                 raise HTTPError(410, "Input files expired")
                             service.clean_work(self.owner, job_id)

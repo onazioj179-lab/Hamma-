@@ -845,6 +845,48 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(db.execute('SELECT count(*) FROM project_inputs WHERE owner=?', (owner,)).fetchone()[0], 0)
             self.assertEqual(db.execute('SELECT count(*) FROM job_input_pages').fetchone()[0], 101)
 
+    def test_queued_input_bytes_are_owner_scoped_and_released_on_cancel(self):
+        self.service.limits = {**self.service.limits, 'input': 8}
+        upload = self.upload(data=b'abcdefgh')
+        first = self.job(upload, requestId='1' * 64)
+        second = self.job(upload, requestId='2' * 64)
+        self.assertEqual(self.job(upload, requestId='1' * 64)['id'], first['id'])
+
+        self.call('/jobs/' + first['id'] + '/pause', {}, 'POST')
+        with patch('processor.server.file_digest', side_effect=AssertionError('Rejected jobs must not hash')):
+            self.assert_status(429, lambda: self.job(upload, requestId='3' * 64))
+            selection = 'a' * 32
+            owner = self.service.store.list(kind='upload')[0][0]
+            upload_ids = [upload['id']]
+            for index in range(100):
+                record_id = f'{index:032x}'
+                self.service.store.put(owner, 'upload', {
+                    'id': record_id, 'created': time.time(), 'expires': time.time() + 60,
+                    'name': f'empty-{index}.txt', 'size': 0, 'directory': False,
+                })
+                upload_ids.append(record_id)
+            for offset in (0, 100):
+                self.call('/job-selections/' + selection,
+                          {'offset': offset, 'uploads': upload_ids[offset:offset + 100]}, 'PUT')
+            self.assert_status(429, lambda: self.call('/jobs', {
+                'selectionId': selection, 'selectionCount': len(upload_ids), 'operation': 'compress',
+                'target': 'zip', 'requestId': '5' * 64,
+            }, 'POST'))
+
+        other = build_opener(HTTPCookieProcessor(CookieJar()))
+        other_upload = self.call('/uploads', {'name': 'other.txt', 'size': 3}, 'POST', client=other)
+        self.call('/uploads/' + other_upload['id'], b'new', 'PUT', {'Upload-Offset': '0'}, client=other, raw=True)
+        other_job = self.call('/jobs', {'uploads': [other_upload['id']], 'operation': 'compress', 'target': 'zip'},
+                              'POST', client=other)
+        self.assertEqual(other_job['state'], 'queued')
+
+        self.call('/jobs/' + first['id'] + '/cancel', {}, 'POST')
+        third = self.job(upload, requestId='3' * 64)
+        self.assert_status(429, lambda: self.call('/jobs/' + first['id'] + '/retry', {}, 'POST'))
+        self.call('/jobs/' + second['id'] + '/cancel', {}, 'POST')
+        self.assertEqual(self.call('/jobs/' + first['id'] + '/retry', {}, 'POST')['state'], 'queued')
+        self.assertEqual(self.call('/jobs/' + third['id'])['state'], 'queued')
+
     def test_job_input_budget_applies_before_hashing_inline_and_paged(self):
         self.assert_status(413, lambda: self.call("/uploads", {
             "name": "one-terabyte.bin", "size": 10**12,
