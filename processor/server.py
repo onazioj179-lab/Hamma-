@@ -63,6 +63,7 @@ LIVE_STATES = (*ACTIVE, "paused")
 MAX_UPLOAD_CHUNK = 8 * BLOCK
 MAX_OWNER_UPLOAD_CHUNKS = 2
 MAX_BATCH_BODY = 8 * BLOCK
+UPLOAD_MEMORY_SPOOL = 256 * 1024
 DISK_RESERVE = 64 * BLOCK
 JOB_SUMMARY = ("json_remove(data,'$.inputs','$.manifest','$.outputFile','$.filesCleaned','$.errorInfo.fileIds') AS data,"
                "coalesce(json_extract(data,'$.fileCount'),json_array_length(data,'$.inputs')) AS file_count")
@@ -1566,13 +1567,14 @@ def handler(service):
             with service.lock:
                 self.check_upload_chunk(upload_id, offset, length)
 
-            # Network reads can stall. Stage at most one bounded chunk per
-            # request, then recheck state before committing any bytes.
+            # Keep small requests in memory and spill larger chunks to disk.
+            # Network reads stay outside the lock and we recheck before committing.
             with service.upload_slot(self.owner, length):
-                with tempfile.TemporaryFile(dir=service.store.root) as pending:
+                with tempfile.SpooledTemporaryFile(max_size=UPLOAD_MEMORY_SPOOL,
+                                                   dir=service.store.root) as pending:
                     remaining = length
                     while remaining:
-                        chunk = self.rfile.read(min(BLOCK, remaining))
+                        chunk = self.rfile.read(min(UPLOAD_MEMORY_SPOOL, remaining))
                         if not chunk:
                             raise HTTPError(400, "Upload interrupted")
                         pending.write(chunk)

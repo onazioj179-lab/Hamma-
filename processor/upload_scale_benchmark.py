@@ -18,7 +18,7 @@ from .resources import configured_limits
 from .server import LocalHTTPServer, Service, handler
 
 
-def exercise(base, root, count, size):
+def exercise(base, root, count, size, job_timeout):
     client = build_opener(ProxyHandler({}), HTTPCookieProcessor(CookieJar()))
 
     def request(path, method="GET", body=None, *, timeout=180, **headers):
@@ -33,19 +33,25 @@ def exercise(base, root, count, size):
             return json.load(response)
 
     def upload_file(index):
-        name = f"folder-{index // 100:03d}/file-{index:05d}.bin"
+        source = sources[index]
         payload = random.Random(index).randbytes(size)
-        upload = call("/api/process/uploads", "POST", {"name": name, "size": size})["id"]
+        upload = reservations[source["id"]]["id"]
         persisted = call(f"/api/process/uploads/{upload}", "PUT", payload, **{"Upload-Offset": "0"})
         assert persisted["offset"] == size
-        return upload, (name, hashlib.sha256(payload).hexdigest())
+        return upload, (source["name"], hashlib.sha256(payload).hexdigest())
 
     selection_id = "a" * 32
-    # Establish the shared guest cookie before concurrent requests.
-    call("/api/process/settings")
     started = time.monotonic()
+    sources = [{
+        "id": f"{index:032x}", "name": f"folder-{index // 100:03d}/file-{index:05d}.bin",
+        "size": size, "directory": False, "hasOriginal": True,
+    } for index in range(count)]
+    call("/api/process/projects/default", "PUT", {})
+    reservations = call("/api/process/uploads/batch", "POST", {
+        "projectId": "default", "files": sources,
+    })["uploads"]
     uploads, expected = [], []
-    with ThreadPoolExecutor(8) as pool:
+    with ThreadPoolExecutor(2) as pool:
         for offset in range(0, count, 100):
             for upload, metadata in pool.map(upload_file, range(offset, min(offset + 100, count))):
                 uploads.append(upload)
@@ -65,10 +71,10 @@ def exercise(base, root, count, size):
     }, timeout=900)
     admitted = time.monotonic()
     path = f"/api/process/jobs/{job['id']}"
-    deadline = admitted + 480
+    deadline = admitted + job_timeout
     while job["state"] in ("queued", "processing", "verifying"):
         if time.monotonic() >= deadline:
-            raise RuntimeError(f"Job timed out in {job['state']}")
+            raise RuntimeError(f"Job timed out in {job['state']} at {job.get('processed', 0)} bytes")
         time.sleep(1)
         job = call(path)
     if job["state"] != "completed":
@@ -114,7 +120,8 @@ def main():
         parser.error("Use 101–5000 files and 32–65536 bytes per file")
     with tempfile.TemporaryDirectory(prefix="hamma-upload-scale-") as directory:
         root = Path(directory)
-        processor = Service(root / "data", limits=configured_limits({}))
+        limits = configured_limits({})
+        processor = Service(root / "data", limits=limits)
         # Isolate payload-scale measurement from the normal per-IP rate limit.
         processor.requests_per_minute = 20000
         with LocalHTTPServer(("127.0.0.1", 0), handler(processor)) as server:
@@ -124,7 +131,7 @@ def main():
             scheduler.start()
             try:
                 report = exercise(f"http://127.0.0.1:{server.server_port}", root,
-                                  args.files, args.bytes_per_file)
+                                  args.files, args.bytes_per_file, limits["seconds"] + 30)
                 report["requestLimitPerMinute"] = processor.requests_per_minute
             finally:
                 server.shutdown()
