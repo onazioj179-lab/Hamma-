@@ -86,6 +86,12 @@ signed download, compare the paged manifest, check retention and owner
 boundaries, and complete the upload from its backed-up offset. The workflow
 uses the same application image for the source and restored service.
 
+The workflow also runs the image's readiness probe in a disposable container
+with networking disabled. It removes the mounted web entry point, checks for
+HTTP 503 with reason `web-build`, restores the entry point, and verifies that
+Docker emitted healthy, unhealthy and healthy events in order. Monitoring
+notification delivery still needs a test in the target environment.
+
 Reproduce the two-owner worker test with
 `python -m processor.scheduler_benchmark --multiple-owners --output report.json`.
 The one-slot fixture checks dispatch order, owner boundaries and exact bytes.
