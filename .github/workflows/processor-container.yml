@@ -1,7 +1,7 @@
 name: Processor container
 on:
   pull_request:
-    paths: ['native/**', 'processor/**', 'web/**', 'package.json', 'package-lock.json', '.dockerignore', 'compose.local.yml', 'scripts/smoke-container.py', 'scripts/smoke-container-health.sh', '.github/workflows/processor-container.yml']
+    paths: ['native/**', 'processor/**', 'web/**', 'package.json', 'package-lock.json', '.dockerignore', 'compose.local.yml', 'scripts/smoke-container.py', 'scripts/smoke-container-health.sh', 'scripts/smoke-container-memory.py', '.github/workflows/processor-container.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -89,6 +89,22 @@ jobs:
         run: python3 scripts/smoke-container.py http://127.0.0.1:5010 --state "$RUNNER_TEMP/hamma-smoke.json" --after-restore
       - name: Verify Docker health events for readiness failure and recovery
         run: bash scripts/smoke-container-health.sh hamma-ci-backup-test:local
+      - name: Verify queue recovery under live container memory pressure
+        run: |
+          set -euo pipefail
+          container=$(docker run --detach --init --network none --read-only \
+            --cap-drop ALL --security-opt no-new-privileges:true --pids-limit 128 \
+            --memory 1536m --memory-swap 1536m --cpus 2 --tmpfs /tmp:size=64m,mode=1777 \
+            --health-interval 2s hamma-ci-backup-test:local)
+          trap 'docker rm --force --volumes "$container" >/dev/null' EXIT
+          for attempt in {1..30}; do
+            if [[ $(docker inspect --format '{{.State.Health.Status}}' "$container") == healthy ]]; then
+              break
+            fi
+            sleep 1
+          done
+          test "$(docker inspect --format '{{.State.Health.Status}}' "$container")" = healthy
+          timeout 45s docker exec -i "$container" python - < scripts/smoke-container-memory.py
       - name: Record packages and runtimes from the running image
         run: |
           mkdir -p image-inventory
