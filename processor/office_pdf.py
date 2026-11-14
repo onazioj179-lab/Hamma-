@@ -97,7 +97,14 @@ def enforce_work_limit(scratch, ctx):
     entries = 0
     pending = [scratch]
     while pending:
-        with os.scandir(pending.pop()) as paths:
+        directory = pending.pop()
+        try:
+            paths = os.scandir(directory)
+        except FileNotFoundError:
+            # LibreOffice can remove a temporary profile directory between
+            # discovering it and visiting it.
+            continue
+        with paths:
             for path in paths:
                 entries += 1
                 if entries > 4096:
