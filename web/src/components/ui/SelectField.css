@@ -14,7 +14,7 @@
   color: rgb(var(--foreground));
   background: rgb(var(--card));
   border: 1px solid rgb(var(--border));
-  border-radius: 8px;
+  border-radius: var(--radius-pill);
   text-align: left;
   font-size: 12px;
   font-weight: 400;
@@ -35,7 +35,7 @@
   transform: rotate(180deg);
 }
 .select-trigger:hover {
-  background: rgb(var(--card-elevated));
+  color: rgb(var(--accent));
 }
 .select-menu {
   position: fixed;
@@ -44,8 +44,9 @@
   overscroll-behavior: contain;
   padding: 5px;
   border: 1px solid rgb(var(--border));
-  border-radius: 10px;
-  background: rgb(var(--card));
+  border-radius: var(--radius-panel);
+  background: var(--floating-surface);
+  backdrop-filter: var(--floating-blur);
   box-shadow: 0 8px 28px rgb(0 0 0 / 0.14);
   color: rgb(var(--foreground));
 }
@@ -56,7 +57,7 @@
   gap: 16px;
   min-height: 36px;
   padding: 8px 10px;
-  border-radius: 6px;
+  border-radius: var(--radius-pill);
   cursor: pointer;
   font-size: 12px;
   line-height: 20px;

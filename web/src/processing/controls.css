@@ -1,5 +1,5 @@
 /* Shared controls and disclosure panels. */
-.processing-options { border:1px solid rgb(var(--border)); border-radius:12px; background:rgb(var(--card)); overflow:hidden; }
+.processing-options { border:1px solid rgb(var(--border)); border-radius:var(--radius-panel); background:rgb(var(--card)); overflow:hidden; }
 .processing-options > summary { display:flex; align-items:center; justify-content:space-between; padding:15px 18px; list-style:none; font-size:12px; font-weight:500; color:rgb(var(--foreground)); }
 .processing-options > summary::-webkit-details-marker { display:none; }
 .processing-options > summary:after { content:''; width:7px; height:7px; border-right:1.5px solid rgb(var(--muted)); border-bottom:1.5px solid rgb(var(--muted)); transform:rotate(45deg); margin:0 3px 4px 12px; }
@@ -10,7 +10,7 @@
 .processing-options > .button-row { justify-content:flex-start; padding:0 18px 18px; }
 .options-grid .select-field { width:100%; min-width:140px; }
 .universal-search { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,145px),1fr)); align-items:center; }
-.universal-search .search-field { min-width:0; min-height:38px; padding:9px 12px; border:1px solid rgb(var(--border)); background:rgb(var(--card)); border-radius:8px; }
+.universal-search .search-field { min-width:0; min-height:38px; padding:9px 12px; border:1px solid rgb(var(--border)); background:rgb(var(--card)); border-radius:var(--radius-pill); }
 .universal-search .select-field { width:100%; }
 .conversion-select .select-field { min-width:110px; }
 .processing-empty p { margin:12px 0 0; line-height:1.7; }
@@ -35,24 +35,13 @@
   display: inline-flex;
   max-width: 100%;
   gap: 4px;
-  padding: 4px;
-  border: 1px solid rgb(var(--border));
-  border-radius: 12px;
-  background: rgb(var(--card-elevated));
 }
 .history-views button {
   min-height: 44px;
   padding: 8px 18px;
-  border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-pill);
   font-size: 14px;
-  font-weight: 500;
   color: rgb(var(--muted));
-}
-.history-views button[aria-pressed="true"] {
-  border-color: rgb(var(--border));
-  background: rgb(var(--card));
-  color: rgb(var(--foreground));
 }
 .universal-search:has(.history-filters) { grid-template-columns: minmax(0, 1fr); }
 .universal-search .search-field, .history-filter-fields .select-trigger { min-height: 44px; }
