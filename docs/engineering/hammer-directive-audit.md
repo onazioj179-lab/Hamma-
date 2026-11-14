@@ -10,12 +10,15 @@ BLOCKED denotes acceptance that requires external infrastructure or credentials.
 
 ## HAMMA web backlog
 
-1. **Validate recovery across mixed batches.** Unstarted selections and upload checkpoints share the project recovery pages. Browser tests cover 105 upload checkpoints, and a processor test covers 106 checkpoints with a partial upload removed during recovery. Exercise the flow on physical devices and under sustained load.
-2. **Scale browser jobs.** Browser ZIP and TAR submissions above 100 uploads stage the selection, admit it in pages, and persist ordered worker inputs in SQLite. Browser folder discovery, archive libraries, and standard output manifests still retain per-file state. Validate large payloads, multi-owner scheduling, and per-file retry under sustained load.
-3. **Validate physical devices.** Test mobile and foldable layouts, folder picking, touch, keyboard access, reduced motion, and recovery on real devices.
-4. **Isolate processing workers.** Enforce filesystem and network isolation, verify tenant boundaries, and expand dependency advisories, SBOM coverage, and fuzz tests.
-5. **Expand format support.** Verify archive interoperability and add encryption, split and join, broader codec coverage, and isolated PDF and Office conversions. Check decoded bytes, format fidelity, and advertised capabilities.
-6. **Validate production operations.** Test rollback, migration, retention, and monitoring in the target environment. Distributed testing requires authorized compute and object storage.
+The [release evidence](release-readiness.md) records completed checks and their
+scope. These are the remaining acceptance tasks.
+
+1. **Mixed project recovery.** Exercise per-file retry alongside large jobs under sustained mixed-project load. Verify file picking and recovery of unstarted, partial, and completed inputs on physical devices.
+2. **Browser job scale.** Bound browser selection and archive-library memory, and extend bounded input and output handling to the remaining workflows. Measure large payloads, multi-owner scheduling, and storage and memory pressure.
+3. **UI and physical devices.** Verify touch, fold transitions, native Safari keyboard order, and reduced motion on phones and foldables. Reproduce the reported image failures with the original files and phone diagnostics.
+4. **Worker isolation and dependencies.** Extend filesystem isolation to the remaining worker paths. Verify resource limits, network isolation, and owner boundaries on the target host. Expand advisory coverage, SBOM coverage, and fuzz testing.
+5. **Formats and fidelity.** Verify additional codecs and archive fixtures, including encrypted split ZIP, legacy ZipCrypto, and member comments. Add spreadsheet export and validate Office layout fidelity across a broader fixture set. Verify lossless policy and hardware fallback on supported configurations.
+6. **Production operations.** Rehearse rollback and migration on the target deployment. Verify retention, backup restoration, and alert delivery there. Distributed recovery requires authorized compute and object storage.
 
 The Linux local and LAN container health checks use `GET /api/process/ready`.
 It returns HTTP 503 until the scheduler has completed a successful loop, if
