@@ -170,6 +170,16 @@ its dependency nor a configuration is present. This is an unresolved repository
 check, not a successful lint result. Full native sanitizers and physical device
 QA were not performed.
 
+## Paged ZIP verification
+
+Paged ZIP jobs store member names and verification digests in SQLite,
+hash uploads during packing, and compare the reopened ZIP's ordered entries
+with the persisted rows. Python's ZIP central directory still scales with
+member count. A Windows comparison verified 5,000 ZIP members with 156.25 MiB
+of payload from 64 deterministic files. Peak traced Python allocations fell
+from 8.02 MiB to 5.90 MiB. The in-memory and disk-backed runs took 62.63 and
+38.43 seconds, respectively. These timings describe one run per path.
+
 ## Paged TAR verification
 
 Paged uploaded TAR jobs now use a temporary SQLite registry for member paths

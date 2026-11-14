@@ -177,8 +177,8 @@ class DigestReader:
         return data
 
 
-class UploadTarManifest:
-    """Temporary disk-backed path registry and verification rows for uploaded TARs."""
+class UploadArchiveManifest:
+    """Temporary disk-backed path registry and verification rows for uploaded archives."""
 
     def __init__(self, database):
         self.database = database

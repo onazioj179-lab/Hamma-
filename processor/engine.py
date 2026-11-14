@@ -406,7 +406,7 @@ def encode_zip_comment(comment):
 
 
 def compress(inputs, output: Path, target: str, ctx: Context, *, zip_profile="balanced", zip_comment="",
-             tar_manifest=None):
+             archive_manifest=None):
     comment = encode_zip_comment(zip_comment)
     if comment and target != "zip":
         raise ProcessingError("Archive comments require ZIP")
@@ -414,16 +414,25 @@ def compress(inputs, output: Path, target: str, ctx: Context, *, zip_profile="ba
         from .native import run
         with TemporaryDirectory(prefix="tar-zstd-", dir=ctx.root) as folder:
             tar = Path(folder) / "archive.tar"
-            manifest = compress(inputs, tar, "tar", ctx, tar_manifest=tar_manifest)
+            manifest = compress(inputs, tar, "tar", ctx, archive_manifest=archive_manifest)
             result = run("compress", tar, output, ctx, progress=False,
                          input_limit=ctx.limits["expanded"])
             if result["inputBytes"] > max(1, result["outputBytes"]) * ctx.limits["ratio"]:
                 output.unlink()
                 raise ProcessingError("Archive expansion ratio limit reached")
         return manifest
-    manifest = [] if tar_manifest is None else tar_manifest
-    register = ctx.register if tar_manifest is None else safe_path
-    names = ((item, register(item["name"], item.get("directory", False))) for item in inputs)
+    manifest = [] if archive_manifest is None else archive_manifest
+    register = ctx.register if archive_manifest is None else safe_path
+    def named_inputs():
+        for item in inputs:
+            name = register(item["name"], item.get("directory", False))
+            if archive_manifest is not None:
+                if ctx.count >= ctx.limits["files"]:
+                    raise ProcessingError("Too many files")
+                ctx.count += 1
+            yield item, name
+
+    names = named_inputs()
     if not (target == "zip" or target.startswith("tar")):
         names = iter(list(names))
     if target == "zstd":
@@ -463,14 +472,21 @@ def compress(inputs, output: Path, target: str, ctx: Context, *, zip_profile="ba
                             if not sample or len(zlib.compress(sample, level=1)) >= len(sample) * 0.99:
                                 entry = zipfile.ZipInfo(name)  # ZIP_STORED for this member.
                         with archive.open(entry, "w", force_zip64=True) as dest:
-                            manifest.append({"name": name, **ctx.copy(source, dest)})
+                            expected = item["size"] if archive_manifest is not None else None
+                            digest = ctx.copy(source, dest, expected=expected)
+                            if archive_manifest is not None and digest["sha256"] != item["sha256"]:
+                                raise ProcessingError("Input integrity check failed")
+                            manifest.append({"name": name, **digest})
         ctx.report(state="verifying")
         with zipfile.ZipFile(output) as archive:
-            if archive.comment != comment or archive.namelist() != [row["name"] for row in manifest]:
+            if archive.comment != comment:
                 raise ProcessingError("Archive verification failed")
-            for row in manifest:
+            for info, row in zip_longest(archive.infolist(), manifest):
+                ctx.check()
+                if info is None or row is None or info.filename != row["name"]:
+                    raise ProcessingError("Archive verification failed")
                 if not row.get("directory"):
-                    with archive.open(row["name"]) as source:
+                    with archive.open(info) as source:
                         actual = ctx.copy(source, Sink(), progress=False, expected=row["size"])
                     if actual["sha256"] != row["sha256"]:
                         raise ProcessingError("Integrity check failed")
@@ -481,10 +497,6 @@ def compress(inputs, output: Path, target: str, ctx: Context, *, zip_profile="ba
                 format=tarfile.PAX_FORMAT, bufsize=TAR_WRITE_BUFFER) as archive:
             for item, name in names:
                 ctx.check()
-                if tar_manifest is not None:
-                    if ctx.count >= ctx.limits["files"]:
-                        raise ProcessingError("Too many files")
-                    ctx.count += 1
                 info = tarfile.TarInfo(name)
                 info.mtime = 0
                 info.mode = 0o755 if item.get("directory") else 0o644
@@ -496,12 +508,12 @@ def compress(inputs, output: Path, target: str, ctx: Context, *, zip_profile="ba
                     path = Path(item["path"])
                     with path.open("rb") as source:
                         info.size = os.fstat(source.fileno()).st_size
-                        if tar_manifest is not None and info.size != item["size"]:
+                        if archive_manifest is not None and info.size != item["size"]:
                             raise ProcessingError("Input integrity check failed")
                         reader = DigestReader(source, ctx)
                         archive.addfile(info, reader)
                         digest = reader.digest.hexdigest()
-                        if source.read(1) or (tar_manifest is not None and digest != item["sha256"]):
+                        if source.read(1) or (archive_manifest is not None and digest != item["sha256"]):
                             raise ProcessingError("Input integrity check failed")
                     manifest.append({"name": name, "size": info.size, "sha256": digest})
                 archive.members.clear()  # Writers cache TarInfo even in stream mode.
