@@ -165,6 +165,24 @@ of readiness through retention failure and API rate limiting, rejection of
 invalid request bodies, and a job retry racing a file deletion. Readiness
 continues to check the scheduler heartbeat and configured web build.
 
+## Lossless 100 GB compression fixture
+
+On Windows, SHANTE 0.1.0 with Zstandard 1.5.7 compressed a 100,000,000,000-byte
+sparse zero-filled file to 3,814,715 bytes. The codec decoded and compared
+every byte with the source before publishing. The run took 556.08 seconds
+through verification with one codec worker and a 128 MiB codec memory budget.
+Peak codec allocations were 6,565,448 bytes. Output SHA-256 was
+`b0bcebcec584dd163fccfe51f6f7fd98f1e604284b04d7e2e86753c9fdd6429d`.
+
+Run `python scripts/benchmark-large-zstd.py --binary native/build/shante-core.exe
+--report report.json` on Windows. The benchmark supports `--source` for an
+existing file and fails if the resulting archive exceeds the byte target.
+The browser and HTTP processor retain their current safety limits. The
+100 GB run exercised the native CLI directly. A 4 MiB control produced a
+529-byte Zstandard archive for repeated text and a 4,194,413-byte archive for
+deterministic random data. Comparison with the reported WinRAR result still
+requires the same source bytes and settings.
+
 ## Historical baseline — 2026-11-04
 
 Status: PARTIAL. SHANTE is not production complete.
