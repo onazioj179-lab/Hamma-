@@ -120,7 +120,7 @@ See [the worker report](../../validation/scheduler-worker-fairness.json).
 | Dependency and security engineering | PARTIAL | Pinned Zstandard source, workflow checks and audit scripts. Expand SBOM and advisory coverage across Python, Rust, native and FFmpeg, and continue fuzzing and threat-model validation. |
 | APIs and MCP | PARTIAL | Python processor HTTP API and Rust compatibility API. No MCP integration established in this scope. Add versioned contracts and authorization tests before exposing tools. |
 | Runtime and build performance | PARTIAL | CMake/Ninja presets and local benchmark scripts. Record reproducible workload, memory and clean/incremental build measurements before selecting optimizations. |
-| Benchmarks against reference tools | PARTIAL | A seeded ZIP comparison measures time through verification and output size against bsdtar or 7-Zip. Broader workload, resource and media measurements remain open. |
+| Benchmarks against reference tools | PARTIAL | A seeded ZIP comparison measures size and time through verification against bsdtar or 7-Zip. A separate corpus comparison covers ZIP, TAR.ZST and solid TAR.XZ on identical inputs. Broader workload, resource and media measurements remain open. |
 | Distributed jobs and object storage | BLOCKED | Single-node processor acceptance is separate. Multi-node validation requires an authorized deployment and object storage. Durable ownership, recovery and tenant isolation are open design work. |
 | CI, release and production monitoring | PARTIAL | `.github/workflows/` checks the HAMMA web build and SHANTE processor. Validate rollback, migration, monitoring and privacy in the intended environment. |
 
@@ -244,3 +244,27 @@ render the document, open its contents, or validate layout fidelity.
 Format references are the [PKWARE ZIP Application Note](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT)
 and [Microsoft Windows file naming rules](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file).
 The TAR reader uses Python's [tarfile module](https://docs.python.org/3/library/tarfile.html).
+
+
+## Lossless corpus comparison
+
+The [Windows report](../../validation/lossless-corpora-windows.json) compares
+ZIP Deflate, SHANTE TAR.ZST and one LZMA2 stream over TAR (TAR.XZ). Each codec
+received the same three seeded 128-file corpora at approximately 16 MiB
+each. An independent reader restored every entry and checked its SHA-256.
+
+| Input corpus | ZIP bytes | TAR.ZST bytes | TAR.XZ bytes |
+| --- | ---: | ---: | ---: |
+| Shared blocks | 16,798,230 | 4,235,378 | 4,289,864 |
+| Unique random | 16,798,230 | 16,843,179 | 16,891,036 |
+| Already compressed | 16,805,756 | 16,908,689 | 16,895,764 |
+
+Both TAR streams compressed shared blocks across members. All three
+outputs were larger than the input on the random and already-compressed
+fixtures. The report includes time through verification and traced Python
+allocations. It excludes subprocess memory and does not establish
+performance for larger or real user data.
+
+Reproduce with native SHANTE and a Zstandard-capable bsdtar available:
+
+    python scripts/benchmark-lossless-corpora.py --mib 16 --report report.json
