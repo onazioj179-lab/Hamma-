@@ -169,3 +169,20 @@ Lint status: FAILED. The existing npm lint command invokes ESLint, but neither
 its dependency nor a configuration is present. This is an unresolved repository
 check, not a successful lint result. Full native sanitizers and physical device
 QA were not performed.
+
+## Paged TAR verification
+
+Paged uploaded TAR jobs now use a temporary SQLite registry for member paths
+and verification digests. They hash each payload while packing, compare it to
+the admitted digest, and publish manifest rows only after verifying the
+archive. The HTTP regression checks member bytes, a manifest page, and rejection
+of a same-size input mutation after admission.
+
+A Windows TAR.GZ worker-path comparison used 5,000 unique archive names and
+156.25 MiB of payload from 64 repeated deterministic source files. An
+independent read verified every member. Traced peak Python allocations fell
+from 4.35 MiB to 1.97 MiB compared with the in-memory registry using the same
+writer. Packing and internal verification took 85.45 and 94.16 seconds
+respectively. Tracing excludes SQLite, native memory, and OS caches. ZIP
+metadata, browser-side selection memory, and large HTTP transfer tests remain
+open.
