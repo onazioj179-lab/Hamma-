@@ -101,7 +101,8 @@ def validate_office_source(source, ctx):
             if name != item.filename.lower():
                 raise ProcessingError('Unsafe Office package names')
             if (name.endswith('/vbaproject.bin') or '/embeddings/' in name or
-                    '/activex/' in name or name.startswith('xl/externallinks/')):
+                    '/activex/' in name or name == 'xl/connections.xml' or
+                    name.startswith(('xl/externallinks/', 'xl/querytables/'))):
                 raise ProcessingError('Unsupported active or embedded Office content')
             if item.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
                 raise ProcessingError('Unsupported Office package compression')

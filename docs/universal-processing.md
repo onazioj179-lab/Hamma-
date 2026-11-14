@@ -83,8 +83,9 @@ Any file can be compressed as opaque data. That does **not** mean every format
 can be extracted or converted. RAR/7Z, unknown archives, server-side encrypted ZIP extraction,
 corruption, incompatible codecs, missing audio and engine failures produce failed
 jobs, never fake downloads. Media actions are unavailable without FFmpeg/FFprobe.
-The Linux container can export DOCX and PPTX files to PDF. Select a single
-document and choose **Export as PDF**. The isolated renderer accepts Office
+The Linux container can export DOCX, PPTX, and XLSX files to PDF. Select a
+single file and choose **Export as PDF**. Worksheets use Calc's print layout
+and page settings. The isolated renderer accepts Office
 files up to 32 MiB and verifies output PDFs of up to 100 pages. Export uses
 LibreOffice layout and installed fonts. Editable content, embedded objects and
 macros are outside the PDF export workflow. Video conversion is remuxing, not

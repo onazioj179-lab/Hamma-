@@ -149,16 +149,22 @@ it('renders a PDF through the dedicated workspace action', async () => {
   }), 'POST', { signal: expect.any(AbortSignal) });
 });
 
-it('offers Office PDF export only with the processor capability and submits the selected document', async () => {
+it.each(['docx', 'xlsx'])('offers PDF export for a supported %s and submits the selected file', async (extension) => {
   const initial = fetchMock.getMockImplementation()!;
   await render();
-  await select([new File(['fixture'], 'sample.docx')]);
+  await select([new File(['fixture'], `sample.${extension}`)]);
   expect(button('Export as PDF')).toBeUndefined();
   await render('history');
   await render();
   fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
     ? { ok: true, json: async () => ({ ...caps, officePdf: true }) } : initial(url));
   await act(async () => window.dispatchEvent(new Event('online')));
+  if (extension === 'xlsx') {
+    expect(button('Export as PDF')).toBeUndefined();
+    fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
+      ? { ok: true, json: async () => ({ ...caps, officePdfFormats: ['docx', 'pptx', 'xlsx'] }) } : initial(url));
+    await act(async () => window.dispatchEvent(new Event('online')));
+  }
   vi.spyOn(processingClient, 'upload').mockResolvedValue('uploaded-office');
   vi.spyOn(processingClient, 'requestId').mockResolvedValue('office-export-request');
   const submit = vi.spyOn(processingClient, 'jsonRequest').mockResolvedValue({});
