@@ -30,6 +30,34 @@ jobs:
           PY
       - name: Verify web assets and file operations through the deployed service
         run: python3 scripts/smoke-container.py http://127.0.0.1:5010 --state "$RUNNER_TEMP/hamma-smoke.json"
+      - name: Diagnose the synthetic spreadsheet fixture
+        if: failure()
+        run: |
+          docker compose -f compose.local.yml exec -T hamma python - <<'PY'
+          import os
+          from pathlib import Path
+          import subprocess
+          from tempfile import TemporaryDirectory
+          from processor.codec_sandbox import codec_command
+          from processor.tests.office_fixture import office_fixture
+
+          subprocess.run(['ldd', '/usr/lib/libreoffice/program/libscfiltlo.so'])
+          for isolated in (False, True):
+              with TemporaryDirectory(dir='/data') as directory:
+                  root = Path(directory)
+                  source = root / 'source.xlsx'
+                  source.write_bytes(office_fixture('xlsx'))
+                  work = root / 'work'
+                  work.mkdir()
+                  profile = work / 'profile'
+                  profile.mkdir()
+                  cmd = ['/usr/local/bin/hamma-office-pdf', '/usr/lib/libreoffice/program',
+                         profile.as_uri(), source.as_uri(), (work / 'rendered.pdf').as_uri()]
+                  env = dict(os.environ, HOME=str(work), SAL_USE_VCLPLUGIN='svp')
+                  result = subprocess.run(codec_command(cmd, source, work) if isolated else cmd,
+                                          cwd=work, env=env, timeout=20)
+                  print(f'Isolated {isolated}: {result.returncode}', flush=True)
+          PY
       - name: Back up the stopped service volume
         run: |
           set -euo pipefail
