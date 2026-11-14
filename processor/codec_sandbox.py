@@ -75,6 +75,9 @@ def restrict_filesystem(executable, source, output_dir):
                 os.close(fd)
 
         permit(executable, execute | read_file)
+        executable_name = Path(executable).name
+        if executable_name == 'hamma-calc-pdf':
+            permit('/usr/bin/python3', execute | read_file)
         permit(source, read_file)
         # The dynamic linker and shared objects are host runtime files.
         for path in ('/lib', '/lib64', '/usr/lib', '/usr/lib64', '/usr/local/lib'):
@@ -83,8 +86,7 @@ def restrict_filesystem(executable, source, output_dir):
         for path in ('/etc/ld.so.cache', '/dev/urandom'):
             if os.path.exists(path):
                 permit(path, read_file)
-        executable_name = Path(executable).name
-        office = executable_name in ('hamma-office-pdf', 'soffice.bin')
+        office = executable_name in ('hamma-office-pdf', 'hamma-calc-pdf')
         if executable_name == 'pdftoppm' or office:
             for path in ('/etc/fonts', '/usr/share/fontconfig', '/usr/share/fonts', '/usr/local/share/fonts'):
                 if os.path.isdir(path):
@@ -110,7 +112,7 @@ if __name__ == '__main__':
         environment = {'LANG': 'C.UTF-8', 'PATH': os.defpath}
         if output_dir:
             environment['TMPDIR'] = output_dir
-            if Path(executable).name in ('hamma-office-pdf', 'soffice.bin'):
+            if Path(executable).name in ('hamma-office-pdf', 'hamma-calc-pdf'):
                 environment.update(HOME=output_dir, XDG_CACHE_HOME=output_dir, SAL_USE_VCLPLUGIN='svp')
         os.execve(executable, [executable, *arguments], environment)
     except (OSError, RuntimeError) as error:

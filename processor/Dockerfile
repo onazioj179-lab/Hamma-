@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libreofficekit-
 
 FROM python:3.13-slim-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libstdc++6 libseccomp2 poppler-utils fonts-dejavu-core \
-    fonts-liberation libreoffice-writer-nogui libreoffice-impress-nogui libreoffice-calc-nogui \
+    fonts-liberation libreoffice-writer-nogui libreoffice-impress-nogui libreoffice-calc-nogui python3-uno \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 10001 --create-home hamma \
     && mkdir -p /app/web/dist /data && chown hamma:hamma /data
@@ -31,6 +31,7 @@ COPY processor/ processor/
 COPY --from=web /app/web/dist/ web/dist/
 COPY --from=native /opt/shante/ /opt/shante/
 COPY --from=native /usr/local/bin/hamma-office-pdf /usr/local/bin/
+RUN install -m 755 processor/calc_pdf.py /usr/local/bin/hamma-calc-pdf
 USER hamma
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HAMMA_DATA=/data \
     SHANTE_CORE_BINARY=/opt/shante/bin/shante-core

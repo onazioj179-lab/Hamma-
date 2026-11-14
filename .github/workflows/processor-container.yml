@@ -30,6 +30,30 @@ jobs:
           PY
       - name: Verify web assets and file operations through the deployed service
         run: python3 scripts/smoke-container.py http://127.0.0.1:5010 --state "$RUNNER_TEMP/hamma-smoke.json"
+      - name: Diagnose synthetic Calc export
+        if: failure()
+        run: |
+          docker compose -f compose.local.yml exec -T hamma python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          from tempfile import TemporaryDirectory
+          from processor.codec_sandbox import codec_command
+          from processor.tests.office_fixture import office_fixture
+          from processor.worker_limits import restrict_worker_sockets
+
+          with TemporaryDirectory(dir='/data') as directory:
+              root = Path(directory)
+              source = root / 'source.xlsx'
+              source.write_bytes(office_fixture('xlsx'))
+              work = root / 'work'
+              work.mkdir()
+              profile = work / 'profile'
+              profile.mkdir()
+              cmd = ['/usr/local/bin/hamma-calc-pdf', profile.as_uri(), source.as_uri(),
+                     (work / 'rendered.pdf').as_uri()]
+              restrict_worker_sockets()
+              subprocess.run(codec_command(cmd, source, work), cwd=work, timeout=20, check=True)
+          PY
       - name: Back up the stopped service volume
         run: |
           set -euo pipefail
