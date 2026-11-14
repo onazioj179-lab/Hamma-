@@ -15,7 +15,7 @@ import { SelectField } from '../ui/SelectField';
 import { ConfirmAction, type ConfirmationRequest } from '../ui/ConfirmAction';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowDownToLine, ArrowRightLeft, Check, ChevronLeft, ChevronRight, Download, File, FileArchive, FolderPlus, History, Loader2, Pause, Play, Plus, RefreshCw, Search, ShieldCheck, Trash2, X } from 'lucide-react';
-import { activeJob, jsonRequest, stageJobSelection, ProcessorError, request, requestId, randomId, upload, type Capability, type Job, type Retention, type Source } from '../../processing/client';
+import { activeJob, jsonRequest, reserveUploadBatch, stageJobSelection, ProcessorError, request, requestId, randomId, upload, type Capability, type Job, type Retention, type Source } from '../../processing/client';
 import { formatFileSize } from '../../utils/fileHelpers';
 import { accountChanging } from '../../processing/account';
 import { directoryPicker, droppedSources, readFolder } from '../../processing/folders';
@@ -405,7 +405,9 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
   };
   useEffect(() => {
     if (!capability?.inspection) return;
-    const pending = sources.filter(source => source.file && !source.inspection).slice(0, 32);
+    const candidates = capability.uploadBatch ? sources.filter(source => selected.has(source.id)) : sources;
+    if (capability.uploadBatch && candidates.reduce((total, source) => total + source.size, 0) > capability.limits.input) return;
+    const pending = candidates.filter(source => source.file && !source.inspection).slice(0, 32);
     if (!pending.length) return;
     const controller = new AbortController();
     void inspectSources(pending, controller.signal).then(results => {
@@ -418,7 +420,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
       setError(message);
     });
     return () => controller.abort();
-  }, [sources, capability]);
+  }, [sources, selected, capability]);
   const switchProject = (id: string) => {
     if (busy || recovering || spkBusy || mutation.current || submitting.current || folderController.current || id === projectId) return;
     drafts.current.set(projectId, { sources, selected, target, zipProfile, zipComment, conversion, qualityMode, metadataPolicy, recursive, groupActions, errors: sourceErrors });
@@ -549,13 +551,21 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
     const generation = ownerGeneration.current;
     const submitted = new Set<string>();
     try {
-      await selectionWrites.current;
-      if (capability.projectRecovery) await recovery.current.save(projectId, { target, conversion, qualityMode, metadataPolicy, recursive, ...(capability.projectZipProfiles ? { zipProfile } : {}), ...(capability.groupedWorkflows ? { groupActions } : {}) }, controller.signal);
       const report = operation === 'verify' || operation === 'inspect';
       const jobTarget = report ? 'json' : operation === 'extract' ? repack ? 'zip-deflate' : 'zip'
         : operation === 'split' ? 'zip' : operation === 'join' ? 'file'
         : operation === 'compress' ? archiveTarget : selectedConversion;
       const plan = planned || summarizePlan([{ id: 'selection', sources: chosen, operation, target: jobTarget, qualityMode, metadataPolicy, recursive }], 0, capability);
+      if (plan.issues.length) throw new Error(plan.issues.join(' '));
+      const processorSources = plan.groups.flatMap(group => group.sources.filter(source =>
+        group.operation !== 'extract' || !/\.spk$/i.test(source.name)));
+      const inputBytes = processorSources.reduce((sum, source) => sum + source.size, 0);
+      if (capability.uploadBatch && inputBytes > capability.limits.input) {
+        throw new Error(`The selection totals ${formatFileSize(inputBytes)}. The batch limit is ${formatFileSize(capability.limits.input)}. Select fewer files.`);
+      }
+      await selectionWrites.current;
+      if (capability.projectRecovery) await recovery.current.save(projectId, { target, conversion, qualityMode, metadataPolicy, recursive, ...(capability.projectZipProfiles ? { zipProfile } : {}), ...(capability.groupedWorkflows ? { groupActions } : {}) }, controller.signal);
+      if (capability.uploadBatch) await reserveUploadBatch(projectId, processorSources, controller.signal);
       const sourcesByUpload = new Map<string, string>();
       const failures = await executeWorkflow(plan, {
         signal: controller.signal,
@@ -880,6 +890,9 @@ export function UniversalWorkspace({ visible, screen, onHistory, spkResult, onSp
             </div>)}
           </div>
         </div>
+        {capability?.uploadAvailableBytes !== undefined && <p className="footnote">
+          {formatFileSize(capability.uploadAvailableBytes)} available for new uploads · {formatFileSize(capability.limits.input)} batch limit
+        </p>}
         {capability?.groupedWorkflows && <GroupedWorkflow key={projectId} sources={chosen} capability={capability} settings={{ qualityMode, metadataPolicy, recursive }} selections={groupActions} onSelectionsChange={setGroupActions} busy={busy || recovering || !!spkBusy || offline || (capability.projectRecovery === true && !recoveryReady)} onQualityChange={setQualityMode} onRun={plan => void submit('compress', { planned: plan })} />}
         {new Set(chosen.map(source => source.inspection?.format).filter(Boolean)).size > 1 && <details className="processing-options"><summary>Actions by file type</summary><div className="button-row">{[...new Set(chosen.map(source => source.inspection?.format).filter((format): format is string => !!format))].map(format => <button className="button secondary" key={format} disabled={busy || !!spkBusy} onClick={() => setSelected(new Set(chosen.filter(source => source.inspection?.format === format).map(source => source.id)))}>Select {format.toUpperCase()} ({chosen.filter(source => source.inspection?.format === format).length})</button>)}</div></details>}
         <div className="processing-actions"><button className="button primary" disabled={busy || recovering || spkBusy || !selected.size || selectedNeedsOriginal || (archiveTarget === 'spk' ? !spkReady || chosen.some(source => source.directory) : !capability || offline)} onClick={() => void submit('compress')}><FileArchive size={16} /> Compress</button>{canExtract && <button className="button secondary" disabled={busy || recovering || spkBusy || !selected.size || selectedNeedsOriginal || chosen.some(s => s.directory) || (chosen.every(source => /\.spk$/i.test(source.name)) ? !spkReady : !capability || offline)} onClick={() => void submit('extract')}><ArrowDownToLine size={16} /> Extract</button>}{actions.conversions.length > 0 && <><button className="button secondary" disabled={busy || recovering || spkBusy || !selected.size || selectedNeedsOriginal || !capability?.conversions.length || offline || chosen.some(s => s.directory)} onClick={() => void submit('convert')}><ArrowRightLeft size={16} /> Convert</button><label className="conversion-select">To<SelectField disabled={busy || recovering || spkBusy} aria-label="Conversion format" value={conversionTarget} onChange={value => setConversion(value)}>{actions.conversions.map(format => <option key={format} value={format}>{format === 'mp4-h264' ? 'MP4 (H.264)' : format}</option>)}</SelectField></label><label className="conversion-select">Quality<SelectField disabled={busy || recovering || spkBusy} aria-label="Conversion quality" value={qualityMode} onChange={value => setQualityMode(value as "lossless" | "lossy")}><option value="lossless">Lossless</option><option value="lossy">Allow quality loss</option></SelectField></label></>}</div>

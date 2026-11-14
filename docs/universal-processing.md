@@ -104,6 +104,16 @@ a split ZIP, select all numbered volumes and the final .zip, then choose
 ZipCrypto set. Joining produces a regular, unencrypted ZIP in the browser.
 Split ZIPs support up to 128 volumes, 1,000 entries and 128 MiB of file data.
 
+## Browser upload capacity
+
+Processor actions reserve space for the whole selection before uploading file
+contents. The default batch input limit is 8 GiB and the workspace displays
+available upload capacity. Storage is checked again on submit. Each workspace
+can reserve up to half the configured storage after one output allowance
+(9 GiB with the default 20 GiB storage and 2 GiB output limits). At most two
+upload chunks can be in flight for one workspace. Retrying a saved selection
+reuses its reservation and resumes from the committed offset.
+
 ## Integrity and privacy
 
 - Copies use 1 MiB buffers. Archives are read back and verified against source

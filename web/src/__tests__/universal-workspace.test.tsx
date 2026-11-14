@@ -30,6 +30,34 @@ const select = async (files: File[]) => {
   await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })));
 };
 
+it('rejects an oversized selection before sending upload or inspection bytes', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
+    ? { ok: true, json: async () => ({ ...caps, inspection: true, uploadBatch: true, limits: { ...caps.limits, input: 5 } }) }
+    : initial(url));
+  await render();
+  await select([new File(['abc'], 'one.txt'), new File(['def'], 'two.txt')]);
+  await act(async () => button('Compress').click());
+  expect(host.textContent).toContain('The selection totals 6 B. The batch limit is 5 B.');
+  expect(fetchMock.mock.calls.some(([url]) => /\/(?:uploads|inspect)(?:\/|$)/.test(String(url)))).toBe(false);
+});
+
+it('keeps an upload batch unsent when its storage reservation is refused', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string) => {
+    if (url.endsWith('/capabilities')) return { ok: true, json: async () => ({ ...caps, uploadBatch: true }) };
+    if (url.endsWith('/uploads/batch')) return { ok: false, status: 507, json: async () => ({ error: 'Storage full' }) };
+    return initial(url);
+  });
+  await render();
+  await select([new File(['abc'], 'one.txt'), new File(['def'], 'two.txt')]);
+  await act(async () => button('Compress').click());
+  expect(host.textContent).toContain('Storage full');
+  const requests = fetchMock.mock.calls.filter(([url]) => String(url).includes('/uploads'));
+  expect(requests).toHaveLength(1);
+  expect(JSON.parse(requests[0][1].body).files.map((file: { size: number }) => file.size)).toEqual([3, 3]);
+});
+
 it('opens and searches a ZIP directory without uploading the archive', async () => {
   await render();
   const bytes = new Uint8Array(zipSync({ 'first.txt': new Uint8Array([1]), 'second.txt': new Uint8Array([2]) }));

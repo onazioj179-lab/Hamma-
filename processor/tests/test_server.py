@@ -1169,6 +1169,112 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.call("/jobs")["total"], 0)
         self.assertTrue(self.call("/jobs/" + job["id"])["downloadAvailable"])
 
+    def test_upload_batch_rejects_oversized_selection_without_reserving_any_files(self):
+        self.call('/projects/default', {}, 'PUT')
+        files = [{'id': f'{index:032x}', 'name': f'input-{index}.bin',
+                  'directory': False, 'hasOriginal': True, 'size': 200_000_000}
+                 for index in range(5000)]
+        self.service.limits = {**self.service.limits, 'input': 8 * 1024**3}
+        selected = {'projectId': 'default', 'files': files}
+        self.assert_status(413, lambda: self.call('/uploads/batch', selected, 'POST'))
+        self.assertEqual(self.service.store.count(kind='upload'), 0)
+        self.assertEqual(self.service.store.reserved_bytes(), 0)
+        self.assertEqual(self.call('/projects/default/inputs')['sources'], [])
+
+    def test_batch_reservation_is_atomic_under_storage_contention_and_recovers_offsets(self):
+        self.call('/projects/default', {}, 'PUT')
+        self.call('/projects/other', {}, 'PUT')
+        self.service.limits = {**self.service.limits, 'expanded': 20, 'storage': 100}
+
+        def batch(project, start):
+            files = [{'id': f'{index:032x}', 'name': f'input-{index}.bin',
+                      'directory': False, 'hasOriginal': True, 'size': 15}
+                     for index in range(start, start + 2)]
+            return {'projectId': project, 'files': files}
+
+        batches = [batch('default', 1), batch('other', 3)]
+        ready = threading.Barrier(2)
+
+        def reserve(batch):
+            ready.wait(timeout=5)
+            try:
+                return self.call('/uploads/batch', batch, 'POST')
+            except HTTPError as rejected:
+                self.assertEqual(rejected.code, 413)
+                return None
+
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            results = list(workers.map(reserve, batches))
+        self.assertEqual(sum(result is not None for result in results), 1)
+        self.assertEqual(self.service.store.count(kind='upload'), 2)
+        self.assertEqual(self.service.store.reserved_bytes(), 30)
+        accepted = next(index for index, result in enumerate(results) if result)
+        records = results[accepted]['uploads']
+        self.assertEqual(self.call('/uploads/batch', batches[accepted], 'POST')['uploads'], records)
+        source_id, upload = next(iter(records.items()))
+        self.call('/uploads/' + upload['id'], b'abc', 'PUT', {'Upload-Offset': '0'}, raw=True)
+        self.assertEqual(self.service.store.outstanding_upload_bytes(), 27)
+        retry = self.call('/uploads/batch', batches[accepted], 'POST')['uploads']
+        self.assertEqual(retry[source_id], {'id': upload['id'], 'offset': 3})
+        self.assertEqual(self.service.store.count(kind='upload'), 2)
+
+    def test_one_workspace_upload_budget_leaves_capacity_for_another(self):
+        self.service.limits = {**self.service.limits, 'expanded': 1024**2, 'storage': 48 * 1024**2}
+        repeat = {'name': 'same.bin', 'size': 10 * 1024**2}
+        self.call('/uploads', repeat, 'POST')
+        self.call('/uploads', repeat, 'POST')
+        self.assert_status(413, lambda: self.call('/uploads', repeat, 'POST'))
+
+        other = build_opener(HTTPCookieProcessor(CookieJar()))
+        data = b'other workspace can still finish'
+        upload = self.call('/uploads', {'name': 'other.txt', 'size': len(data)}, 'POST', client=other)
+        self.call('/uploads/' + upload['id'], data, 'PUT', {'Upload-Offset': '0'}, client=other, raw=True)
+        job = self.call('/jobs', {'uploads': [upload['id']], 'operation': 'compress', 'target': 'zip'},
+                        'POST', client=other)
+        self.service.tick()
+        deadline = time.monotonic() + 15
+        path = '/jobs/' + job['id']
+        while time.monotonic() < deadline and self.call(path, client=other)['state'] in ('queued', *ACTIVE):
+            self.service.tick()
+            time.sleep(0.05)
+        finished = self.call(path, client=other)
+        self.assertEqual(finished['state'], 'completed', finished)
+        downloaded = self.call(finished['download'].removeprefix('/api/process'), client=other, raw=True)
+        with zipfile.ZipFile(io.BytesIO(downloaded)) as archive:
+            self.assertEqual(archive.read('other.txt'), data)
+
+    def test_restart_reconciles_preexisting_upload_offsets(self):
+        upload = self.call('/uploads', {'name': 'resume.bin', 'size': 8}, 'POST')
+        owner = self.service.store.list(kind='upload')[0][0]
+        path = self.service.store.folder(owner, upload['id']) / 'input'
+        path.write_bytes(b'abc')
+        self.assertEqual(self.service.store.outstanding_upload_bytes(), 8)
+        self.service.close()
+        self.service = Service(self.temp.name, limits=LIMITS)
+        self.assertEqual(self.service.store.outstanding_upload_bytes(), 5)
+
+    def test_stalled_upload_slots_are_owner_scoped_and_reusable(self):
+        records = [self.call('/uploads', {'name': 'same.bin', 'size': 8}, 'POST') for _ in range(3)]
+        paths = ['/uploads/' + record['id'] for record in records]
+        pending = [self.start_partial_upload(path) for path in paths[:2]]
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            with self.service.lock:
+                if sum(self.service.upload_chunks.values()) == 2:
+                    break
+            time.sleep(0.01)
+        self.assert_status(429, lambda: self.call(paths[2], b'new data', 'PUT',
+                                                  {'Upload-Offset': '0'}, raw=True))
+        other = build_opener(HTTPCookieProcessor(CookieJar()))
+        upload = self.call('/uploads', {'name': 'other.bin', 'size': 5}, 'POST', client=other)
+        self.call('/uploads/' + upload['id'], b'other', 'PUT', {'Upload-Offset': '0'}, client=other, raw=True)
+        for connection in pending:
+            connection.sock.shutdown(socket.SHUT_WR)
+            with connection.getresponse() as response:
+                self.assertEqual(response.status, 400)
+        self.call(paths[2], b'new data', 'PUT', {'Upload-Offset': '0'}, raw=True)
+        self.assertEqual(self.call(paths[2])['offset'], 8)
+
     def test_csrf_dns_rebinding_and_upload_size_guards(self):
         self.assert_status(403, lambda: self.call("/settings", {"fileRetention": "24h", "historyRetention": "7d"}, "PUT", {"Origin": "https://untrusted.example"}))
         self.assert_status(403, lambda: self.call("/capabilities", headers={"Host": "untrusted.example"}))

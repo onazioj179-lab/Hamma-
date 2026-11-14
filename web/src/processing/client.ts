@@ -5,6 +5,8 @@ export interface Capability {
   projectZipProfiles?: boolean;
   projectRecovery?: boolean;
   recoverableUploads?: boolean;
+  uploadBatch?: boolean;
+  uploadAvailableBytes?: number;
   projectSelections?: boolean;
   jobRevisions?: boolean;
   pagedJobSelections?: boolean;
@@ -100,6 +102,29 @@ export async function stageJobSelection(projectId: string, uploads: string[], si
     if (saved.offset !== offset + page.length) throw new Error('The processor did not save the full selection page.');
   }
   return { selectionId, selectionCount: uploads.length };
+}
+
+export async function reserveUploadBatch(projectId: string, sources: Source[], signal: AbortSignal) {
+  if (!sources.length) return;
+  const files = sources.map(({ id, name, directory, size, upload, file }) =>
+    ({ id, name, directory, size, upload, hasOriginal: Boolean(file) }));
+  const { uploads } = await jsonRequest<{ uploads: Record<string, { id: string; offset: number }> }>(
+    '/uploads/batch', { projectId, files }, 'POST', { signal, timeoutMs: 120000 },
+  );
+  if (!uploads || sources.some(source => {
+    const reservation = uploads[source.id];
+    return !reservation || !/^[a-f0-9]{32}$/.test(reservation.id)
+      || !Number.isSafeInteger(reservation.offset) || reservation.offset < 0 || reservation.offset > source.size;
+  })) throw new Error('The processor did not reserve the complete upload batch.');
+  for (const source of sources) {
+    const { id, offset } = uploads[source.id];
+    if (source.upload !== id) {
+      // A recovered reservation may already contain bytes from another tab.
+      source.resume = !!source.file && offset > 0;
+      source.uploaded = offset;
+    }
+    source.upload = id;
+  }
 }
 
 const requestKeys = new Map<string, string>();
