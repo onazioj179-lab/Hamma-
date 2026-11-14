@@ -30,6 +30,18 @@ const select = async (files: File[]) => {
   await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })));
 };
 
+it('rejects an over-budget archive selection before uploading any payload', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
+    ? { ok: true, json: async () => ({ ...caps, limits: { ...caps.limits, input: 7 } }) } : initial(url));
+  const upload = vi.spyOn(processingClient, 'upload');
+  await render();
+  await select([new File(['1234'], 'first.txt'), new File(['5678'], 'second.txt')]);
+  await act(async () => button('Compress').click());
+  expect(host.querySelector('[role=alert]')?.textContent).toContain('per-job limit');
+  expect(upload).not.toHaveBeenCalled();
+});
+
 it('opens and searches a ZIP directory without uploading the archive', async () => {
   await render();
   const bytes = new Uint8Array(zipSync({ 'first.txt': new Uint8Array([1]), 'second.txt': new Uint8Array([2]) }));

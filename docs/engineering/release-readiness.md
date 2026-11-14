@@ -125,6 +125,13 @@ compresses its PAX archive with Python XZ before HAMMA verifies and extracts it.
 
 ## Load and retention verification — 2026-11-13
 
+The upload reservation rejects an individual file above the configured
+input limit. The browser checks the aggregate size before starting an
+archive upload, and the server checks both inline and staged selections
+before hashing their payloads. In-flight job admission allows one new
+submission per owner. A competing submission receives HTTP 429 with
+Retry-After, and replay of a committed request still returns the original job.
+
 On Windows 11 with Python 3.13.14 and SHANTE 0.1.0, the loopback
 `processor.mixed_workload` completed 28 jobs across four owners and 24
 projects. It resumed 12 uploads, verified 214,794,240 bytes of mixed
