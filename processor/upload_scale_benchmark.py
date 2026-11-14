@@ -21,12 +21,12 @@ from .server import LocalHTTPServer, Service, handler
 def exercise(base, root, count, size):
     client = build_opener(ProxyHandler({}), HTTPCookieProcessor(CookieJar()))
 
-    def request(path, method="GET", body=None, **headers):
+    def request(path, method="GET", body=None, *, timeout=180, **headers):
         if isinstance(body, dict):
             body = json.dumps(body).encode()
             headers["Content-Type"] = "application/json"
         return client.open(Request(base + path, body, {"X-Hamma-Request": "1", **headers},
-                                   method=method), timeout=180)
+                                   method=method), timeout=timeout)
 
     def call(path, method="GET", body=None, **headers):
         with request(path, method, body, **headers) as response:
@@ -62,7 +62,7 @@ def exercise(base, root, count, size):
     job = call("/api/process/jobs", "POST", {
         "selectionId": selection_id, "selectionCount": count, "operation": "compress",
         "target": "zip", "requestId": "b" * 64,
-    })
+    }, timeout=900)
     admitted = time.monotonic()
     path = f"/api/process/jobs/{job['id']}"
     deadline = admitted + 480

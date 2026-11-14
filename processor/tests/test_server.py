@@ -568,7 +568,8 @@ class ServerTests(unittest.TestCase):
             if result.returncode:
                 self.skipTest("Sparse files are unavailable on this volume")
         with source.open("r+b") as stream:
-            stream.truncate(offset)
+            stream.seek(offset - 1)
+            stream.write(b"\0")
         path = f"/uploads/{record['id']}"
         self.assertEqual(self.call(path)["offset"], offset)
         result = self.call(path, sentinel, "PUT", {"Upload-Offset": str(offset)}, raw=True)
