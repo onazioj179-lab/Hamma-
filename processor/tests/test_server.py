@@ -600,6 +600,60 @@ class ServerTests(unittest.TestCase):
         self.assertNotIn("outputFile", job)
         self.assertNotIn(str(self.service.store.root), json.dumps(job))
 
+    def test_download_range_seeks_beyond_four_gib(self):
+        job = self.job()
+        owner = self.service.store.list(kind="job")[0][0]
+        output = self.service.store.folder(owner, job["id"]) / "output.bin"
+        output.touch()
+        if os.name == "nt":
+            result = subprocess.run(["fsutil", "sparse", "setflag", str(output)],
+                                    capture_output=True, timeout=10)
+            if result.returncode:
+                self.skipTest("Sparse files are unavailable on this volume")
+        start = 2**32 + 37
+        sentinel = b"large offset"
+        with output.open("r+b") as stream:
+            stream.seek(start)
+            stream.write(sentinel)
+        checksum = "a" * 64
+        record = self.service.store.patch(owner, "job", job["id"], state="completed",
+                                          outputName=output.name, outputFile=output.name,
+                                          downloadAvailable=True, sha256=checksum)
+        url = self.service.public(owner, record)["download"]
+        request = Request(f"http://127.0.0.1:{self.server.server_port}{url}", headers={
+            "Range": f"bytes={start}-{start + len(sentinel) - 1}",
+            "If-Range": f'"{checksum}"',
+        })
+        with self.client.open(request, timeout=10) as response:
+            self.assertEqual(response.status, 206)
+            self.assertEqual(response.headers["Content-Range"],
+                             f"bytes {start}-{start + len(sentinel) - 1}/{start + len(sentinel)}")
+            self.assertEqual(response.read(), sentinel)
+
+    def test_resumable_upload_commits_chunk_beyond_four_gib(self):
+        self.service.limits = {**self.service.limits, "input": 8 * 1024**3, "storage": 20 * 1024**3}
+        offset = 2**32 + 19
+        sentinel = b"last chunk"
+        record = self.call("/uploads", {"name": "large.bin", "size": offset + len(sentinel)}, "POST")
+        owner = self.service.store.list(kind="upload")[0][0]
+        source = self.service.store.folder(owner, record["id"]) / "input"
+        if os.name == "nt":
+            result = subprocess.run(["fsutil", "sparse", "setflag", str(source)],
+                                    capture_output=True, timeout=10)
+            if result.returncode:
+                self.skipTest("Sparse files are unavailable on this volume")
+        with source.open("r+b") as stream:
+            stream.seek(offset - 1)
+            stream.write(b"\0")
+        path = f"/uploads/{record['id']}"
+        self.assertEqual(self.call(path)["offset"], offset)
+        result = self.call(path, sentinel, "PUT", {"Upload-Offset": str(offset)}, raw=True)
+        self.assertEqual(json.loads(result)["offset"], offset + len(sentinel))
+        self.assertEqual(self.call(path)["offset"], offset + len(sentinel))
+        with source.open("rb") as stream:
+            stream.seek(offset)
+            self.assertEqual(stream.read(), sentinel)
+
     def test_standard_manifest_pages_match_verified_archive_and_respect_expiry(self):
         first = self.upload(b'first payload', 'first.txt')
         second = self.upload(b'second payload', 'second.txt')
