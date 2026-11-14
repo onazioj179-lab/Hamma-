@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libreofficekit-
 
 FROM python:3.13-slim-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libstdc++6 libseccomp2 poppler-utils fonts-dejavu-core \
-    fonts-liberation libreoffice-writer-nogui libreoffice-impress-nogui libreoffice-calc-nogui \
+    fonts-liberation libreoffice-writer-nogui libreoffice-impress-nogui \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 10001 --create-home hamma \
     && mkdir -p /app/web/dist /data && chown hamma:hamma /data

@@ -51,8 +51,7 @@ from .catalog import FileCatalog
 from .capabilities import action_registry, inspect_headers, media_targets, single_file_archives
 from .file_parts import PART_SIZES, join_file, split_file
 from .pdf_pages import TARGET as PDF_PAGES, pdf_tools, render_pdf
-from .office_pdf import (INPUT_LIMIT as OFFICE_INPUT_LIMIT, RENDERER_LIBRARIES,
-                         TARGET as OFFICE_PDF, convert_office, office_tools)
+from .office_pdf import TARGET as OFFICE_PDF, INPUT_LIMIT as OFFICE_INPUT_LIMIT, SUFFIXES as OFFICE_SUFFIXES, convert_office, office_tools
 from .media_policy import H264_TARGET
 from .oauth import OAuth
 
@@ -1429,15 +1428,13 @@ def handler(service):
                     raise HTTPError(400, str(error)) from error
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
-                office_formats = [suffix[1:] for suffix in RENDERER_LIBRARIES if office_tools(suffix)]
                 return self.send(200, {"liveJobPolling": True, "groupedWorkflows": True, "projectRecovery": True, "projectZipProfiles": True, "recoverableUploads": True,
                                        "projectSelections": True, "pagedJobSelections": True, "jobRevisions": True,
                                        "draftScope": hashlib.sha256(("hamma-draft:" + self.owner).encode()).hexdigest(),
                                        "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(),
                                        "inspection": True, "zipVerification": True, "tarVerification": True, "streamVerification": True, "zipSelection": True,
                                        "archiveRepack": True, "officeInspection": True, "pdfPages": all(pdf_tools()),
-                                       "officePdf": "docx" in office_formats and "pptx" in office_formats,
-                                       "officePdfFormats": office_formats, "zipComments": True, "zipProfiles": list(ZIP_PROFILES),
+                                       "officePdf": bool(office_tools()), "zipComments": True, "zipProfiles": list(ZIP_PROFILES),
                                        "filePartSizesMiB": list(PART_SIZES),
                                        "actionRegistry": action_registry(), "conversions": media_targets(),
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
@@ -1805,11 +1802,8 @@ def handler(service):
                 if operation == "split" and inputs[0]["size"] <= part_mib * BLOCK:
                     raise HTTPError(400, "Choose a part size smaller than the file")
                 if target == OFFICE_PDF:
-                    suffix = Path(inputs[0]["name"]).suffix.lower()
-                    if inputs[0]["format"] != "zip" or suffix not in RENDERER_LIBRARIES:
-                        raise HTTPError(400, "Choose a DOCX, PPTX or XLSX file")
-                    if not office_tools(suffix):
-                        raise HTTPError(400, "Office PDF export is unavailable for this file type")
+                    if inputs[0]["format"] != "zip" or Path(inputs[0]["name"]).suffix.lower() not in OFFICE_SUFFIXES:
+                        raise HTTPError(400, "Choose a DOCX or PPTX file")
                     if inputs[0]["size"] > OFFICE_INPUT_LIMIT:
                         raise HTTPError(413, "Office files must be 32 MiB or smaller")
 

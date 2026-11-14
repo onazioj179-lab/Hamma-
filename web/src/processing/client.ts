@@ -19,7 +19,6 @@ export interface Capability {
   officeInspection?: boolean;
   pdfPages?: boolean;
   officePdf?: boolean;
-  officePdfFormats?: string[];
   zipProfiles?: string[];
   zipComments?: boolean;
   singleFileArchives?: string[];
