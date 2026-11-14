@@ -921,10 +921,10 @@ class Service:
                 raise HTTPError(413, "Retained file limit reached")
             if self.store.count(kind="upload") >= self.max_uploads:
                 raise HTTPError(429, "Upload capacity reached")
-            if self.reserved() + size > self.limits["storage"]:
-                raise HTTPError(507, "Storage full")
             if self.store.reserved_bytes(owner) + size > plan["maxStorageBytes"]:
                 raise HTTPError(413, "Storage limit reached")
+            if size > self.upload_capacity(owner, plan):
+                raise HTTPError(507, "Storage full")
             upload = {"id": upload_id, "created": now, "name": name, "size": size,
                       "directory": False, "expires": record["fileExpires"], "offset": size,
                       "sha256": record["sha256"], "format": detect(output)}
