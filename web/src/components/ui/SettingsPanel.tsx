@@ -10,8 +10,9 @@ interface Props {
   onSectionChange: (section: SettingsSection) => void;
   busy: boolean;
   onHistory?: () => void;
+  onAccount?: () => void;
 }
-export function SettingsPanel({ section, onSectionChange, busy, onHistory }: Props) {
+export function SettingsPanel({ section, onSectionChange, busy, onHistory, onAccount }: Props) {
   const {
     theme,
     setTheme,
@@ -76,6 +77,7 @@ export function SettingsPanel({ section, onSectionChange, busy, onHistory }: Pro
     <div className="settings-page">
       <div className="page-heading">
         <h1>{section === 'about' ? 'About HAMMA' : 'Settings'}</h1>
+        {onAccount && <button className="button secondary" onClick={onAccount}>Account</button>}
       </div>
       <nav className="settings-tabs" aria-label="Settings sections">
         {(['general', 'privacy', 'storage', 'about'] as const).map((item) => (
@@ -125,18 +127,10 @@ export function SettingsPanel({ section, onSectionChange, busy, onHistory }: Pro
           <section className="surface settings-group">
             <SettingSwitch
               label="Automatic SPK downloads"
-              description="Download a result as soon as compression or restoration finishes. If your browser blocks automatic downloads, use the file’s download link in History."
+              description="Download completed SPK files automatically."
               checked={autoDownload}
               onChange={setAutoDownload}
             />
-            <div className="setting-detail">
-              <span>SPK processing</span>
-              <strong>One SPK job at a time</strong>
-              <p>
-                Prevents overlapping operations from replacing your result.
-                Standard file jobs use a separate background queue.
-              </p>
-            </div>
           </section>
         </>
       )}
@@ -148,7 +142,7 @@ export function SettingsPanel({ section, onSectionChange, busy, onHistory }: Pro
               <p>
                 Standard archive and media jobs run on the computer hosting HAMMA.
                 File detection sends up to 512 bytes per selected file to that computer.
-                SPK operations run in this browser. Files are not sent to external AI services.
+                SPK operations and ZIP inspection run in this browser. Files are not sent to external AI services.
               </p>
             </div>
             <SettingSwitch
@@ -187,39 +181,30 @@ export function SettingsPanel({ section, onSectionChange, busy, onHistory }: Pro
         <>
           <section className="surface settings-group">
             <div className="section-heading">
-              <h2>Keep a clean workspace.</h2>
-              <p>
-                These controls affect HAMMA data on this browser. Your
-                downloaded files remain on disk.
-              </p>
+              <h2>Browser storage</h2>
             </div>
             <SettingAction
               title="SPK operation history"
-              description={`${recentArchives.length} of 20 records stored. Records contain metadata only. Clearing history keeps temporary output files available through the Available downloads filter.`}
+              description={`${recentArchives.length} of 20 records`}
               label="Clear history"
               disabled={busy || (!recentArchives.length && !history.length && !Object.values(sessionOutputs).some(output => !output.hidden))}
               onClick={confirmHistory}
             />
             <SettingAction
               title="Temporary SPK downloads"
-              description={`${outputCount} output files available in this session. Delete them to release browser memory; downloaded copies stay on your device.`}
+              description={`${outputCount} available until you close this page`}
               label="Delete browser files"
               disabled={busy || !outputCount}
               onClick={confirmFiles}
             />
-            {onHistory && <SettingAction title="Processor files & retention" description="Manage standard job downloads, history, and expiry in the shared file history." label="Manage files" disabled={false} onClick={onHistory} />}
+            {onHistory && <SettingAction title="Processor files & retention" label="Manage files" disabled={false} onClick={onHistory} />}
             <SettingAction
               title="Application cache"
-              description="Clear only HAMMA-owned Cache Storage entries. This does not clear your browser cache or other sites."
               label={clearing ? 'Clearing…' : 'Clear app cache'}
               disabled={busy || clearing}
               onClick={clearCache}
             />
           </section>
-          <p className="footnote">
-            SPK results stay available until you delete them or close the
-            page. Standard file jobs use the retention controls in History.
-          </p>
         </>
       )}
       {section === 'about' && (
@@ -228,7 +213,6 @@ export function SettingsPanel({ section, onSectionChange, busy, onHistory }: Pro
             <div className="about-monogram" aria-hidden="true">
               H
             </div>
-            <h2>HAMMA</h2>
             <div className="creator-credit">
               <span>CREATED BY</span>
               <strong>Onazi Treasure Oj</strong>
@@ -239,20 +223,11 @@ export function SettingsPanel({ section, onSectionChange, busy, onHistory }: Pro
               target="_blank"
               rel="noreferrer"
             >
-              View source <ArrowUpRight size={14} />
+              Source code <ArrowUpRight size={14} />
             </a>
           </section>
           <section className="surface settings-group">
-            <div className="section-heading">
-              <h2>How it works</h2>
-              <p>
-                Standard jobs continue while the processor service is running, including
-                when you move between screens. Their downloads follow the file retention
-                settings. Temporary SPK downloads remain in the open browser session.
-                Compression can make some files larger; savings depend on the contents.
-              </p>
-            </div>
-            <p className="footnote">Free to use · Open source · MIT license</p>
+            <p className="footnote">MIT license</p>
           </section>
         </>
       )}
@@ -300,7 +275,7 @@ function SettingAction({
   onClick,
 }: {
   title: string;
-  description: string;
+  description?: string;
   label: string;
   disabled: boolean;
   onClick: () => void;
@@ -309,7 +284,7 @@ function SettingAction({
     <div className="setting-action">
       <div>
         <h3>{title}</h3>
-        <p>{description}</p>
+        {description && <p>{description}</p>}
       </div>
       <button
         className="button secondary"

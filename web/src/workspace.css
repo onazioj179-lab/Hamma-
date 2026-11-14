@@ -181,8 +181,7 @@ select {
   flex-direction: column;
   gap: 5px;
 }
-.primary-navigation button,
-.sidebar-utility {
+.primary-navigation button {
   display: flex;
   align-items: center;
   gap: 11px;
@@ -223,10 +222,6 @@ select {
   margin-top: auto;
   padding-top: 32px;
 }
-.sidebar-utility {
-  font-size: 13px;
-  min-height: 36px;
-}
 .watermark {
   display: flex;
   flex-direction: column;
@@ -242,39 +237,14 @@ select {
   min-width: 0;
 }
 .workspace-header {
-  height: 56px;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 16px;
-  padding: 0 40px;
-  border-bottom: 1px solid rgb(var(--border));
-  background: rgb(var(--background));
-}
-.mobile-brand {
   display: none;
 }
-.engine-status {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 12px;
-  color: rgb(var(--muted));
-}
-.engine-status {
-  gap: 7px;
-  white-space: nowrap;
-}
-.status-dot,
 .running-dot {
   width: 5px;
   height: 5px;
   border-radius: 50%;
   background: rgb(var(--accent));
   display: inline-block;
-}
-.status-dot.pending {
-  background: rgb(var(--muted));
 }
 .running-dot {
   margin-left: auto;
@@ -1189,9 +1159,6 @@ progress::-moz-progress-bar {
   .workspace-body {
     margin-left: 198px;
   }
-  .workspace-header {
-    padding-inline: 28px;
-  }
   .workspace-main {
     padding: 36px 28px 20px;
   }
@@ -1266,8 +1233,7 @@ progress::-moz-progress-bar {
     height: var(--dock-height);
     margin-inline: auto;
     padding: 4px 6px;
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    display: block;
     background: var(--floating-surface);
     backdrop-filter: var(--floating-blur);
     border: 1px solid rgb(var(--border));
@@ -1275,16 +1241,15 @@ progress::-moz-progress-bar {
     box-shadow: 0 4px 18px rgb(0 0 0 / 0.1);
   }
   .sidebar .brand,
-  .sidebar .watermark,
-  .sidebar-utility:last-of-type {
+  .sidebar-bottom {
     display: none;
   }
-  .primary-navigation,
-  .sidebar-bottom {
-    display: contents;
+  .primary-navigation {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    height: 100%;
   }
-  .primary-navigation button,
-  .sidebar-utility {
+  .primary-navigation button {
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -1308,19 +1273,14 @@ progress::-moz-progress-bar {
     padding-bottom: var(--dock-clearance);
   }
   .workspace-header {
+    display: flex;
+    align-items: center;
     height: calc(54px + env(safe-area-inset-top));
     padding-inline: max(20px, env(safe-area-inset-left)) max(20px, env(safe-area-inset-right));
-    justify-content: space-between;
-  }
-  .mobile-brand {
-    display: block;
-    letter-spacing: 1px;
-    font-weight: 600;
+    border-bottom: 1px solid rgb(var(--border));
     font-size: 13px;
-  }
-  .engine-status {
-    font-size: 11px;
-    gap: 5px;
+    font-weight: 650;
+    letter-spacing: 1px;
   }
   .free-label {
     display: none;
@@ -1555,12 +1515,9 @@ a{color:rgb(var(--accent));text-underline-offset:3px}button,input,a{touch-action
 .hamma-shell .workspace-main { min-width:0; overflow-wrap:anywhere; }
 .hamma-shell :is(.button,.icon-button) { min-height:40px; }
 .queue-loading { display:flex; align-items:center; gap:10px; padding:16px; color:rgb(var(--muted)); font-size:13px; }
-.job-toast { position:fixed; bottom:24px; right:24px; z-index:100; display:flex; align-items:center; flex-wrap:wrap; gap:12px; max-width:min(520px,calc(100vw - 24px)); padding:14px 18px; background:var(--floating-surface); backdrop-filter:var(--floating-blur); color:rgb(var(--foreground)); border:1px solid rgb(var(--border)); border-radius:var(--radius-panel); box-shadow:0 8px 32px #0003; }
-.job-toast > span { flex:1; min-width:150px; font-size:13px; overflow-wrap:anywhere; }
-@media(max-width:650px) { .job-toast { bottom:var(--dock-clearance); right:12px; left:12px; } .hamma-shell .setting-action { flex-wrap:wrap; } .hamma-shell .settings-tabs button { flex:1; } }
+@media(max-width:650px) { .hamma-shell .setting-action { flex-wrap:wrap; } .hamma-shell .settings-tabs button { flex:1; } }
 
 /* Dense desktop rhythm, with full-size touch targets on phones. */
-.hamma-shell .workspace-header { min-height:52px; padding-block:10px; }
 .hamma-shell .page-heading { margin-bottom:12px; gap:12px; }
 .hamma-shell .universal-drop { padding:24px 12px; }
 .hamma-shell .universal-drop-icon { width:40px; height:40px; margin-bottom:12px; }
@@ -1577,14 +1534,10 @@ a{color:rgb(var(--accent));text-underline-offset:3px}button,input,a{touch-action
 .hamma-shell .spk-tools { margin:12px 0; padding-top:10px; }
 .hamma-shell .metric { padding:18px 16px; border:1px solid rgb(var(--border)); border-radius:var(--radius-panel); }
 .hamma-shell .overview-grid { gap:12px; margin-bottom:16px; }
-.overview-panels { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
 .operation-breakdown { display:grid; gap:14px; }
 .operation-breakdown > div { display:flex; gap:12px; align-items:center; }
 .operation-breakdown .operation-tag { min-width:100px; text-align:center; }
 .operation-breakdown meter { flex:1; min-width:30px; height:8px; }
-.overview-status { display:grid; grid-template-columns:1fr auto; gap:10px; font-size:12px; }
-.overview-status dt { color:rgb(var(--muted)); }
-.overview-status dd { margin:0; text-align:right; }
 .overview-recent > button { display:flex; align-items:center; gap:12px; width:100%; padding:12px 0; background:transparent; color:inherit; border:0; border-bottom:1px solid rgb(var(--border)); text-align:left; }
 .overview-recent > button > span:nth-child(2) { flex:1; min-width:0; }
 .overview-recent strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
@@ -1596,7 +1549,6 @@ a{color:rgb(var(--accent));text-underline-offset:3px}button,input,a{touch-action
 .dark .state-failed, .dark .state-interrupted { color:#ff9eaa; }
 .dark .state-processing, .dark .state-verifying { color:#a7caff; }
 @media(max-width:650px) {
-  .overview-panels { grid-template-columns:1fr; gap:0; }
   .hamma-shell :is(.button,.icon-button,.text-button) { min-height:44px; }
   .hamma-shell .overview-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
   .hamma-shell .metric { padding:12px; }
