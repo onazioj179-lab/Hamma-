@@ -109,6 +109,36 @@ class Projects:
             if count > self.limits['files']:
                 raise ProjectError(413, 'Project file limit reached')
 
+    def batch_uploads(self, owner, project_id, selections):
+        self.get(owner, project_id)
+        with self.store.connect() as db:
+            existing = dict(db.execute(
+                'SELECT source_id, upload_id FROM project_inputs WHERE owner=? AND project_id=?',
+                (owner, project_id)))
+            drafts = {row[0]: tuple(row[1:]) for row in db.execute(
+                'SELECT source_id, name, size, directory FROM project_selections WHERE owner=? AND project_id=?',
+                (owner, project_id))}
+        project_sources = existing.keys() | drafts.keys() | selections.keys()
+        if len(project_sources) > self.limits['files']:
+            raise ProjectError(413, 'Project file limit reached')
+        upload_ids = {preferred for source_id, (_, _, _, preferred, _) in selections.items() if preferred}
+        upload_ids.update(existing[source_id] for source_id in selections if source_id in existing)
+        uploads = self.store.get_uploads(owner, list(upload_ids))
+        now = time.time()
+        result = {}
+        for source_id, (name, size, directory, preferred, _) in selections.items():
+            upload_id = existing.get(source_id, preferred)
+            if upload_id and preferred and upload_id != preferred:
+                raise ProjectError(409, 'Recovery input changed. Reopen the project before retrying.')
+            if source_id in drafts and drafts[source_id] != (name, size, directory):
+                raise ProjectError(409, 'Recovery input identifier already used')
+            record = uploads.get(upload_id)
+            if record and (record['name'], record['size'], record['directory']) != (name, size, directory):
+                raise ProjectError(409, 'Recovery input identifier already used')
+            if record and record['expires'] > now and (self.store.folder(owner, upload_id) / 'input').is_file():
+                result[source_id] = record
+        return result
+
     def prepare_upload(self, owner, project_id, source_id, name, size, directory):
         """Under the service lock, reconcile a lost reservation response."""
         self.get(owner, project_id)
@@ -155,6 +185,8 @@ class Projects:
             db.execute('BEGIN IMMEDIATE')
             existing = db.execute('SELECT upload_id FROM project_inputs WHERE owner=? AND project_id=? AND source_id=?', (owner, project_id, source_id)).fetchone()
             count = db.execute('SELECT count(*) FROM project_inputs WHERE owner=? AND project_id=?', (owner, project_id)).fetchone()[0]
+            count += db.execute('SELECT count(*) FROM project_selections WHERE owner=? AND project_id=? AND source_id<>?',
+                                (owner, project_id, source_id)).fetchone()[0]
             if not existing and count >= self.limits['files']:
                 raise ProjectError(413, 'Project file limit reached')
             if existing and existing[0] != upload_id:

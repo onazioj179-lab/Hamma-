@@ -60,6 +60,10 @@ TERMINAL = ("completed", "failed", "cancelled", "interrupted")
 
 ACTIVE = ("queued", "processing", "verifying")
 LIVE_STATES = (*ACTIVE, "paused")
+MAX_UPLOAD_CHUNK = 8 * BLOCK
+MAX_OWNER_UPLOAD_CHUNKS = 2
+MAX_BATCH_BODY = 8 * BLOCK
+DISK_RESERVE = 64 * BLOCK
 JOB_SUMMARY = ("json_remove(data,'$.inputs','$.manifest','$.outputFile','$.filesCleaned','$.errorInfo.fileIds') AS data,"
                "coalesce(json_extract(data,'$.fileCount'),json_array_length(data,'$.inputs')) AS file_count")
 PROCESSOR_REVISION = ":".join(hashlib.sha256(path.read_bytes()).hexdigest() for path in
@@ -188,6 +192,18 @@ class Store:
                 db.execute("DELETE FROM project_selections WHERE owner=? AND project_id=? AND source_id=?", (owner, project_id, source_id))
                 db.execute("INSERT OR REPLACE INTO project_inputs VALUES (?,?,?,?,?)",
                            (owner, project_id, source_id, record["id"], record["created"]))
+
+    def put_upload_batch(self, owner, project_id, uploads):
+        with self.connect() as db:
+            db.executemany("INSERT INTO records VALUES (?,?,?,?,?)", (
+                (record["id"], owner, "upload", record["created"], json.dumps(record))
+                for _, record in uploads
+            ))
+            db.executemany("DELETE FROM project_selections WHERE owner=? AND project_id=? AND source_id=?",
+                           ((owner, project_id, source_id) for source_id, _ in uploads))
+            db.executemany("INSERT OR REPLACE INTO project_inputs VALUES (?,?,?,?,?)", (
+                (owner, project_id, source_id, record["id"], record["created"]) for source_id, record in uploads
+            ))
 
     @staticmethod
     def _sync_inputs(db, owner, record):
@@ -526,6 +542,34 @@ class Store:
             indexes = db.execute("SELECT coalesce(sum(json_extract(data,'$.indexBytes')),0) FROM records WHERE kind='job'" + scope, parameters).fetchone()[0]
         return uploads + outputs + indexes
 
+    def outstanding_upload_bytes(self):
+        with self.connect() as db:
+            return db.execute("""SELECT coalesce(sum(max(0,
+                json_extract(data,'$.size') - coalesce(json_extract(data,'$.offset'),0))),0)
+                FROM records WHERE kind='upload'""").fetchone()[0]
+
+    def save_upload_offset(self, owner, upload_id, offset):
+        with self.connect() as db:
+            db.execute("""UPDATE records SET data=json_set(data,'$.offset',?)
+                          WHERE owner=? AND kind='upload' AND id=?""", (offset, owner, upload_id))
+
+    def reconcile_upload_offsets(self):
+        # Recover the filesystem offset for older records and interrupted writes.
+        updates = []
+        for owner, record in self.iter_records(kind="upload"):
+            if not record["size"]:
+                continue
+            try:
+                offset = (self.folder(owner, record["id"]) / "input").stat().st_size
+            except FileNotFoundError:
+                continue
+            if offset != record.get("offset"):
+                updates.append((offset, owner, record["id"]))
+        if updates:
+            with self.connect() as db:
+                db.executemany("""UPDATE records SET data=json_set(data,'$.offset',?)
+                                  WHERE owner=? AND kind='upload' AND id=?""", updates)
+
     def upload_referenced(self, owner, upload_id, *, now=None, exclude_job=None):
         where, parameters = ["i.owner=?", "i.upload_id=?", "j.kind='job'"], [owner, upload_id]
         if now is not None:
@@ -753,6 +797,7 @@ class Service:
         except OSError:
             self.instance_lock.close()
             raise RuntimeError("Another processor is using this data directory") from None
+        self.store.reconcile_upload_offsets()
         self.web = Path(web).resolve() if web else None
         from .resources import configured_limits
         self.limits = limits or configured_limits()
@@ -760,7 +805,10 @@ class Service:
         self.projects = Projects(self.store, self.limits)
         self.job_selections = JobSelections(self.store, self.limits["files"])
         self.running = {}
+        self.upload_chunks = Counter()
+        self.admitting_owners = set()
         self.restart_until = 0
+        self.waiting_for_memory = False
         self.stop = threading.Event()
         self.last_scheduler_tick = None
         self.accounts = Accounts(self.store)
@@ -812,8 +860,36 @@ class Service:
         account = self.accounts.by_owner(owner)
         return account_plan(account['tier'] if account else 'guest', self.limits)
 
-    def reserved(self):
-        return self.store.reserved_bytes() + len(self.running) * self.limits["expanded"]
+    def active_working_bytes(self):
+        copies = 0
+        for job_id, (_, owner, _) in self.running.items():
+            job = self.store.get(owner, "job", job_id)
+            copies += archive_working_copies(job) if job else 1
+        return copies * self.limits["expanded"]
+
+    def upload_capacity(self, owner, plan):
+        working = self.active_working_bytes() + self.limits["expanded"]
+        storage = min(self.limits["storage"] - self.store.reserved_bytes(),
+                      shutil.disk_usage(self.store.root).free - DISK_RESERVE -
+                      self.store.outstanding_upload_bytes()) - working
+        return max(0, min(storage, plan['maxStorageBytes'] - self.store.reserved_bytes(owner)))
+
+    @contextmanager
+    def upload_slot(self, owner, length):
+        with self.lock:
+            if self.upload_chunks[owner] >= MAX_OWNER_UPLOAD_CHUNKS:
+                raise HTTPError(429, "Too many simultaneous uploads for this workspace", 1)
+            # Charge the temporary staging file while allowing the final copy to coexist.
+            if shutil.disk_usage(self.store.root).free < DISK_RESERVE + self.active_working_bytes() + 2 * length:
+                raise HTTPError(507, "Storage full")
+            self.upload_chunks[owner] += 1
+        try:
+            yield
+        finally:
+            with self.lock:
+                self.upload_chunks[owner] -= 1
+                if not self.upload_chunks[owner]:
+                    del self.upload_chunks[owner]
 
     def deletion_preview(self, owner):
         counts, history, files = self.store.deletion_snapshot(owner)
@@ -831,6 +907,83 @@ class Service:
             result["manifestStorage"] = "inline"
         result["fileCount"] = record.get('fileCount', 0) if record.get('inputMode') == 'directory-index' else len(record["inputs"]) if "inputs" in record else record.get("fileCount", 0)
         return result
+
+    def reuse_output(self, owner, job_id, project_id, name, plan):
+        """Register a retained output as a recoverable project input."""
+        self.projects.get(owner, project_id)
+        record = self.store.get(owner, "job", job_id)
+        if not record:
+            raise HTTPError(404, "Job unavailable")
+        now = time.time()
+        if record["state"] != "completed" or not record.get("downloadAvailable") or record["fileExpires"] <= now:
+            raise HTTPError(410, "Output unavailable")
+        name = safe_path(record["outputName"] if name is None else name)
+        output = self.store.folder(owner, job_id) / record["outputFile"]
+        if not output.is_file() or output.stat().st_size != record["outputSize"]:
+            raise HTTPError(410, "Output unavailable")
+        size = record["outputSize"]
+        if size > plan["maxInputBytes"]:
+            raise HTTPError(413, "Output exceeds the input size limit")
+        upload_id = hashlib.sha256(f"reuse:{owner}:{project_id}:{job_id}".encode()).hexdigest()[:32]
+        upload = self.store.get(owner, "upload", upload_id)
+        folder = self.store.folder(owner, upload_id)
+        destination = folder / "input"
+        created = upload is None
+        if created:
+            if self.store.count(owner, "upload") >= plan["maxUploadFiles"]:
+                raise HTTPError(413, "Retained file limit reached")
+            if self.store.count(kind="upload") >= self.max_uploads:
+                raise HTTPError(429, "Upload capacity reached")
+            if self.store.reserved_bytes(owner) + size > plan["maxStorageBytes"]:
+                raise HTTPError(413, "Storage limit reached")
+            if size > self.upload_capacity(owner, plan):
+                raise HTTPError(507, "Storage full")
+            upload = {"id": upload_id, "created": now, "name": name, "size": size,
+                      "directory": False, "expires": record["fileExpires"], "offset": size,
+                      "sha256": record["sha256"], "format": detect(output)}
+        if not created and (not destination.is_file() or destination.stat().st_size != size):
+            raise HTTPError(410, "Saved output unavailable")
+        try:
+            if created:
+                folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+                # Both paths are immutable. Separate directory entries let either
+                # retention policy remove its reference without deleting the other.
+                destination.unlink(missing_ok=True)
+                try:
+                    os.link(output, destination)
+                except OSError as error:
+                    if error.errno not in (errno.EXDEV, errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS) and getattr(error, "winerror", None) not in (1, 17, 50):
+                        raise HTTPError(507, "Processor storage could not link this output") from error
+                    if shutil.disk_usage(folder).free < size + 64 * 1024**2:
+                        raise HTTPError(507, "Storage full")
+                    digest = hashlib.sha256()
+                    context = Context(folder, self.limits)
+                    with output.open("rb") as source, destination.open("xb") as copy:
+                        remaining = size
+                        while remaining:
+                            context.check()
+                            block = source.read(min(remaining, BLOCK))
+                            if not block:
+                                break
+                            copy.write(block)
+                            digest.update(block)
+                            remaining -= len(block)
+                        if remaining or source.read(1) or digest.hexdigest() != upload["sha256"]:
+                            raise HTTPError(409, "Output integrity check failed")
+                        copy.flush()
+                        os.fsync(copy.fileno())
+                self.store.put(owner, "upload", upload)
+            with destination.open("rb") as stream:
+                inspection = inspect_headers([{"head": stream.read(512).hex()}])[0]
+            self.projects.checkpoint(owner, project_id, upload_id, upload_id)
+        except Exception:
+            if created:
+                self.store.delete(owner, upload_id)
+                if folder.exists():
+                    shutil.rmtree(folder)
+            raise
+        return {"id": upload_id, "name": upload["name"], "size": size, "directory": False,
+                "upload": upload_id, "uploaded": size, "inspection": inspection}
 
     def enqueue_directory(self, owner, root, target='tar.gz', project_id='default'):
         """Trusted operator entry point only. Never call with an HTTP path field."""
@@ -1006,6 +1159,7 @@ class Service:
                 return
             attempts = 0
             capacity = worker_capacity(available_memory())
+            self.waiting_for_memory = capacity == 0
             while len(self.running) < capacity and attempts < 16:
                 attempts += 1
                 owners = Counter(entry[1] for entry in self.running.values())
@@ -1014,12 +1168,10 @@ class Service:
                 if not candidates:
                     break
                 owner, job = candidates[0]
-                copies = archive_working_copies(job)
-                for running_id, (_, running_owner, _) in self.running.items():
-                    active = self.store.get(running_owner, "job", running_id)
-                    copies += archive_working_copies(active) if active else 1
-                working_bytes = self.limits["expanded"] * copies
-                if self.reserved() + working_bytes > self.limits["storage"] or shutil.disk_usage(self.store.root).free < working_bytes + 64 * 1024**2:
+                working_bytes = self.active_working_bytes() + self.limits["expanded"] * archive_working_copies(job)
+                if (self.store.reserved_bytes() + working_bytes > self.limits["storage"] or
+                        shutil.disk_usage(self.store.root).free <
+                        working_bytes + DISK_RESERVE + self.store.outstanding_upload_bytes()):
                     self.store.patch(owner, "job", job["id"], state="failed", error="Storage full", finished=time.time(),
                                      errorInfo={'category': 'insufficient_storage', 'retryEligible': True, 'stage': 'queued',
                                                 'jobId': job['id'], 'fileIds': self.store.job_input_ids(owner, job)}, downloadAvailable=False)
@@ -1254,11 +1406,11 @@ def handler(service):
                     'plan': self.plan, 'billingEnabled': False, 'credentialsAllowed': self.credentials_allowed,
                     'providers': service.oauth.public(self.headers.get('Host', ''), getattr(self.server, 'transport_secure', False))}
 
-        def json_body(self):
+        def json_body(self, limit=2 * BLOCK):
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                 raise HTTPError(415, "Expected JSON")
             length = int(self.headers.get("Content-Length", "0"))
-            if not 0 < length <= 2 * BLOCK:
+            if not 0 < length <= limit:
                 raise HTTPError(413, "Request too large")
             def reject_constant(value):
                 raise ValueError("Non-finite JSON number")
@@ -1273,18 +1425,24 @@ def handler(service):
                 raise HTTPError(400, "Expected a JSON object")
             return value
 
-        def create_upload(self, name, size, directory, project_input):
-            if service.store.count(self.owner, "upload") >= self.plan['maxUploadFiles']:
+        def check_upload_capacity(self, count, size):
+            if service.store.count(self.owner, "upload") + count > self.plan['maxUploadFiles']:
                 raise HTTPError(413, "Retained file limit reached. Delete unused files before adding more.")
-            if service.store.count(kind="upload") >= service.max_uploads:
+            if service.store.count(kind="upload") + count > service.max_uploads:
                 raise HTTPError(429, "Upload capacity reached. Delete unused uploads or wait for expiry.")
-            if service.reserved() + size > service.limits["storage"]:
-                raise HTTPError(507, "Storage full")
-            if service.store.reserved_bytes(self.owner) + size > self.plan['maxStorageBytes']:
-                raise HTTPError(413, 'Storage limit reached. Delete unused files or wait for their expiry.')
+            if size and service.store.reserved_bytes(self.owner) + size > self.plan['maxStorageBytes']:
+                raise HTTPError(413, "Workspace storage limit reached. Delete unused files or wait for expiry.")
+            if size > service.upload_capacity(self.owner, self.plan):
+                raise HTTPError(507, "The selection exceeds available processor storage. Select fewer files.")
+
+        def upload_record(self, name, size, directory):
             now = time.time()
-            record = {"id": secrets.token_hex(16), "created": now, "name": name, "size": size,
-                      "directory": directory, "expires": now + 86400, "offset": 0}
+            return {"id": secrets.token_hex(16), "created": now, "name": name, "size": size,
+                    "directory": directory, "expires": now + 86400, "offset": 0}
+
+        def create_upload(self, name, size, directory, project_input):
+            self.check_upload_capacity(1, size)
+            record = self.upload_record(name, size, directory)
             folder = service.store.folder(self.owner, record["id"])
             folder.mkdir(mode=0o700, parents=True)
             try:
@@ -1294,6 +1452,60 @@ def handler(service):
                 shutil.rmtree(folder, ignore_errors=True)
                 raise
             return record
+
+        def reserve_upload_batch(self, body):
+            project_id = Projects.identifier(body.get("projectId"))
+            items = body.get("files")
+            if not isinstance(items, list) or not 1 <= len(items) <= self.plan['maxUploadFiles']:
+                raise HTTPError(413, "Invalid upload batch size")
+            selections = {}
+            total = 0
+            for item in items:
+                if not isinstance(item, dict):
+                    raise HTTPError(400, "Invalid upload batch entry")
+                source_id, upload_id = item.get("id"), item.get("upload")
+                if (not isinstance(source_id, str) or not re.fullmatch(r"[a-f0-9]{32}", source_id)
+                        or source_id in selections
+                        or type(item.get("directory")) is not bool or type(item.get("hasOriginal")) is not bool):
+                    raise HTTPError(400, "Invalid upload batch entry")
+                if upload_id is not None and (not isinstance(upload_id, str) or not re.fullmatch(r"[a-f0-9]{32}", upload_id)):
+                    raise HTTPError(400, "Invalid upload batch entry")
+                size, directory = item.get("size"), item["directory"]
+                if type(size) is not int or not 0 <= size <= self.plan['maxInputBytes'] or directory and size:
+                    raise HTTPError(413, "A file exceeds the upload size limit.")
+                total += size
+                if total > self.plan['maxInputBytes']:
+                    raise HTTPError(413, "The selection exceeds the batch input limit. Select fewer files.")
+                selections[source_id] = (safe_path(item.get("name"), directory), size, directory,
+                                         upload_id, item["hasOriginal"])
+            with service.lock:
+                previous = service.projects.batch_uploads(self.owner, project_id, selections)
+                records = {}
+                created = []
+                for source_id, (name, size, directory, _, has_original) in selections.items():
+                    record = previous.get(source_id)
+                    if record is None:
+                        if not has_original and not directory:
+                            raise HTTPError(410, "A saved upload is unavailable. Select the original file again.")
+                        record = self.upload_record(name, size, directory)
+                        created.append((source_id, record))
+                    source = service.store.folder(self.owner, record["id"]) / "input"
+                    records[source_id] = {"id": record["id"], "offset": source.stat().st_size if source_id in previous else 0}
+                if created:
+                    self.check_upload_capacity(len(created), sum(record["size"] for _, record in created))
+                    folders = []
+                    try:
+                        for _, record in created:
+                            folder = service.store.folder(self.owner, record["id"])
+                            folder.mkdir(mode=0o700, parents=True)
+                            folders.append(folder)
+                            (folder / "input").touch(mode=0o600)
+                        service.store.put_upload_batch(self.owner, project_id, created)
+                    except Exception:
+                        for folder in folders:
+                            shutil.rmtree(folder, ignore_errors=True)
+                        raise
+            return self.send(200, {"uploads": records})
 
         def upload_source(self, upload_id):
             record = service.store.get(self.owner, "upload", upload_id)
@@ -1341,7 +1553,7 @@ def handler(service):
                 raise HTTPError(409, "Upload already finalized")
             if offset != source.stat().st_size:
                 raise HTTPError(409, "Upload offset changed")
-            if not 0 <= length <= 8 * BLOCK or offset + length > record["size"]:
+            if not 0 <= length <= MAX_UPLOAD_CHUNK or offset + length > record["size"]:
                 raise HTTPError(413, "Invalid upload chunk")
             return source
 
@@ -1353,27 +1565,31 @@ def handler(service):
 
             # Network reads can stall. Stage at most one bounded chunk per
             # request, then recheck state before committing any bytes.
-            with tempfile.TemporaryFile(dir=service.store.root) as pending:
-                remaining = length
-                while remaining:
-                    chunk = self.rfile.read(min(BLOCK, remaining))
-                    if not chunk:
-                        raise HTTPError(400, "Upload interrupted")
-                    pending.write(chunk)
-                    remaining -= len(chunk)
-                pending.seek(0)
-                with service.lock:
-                    source = self.check_upload_chunk(upload_id, offset, length)
-                    try:
-                        with source.open("ab") as stream:
-                            shutil.copyfileobj(pending, stream, BLOCK)
-                            stream.flush()
-                            os.fsync(stream.fileno())
-                    except OSError:
-                        # A failed chunk must leave its last acknowledged offset intact.
-                        os.truncate(source, offset)
-                        raise
-                    committed = source.stat().st_size
+            with service.upload_slot(self.owner, length):
+                with tempfile.TemporaryFile(dir=service.store.root) as pending:
+                    remaining = length
+                    while remaining:
+                        chunk = self.rfile.read(min(BLOCK, remaining))
+                        if not chunk:
+                            raise HTTPError(400, "Upload interrupted")
+                        pending.write(chunk)
+                        remaining -= len(chunk)
+                    pending.seek(0)
+                    with service.lock:
+                        source = self.check_upload_chunk(upload_id, offset, length)
+                        if shutil.disk_usage(service.store.root).free < DISK_RESERVE + service.active_working_bytes() + length:
+                            raise HTTPError(507, "Storage full")
+                        try:
+                            with source.open("ab") as stream:
+                                shutil.copyfileobj(pending, stream, BLOCK)
+                                stream.flush()
+                                os.fsync(stream.fileno())
+                                committed = stream.tell()
+                            service.store.save_upload_offset(self.owner, upload_id, committed)
+                        except (OSError, sqlite3.Error):
+                            # A failed chunk must leave its last acknowledged offset intact.
+                            os.truncate(source, offset)
+                            raise
             return self.send(200, {"offset": committed})
 
         def route(self):
@@ -1484,7 +1700,11 @@ def handler(service):
                     raise HTTPError(400, str(error)) from error
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
-                return self.send(200, {"liveJobPolling": True, "groupedWorkflows": True, "projectRecovery": True, "projectZipProfiles": True, "recoverableUploads": True,
+                with service.lock:
+                    upload_available = service.upload_capacity(self.owner, self.plan)
+                return self.send(200, {"uploadBatch": True, "uploadAvailableBytes": upload_available,
+                                       "liveJobPolling": True, "groupedWorkflows": True, "projectRecovery": True,
+                                       "outputReuse": True, "projectZipProfiles": True, "recoverableUploads": True,
                                        "projectSelections": True, "pagedJobSelections": True, "jobRevisions": True,
                                        "draftScope": hashlib.sha256(("hamma-draft:" + self.owner).encode()).hexdigest(),
                                        "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(),
@@ -1578,6 +1798,9 @@ def handler(service):
                     else:
                         raise HTTPError(404, 'Not found')
                 return self.send(200, result)
+            if path == "/api/process/uploads/batch" and method == "POST":
+                with service.upload_slot(self.owner, 0):
+                    return self.reserve_upload_batch(self.json_body(MAX_BATCH_BODY))
             if path == "/api/process/uploads" and method == "POST":
                 body = self.json_body()
                 name = safe_path(body.get("name"), bool(body.get("directory")))
@@ -1804,8 +2027,14 @@ def handler(service):
                     if existing:
                         return self.send(200, service.public(self.owner, existing))
                     check_queue_capacity()
+                    if self.owner in service.admitting_owners:
+                        raise HTTPError(429, "Another submission is being checked", retry_after=1)
+                    service.admitting_owners.add(self.owner)
+                    self.admitting_owner = self.owner
 
                 if paged_admission:
+                    if staged.input_bytes(time.time()) > service.limits["input"]:
+                        raise HTTPError(413, "Selected files exceed the total job input limit")
                     with tempfile.TemporaryDirectory(prefix='hamma-admission-') as temp:
                         spool = Path(temp) / 'inputs.sqlite3'
                         with closing(sqlite3.connect(spool)) as db:
@@ -1838,6 +2067,9 @@ def handler(service):
                     LOG.info("Job queued: %s %s", job_id, operation)
                     return self.send(202, service.public(self.owner, record))
                 uploads = service.store.get_uploads(self.owner, ids)
+                input_size = sum(upload["size"] for upload in uploads.values())
+                if input_size > service.limits["input"]:
+                    raise HTTPError(413, "Selected files exceed the total job input limit")
 
                 inputs, verified_uploads, seen = [], [], set()
                 source_stamps = {}
@@ -1880,7 +2112,7 @@ def handler(service):
                         if not unchanged:
                             raise HTTPError(409, "Upload changed during verification. Retry the job.")
                     record = make_record(inputs[0]["name"] if count == 1 else f"{count} files",
-                                         sum(i["size"] for i in inputs),
+                                         input_size,
                                          inputs[0]["format"] if count == 1 else "batch", now)
                     record["inputs"] = inputs
                     service.store.folder(self.owner, record["id"]).mkdir(mode=0o700, parents=True)
@@ -1901,7 +2133,8 @@ def handler(service):
                 token = service.sign(f"jobs:{service.instance_id}:{self.owner}:{revision}")
                 known = parse_qs(url.query).get("revision", [""])[0]
                 live = [service.public(self.owner, job) for job in jobs] if jobs is not None and token == known else None
-                return self.send(200, {"revision": token, "now": now, "jobs": live})
+                return self.send(200, {"revision": token, "now": now, "jobs": live,
+                                       "waitingForMemory": service.waiting_for_memory})
             if path == "/api/process/jobs/revision" and method == "GET":
                 return self.send(200, {"revision": service.store.job_revision(self.owner), "now": time.time()})
             if path == "/api/process/jobs/overview" and method == "GET":
@@ -1917,9 +2150,15 @@ def handler(service):
                 total, jobs = service.store.history_page(self.owner, offset=offset, limit=limit, search=search, state=state, sort=sort, summary=True,
                                                         include_hidden_downloads=query.get("includeHiddenDownloads", ["0"])[0] == "1")
                 return self.send(200, {"total": total, "jobs": [service.public(self.owner, j) for j in jobs]})
-            match = re.fullmatch(r"/api/process/jobs/([a-f0-9]{32})(?:/(cancel|pause|resume|retry|files|download|manifest))?", path)
+            match = re.fullmatch(r"/api/process/jobs/([a-f0-9]{32})(?:/(cancel|pause|resume|retry|files|download|manifest|reuse))?", path)
             if match:
                 job_id, action = match.groups()
+                if action == "reuse" and method == "POST":
+                    body = self.json_body()
+                    project_id = service.projects.identifier(body.get("projectId", "default"))
+                    with service.lock:
+                        source = service.reuse_output(self.owner, job_id, project_id, body.get("name"), self.plan)
+                    return self.send(200, source)
                 directory = service.store.folder(self.owner, job_id)
                 query = parse_qs(url.query)
                 if action == "manifest" and method == "GET":
@@ -2096,6 +2335,11 @@ def handler(service):
             except Exception:
                 LOG.exception("Request failed")
                 self.send_failure(500, "Request failed")
+            finally:
+                owner = getattr(self, "admitting_owner", None)
+                if owner is not None:
+                    with service.lock:
+                        service.admitting_owners.discard(owner)
 
         do_GET = do_POST = do_PUT = do_DELETE = do_HEAD = handle_request
 

@@ -13,13 +13,14 @@ let selections: { id: string; name: string; size: number; directory: boolean }[]
 let offset: number, chunkWrites: number, jobAttempts: number;
 let rejectJob: boolean;
 const uploadId = 'c'.repeat(32);
-const caps = { groupedWorkflows: true, projectRecovery: true, projectSelections: false, recoverableUploads: false, draftScope: '', archives: ['zip'], conversions: [], version: 1, processing: 'local', limits: { files: 5000, input: 1e9, expanded: 1e9, seconds: 30 } };
+const caps = { outputReuse: false, groupedWorkflows: true, projectRecovery: true, projectSelections: false, recoverableUploads: false, draftScope: '', archives: ['zip'], conversions: [], version: 1, processing: 'local', limits: { files: 5000, input: 1e9, expanded: 1e9, seconds: 30 } };
 const ok = (data: unknown) => ({ ok: true, status: 200, json: async () => data });
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   useAppStore.setState({ sessionOutputs: {}, recentArchives: [], history: [], result: null });
   saved = undefined; checkpoint = undefined; offset = 0; chunkWrites = 0; jobAttempts = 0; rejectJob = true;
   caps.recoverableUploads = false;
+  caps.outputReuse = false;
   caps.projectSelections = false; selections = [];
   caps.draftScope = '';
   localStorage.clear();
@@ -60,6 +61,11 @@ beforeEach(() => {
       if (init?.method === 'PUT') { chunkWrites++; offset += (init.body as Blob).size; }
       return ok({ offset });
     }
+    if (url.endsWith('/reuse') && init?.method === 'POST') {
+      expect(body).toEqual({ name: 'output.zip', projectId: 'default' });
+      return ok({ id: uploadId, upload: uploadId, name: body.name, size: 3, uploaded: 3, directory: false,
+        inspection: { format: 'zip', conversions: [], extract: true } });
+    }
     if (url.endsWith('/jobs') && init?.method === 'POST') {
       jobAttempts++;
       expect(body.recoverable).toBe(true);
@@ -68,13 +74,30 @@ beforeEach(() => {
       checkpoint = undefined;
       return ok({ id: 'd'.repeat(32) });
     }
-    if (url.includes('/jobs?')) return ok({ jobs: [], total: 0 });
+    if (url.includes('/jobs?')) return caps.outputReuse ? ok({ total: 1, jobs: [{
+      id: 'a'.repeat(32), name: 'input.txt', outputName: 'output.zip', downloadAvailable: true,
+      download: '/api/process/output.zip', operation: 'compress', target: 'zip', state: 'completed',
+      format: 'file', fileCount: 1, created: 1, inputSize: 3, outputSize: 3,
+    }] }) : ok({ jobs: [], total: 0 });
     throw new Error('Unexpected request: ' + url);
   }));
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 const render = async () => { await act(async () => root.render(<UniversalWorkspace visible screen="workspace" onHistory={() => {}} />)); };
 const compress = () => Array.from(host.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Compress')!;
+
+it('selects a retained output for another operation without uploading it', async () => {
+  caps.outputReuse = true;
+  const onWorkspace = vi.fn();
+  const show = (screen: 'history' | 'workspace') => root.render(<UniversalWorkspace visible screen={screen} onHistory={() => {}} onWorkspace={onWorkspace} />);
+  await act(async () => show('history'));
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Use output.zip in workspace"]')!.click());
+  expect(onWorkspace).toHaveBeenCalledOnce();
+  await act(async () => show('workspace'));
+  expect(host.querySelector<HTMLInputElement>('[aria-label="Select output.zip"]')?.checked).toBe(true);
+  expect(Array.from(host.querySelectorAll('button')).some(button => button.textContent?.trim() === 'Extract')).toBe(true);
+  expect(chunkWrites).toBe(0);
+});
 
 it.each([false, true])('restores a completed upload without sending its bytes again (recoverableUploads=%s)', async recoverableUploads => {
   caps.recoverableUploads = recoverableUploads;

@@ -66,6 +66,28 @@ class SealedSelection:
         for page in self.pages(by_id=by_id):
             yield from page
 
+    def input_bytes(self, now):
+        with self.store.connect() as db:
+            sizes = db.execute("""
+                SELECT json_extract(upload.data,'$.size')
+                FROM job_selection_items AS item
+                JOIN job_selections AS selection
+                  ON selection.owner=item.owner AND selection.id=item.selection_id
+                JOIN records AS upload
+                  ON upload.owner=item.owner AND upload.id=item.upload_id AND upload.kind='upload'
+                WHERE item.owner=? AND item.selection_id=? AND selection.sealed=1
+                  AND selection.expires=? AND selection.expires>?
+                  AND json_extract(upload.data,'$.expires')>?
+            """, (self.owner, self.id, self.lease, now, now))
+            # Python integers also handle totals beyond SQLite's signed SUM range.
+            count = total = 0
+            for (size,) in sizes:
+                count += 1
+                total += size
+        if count != self.count:
+            raise ProjectError(410, 'Upload or job selection expired or unavailable')
+        return total
+
 
 class AdmissionInputs:
     """Private SQLite spool. The scheduler sees the job only after promotion."""
