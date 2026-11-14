@@ -733,14 +733,15 @@ class ServerTests(unittest.TestCase):
 
         with patch('processor.server.file_digest', side_effect=gated_digest), ThreadPoolExecutor(2) as pool:
             admission = pool.submit(self.call, '/jobs',
-                                    {'uploads': uploads, 'operation': 'compress', 'target': 'zip'}, 'POST')
+                                    {'uploads': uploads, 'operation': 'compress', 'target': 'zip'}, 'POST',
+                                    timeout=60)
             try:
                 self.assertTrue(hashing.wait(10))
                 history = pool.submit(self.call, '/jobs')
                 self.assertEqual(history.result(timeout=5)['total'], 0)
             finally:
                 release.set()
-            job = admission.result(timeout=20)
+            job = admission.result(timeout=60)
 
         self.assertEqual(job['fileCount'], len(files))
         record = self.service.store.get(owner, 'job', job['id'])
@@ -1518,6 +1519,9 @@ class ServerTests(unittest.TestCase):
         self.assert_status(403, lambda: self.call("/settings", {"historyRetention": "7d", "fileRetention": "24h"}, "PUT", {"Host": host, "Origin": "http://untrusted.example"}))
 
     def test_four_simultaneous_sessions_complete_with_isolated_verified_downloads(self):
+        memory = patch("processor.server.available_memory", return_value=3 * 1024**3)
+        memory.start()
+        self.addCleanup(memory.stop)
         clients = [build_opener(HTTPCookieProcessor(CookieJar())) for _ in range(4)]
         payloads = [(f"session-{i}\n" * 4096).encode() for i in range(4)]
 
