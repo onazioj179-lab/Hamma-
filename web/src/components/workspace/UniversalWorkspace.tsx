@@ -387,6 +387,31 @@ export function UniversalWorkspace({ visible, screen, onHistory, onWorkspace, on
     add(incoming);
     setFolderHelp(directory && !incoming.some(source => source.file.webkitRelativePath));
   };
+  const reconnectOriginals = (files: FileList) => {
+    if (busy || recovering || spkBusy || mutation.current || accountChanging()) return;
+    const key = (path: string, size: number) => JSON.stringify([path.normalize('NFC'), size]);
+    const originals = new Map<string, File | null>();
+    for (const file of Array.from(files)) {
+      const identity = key(file.webkitRelativePath || file.name, file.size);
+      originals.set(identity, originals.has(identity) ? null : file);
+    }
+    const matches = new Map<string, File>();
+    for (const source of liveSources.current) {
+      if (!needsOriginal(source)) continue;
+      const file = originals.get(key(source.name, source.size));
+      if (file) matches.set(source.id, file);
+    }
+    if (!matches.size) {
+      setError('No original files matched the saved paths and sizes. Use Select original for renamed or nested files.');
+      return;
+    }
+    setError('');
+    setSources(previous => previous.map(source => {
+      const file = matches.get(source.id);
+      return file ? { ...source, file, inspection: undefined } : source;
+    }));
+    setSourceErrors(previous => Object.fromEntries(Object.entries(previous).filter(([id]) => !matches.has(id))));
+  };
   const reselect = (source: Source, file: File) => {
     if (busy || recovering || spkBusy || accountChanging()) return;
     if (file.size !== source.size || file.name.normalize('NFC') !== source.name.split('/').pop()?.normalize('NFC')) {
@@ -888,6 +913,26 @@ export function UniversalWorkspace({ visible, screen, onHistory, onWorkspace, on
       {recoveryNotice && <p className="footnote" role="status">{recoveryNotice}</p>}
       {missingSelections > 0 && <p className="footnote" role="status">Select the original files for {missingSelections} {missingSelections === 1 ? 'saved selection' : 'saved selections'}.</p>}
       {incompleteUploads > 0 && <p className="footnote" role="status">Select the original files to continue {incompleteUploads} {incompleteUploads === 1 ? 'upload' : 'uploads'}.</p>}
+      {(missingSelections > 0 || incompleteUploads > 0) && <div className="button-row">
+        <label className="button secondary source-reselect">
+          Reconnect original files
+          <input type="file" multiple className="sr-only" aria-label="Reconnect original files"
+            disabled={busy || recovering || !!spkBusy || acting}
+            onChange={event => {
+              if (event.target.files?.length) reconnectOriginals(event.target.files);
+              event.target.value = '';
+            }} />
+        </label>
+        <label className="button secondary source-reselect">
+          Reconnect original folder
+          <input type="file" multiple className="sr-only" {...{ webkitdirectory: '' }} aria-label="Reconnect original folder"
+            disabled={busy || recovering || !!spkBusy || acting}
+            onChange={event => {
+              if (event.target.files?.length) reconnectOriginals(event.target.files);
+              event.target.value = '';
+            }} />
+        </label>
+      </div>}
       <div className={`surface universal-drop ${dragging ? 'drag-active' : ''}`} onDragOver={event => { event.preventDefault(); setDragging(!busy && !recovering && !spkBusy); }} onDragLeave={() => setDragging(false)} onDrop={event => {
         event.preventDefault(); setDragging(false);
         const transfer = event.dataTransfer;

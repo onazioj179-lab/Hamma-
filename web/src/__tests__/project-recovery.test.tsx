@@ -188,6 +188,32 @@ it.each([false, true])('verifies saved bytes before resuming (SubtleCrypto=%s)',
   expect(chunkWrites).toBe(1);
 });
 
+it('reconnects saved files in bulk without adding duplicate sources', async () => {
+  caps.draftScope = 'test-owner';
+  await render();
+  const original = new File(['abc'], 'resume.txt');
+  const input = host.querySelector<HTMLInputElement>('[aria-label="Add files to queue"]')!;
+  Object.defineProperty(input, 'files', { value: [original] });
+  await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })));
+  await act(async () => root.unmount()); root = createRoot(host);
+  await render();
+  const picker = host.querySelector<HTMLInputElement>('[aria-label="Reconnect original files"]')!;
+  const choose = async (files: File[]) => {
+    Object.defineProperty(picker, 'files', { value: files, configurable: true });
+    await act(async () => picker.dispatchEvent(new Event('change', { bubbles: true })));
+  };
+  await choose([original, new File(['xyz'], 'resume.txt')]);
+  expect(host.textContent).toContain('No original files matched');
+  expect(compress().disabled).toBe(true);
+  await choose([original, new File(['def'], 'unrelated.txt')]);
+  expect(host.querySelectorAll('[aria-label="Select resume.txt"]')).toHaveLength(1);
+  expect(host.querySelector('[aria-label="Select unrelated.txt"]')).toBeNull();
+  rejectJob = false;
+  await act(async () => compress().click());
+  expect(chunkWrites).toBe(1);
+  expect(jobAttempts).toBe(1);
+});
+
 it('restores an unstarted selection and requires the original before uploading', async () => {
   caps.draftScope = 'test-owner';
   await render();
