@@ -1021,6 +1021,23 @@ class ServerTests(unittest.TestCase):
             self.assertFalse(failed['downloadAvailable'])
             plain = self.upload(b'not an Office archive', 'fake.docx')
             self.assert_status(400, lambda: self.job(plain, operation='convert', target='office-pdf'))
+            workbook = self.upload(office_fixture('xlsx', extra={'xl/connections.xml': b'fixture'}), 'linked.xlsx')
+            rejected = self.execute(self.job(workbook, operation='convert', target='office-pdf'))
+            self.assertIn('active or embedded Office content', rejected['error'])
+            self.assertFalse(rejected['downloadAvailable'])
+
+    def test_spreadsheet_export_requires_calc(self):
+        from processor.tests.office_fixture import office_fixture
+
+        def office_tools(suffix=None):
+            return None if suffix == '.xlsx' else ('helper', 'pdfinfo')
+
+        with patch('processor.server.office_tools', side_effect=office_tools):
+            capabilities = self.call('/capabilities')
+            self.assertTrue(capabilities['officePdf'])
+            self.assertEqual(capabilities['officePdfFormats'], ['docx', 'pptx'])
+            workbook = self.upload(office_fixture('xlsx'), 'report.xlsx')
+            self.assert_status(400, lambda: self.job(workbook, operation='convert', target='office-pdf'))
 
     def test_pdf_pages_render_in_order_and_reject_invalid_input(self):
         from processor.pdf_pages import pdf_tools
