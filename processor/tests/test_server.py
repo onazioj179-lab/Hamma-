@@ -756,16 +756,32 @@ class ServerTests(unittest.TestCase):
             for name, payload in files.items():
                 self.assertEqual(archive.read(name), payload)
 
-        tar_job = self.call('/jobs', {'uploads': uploads, 'operation': 'compress', 'target': 'tar.gz'}, 'POST')
+        tar_job = self.call('/jobs', {'uploads': uploads, 'operation': 'compress', 'target': 'tar.gz'},
+                            'POST', timeout=60)
         self.assertEqual(tar_job['inputMode'], 'upload-pages')
         completed_tar = self.execute(tar_job)
         self.assertEqual(completed_tar['state'], 'completed')
+        manifest = self.call(f"/jobs/{tar_job['id']}/manifest?after=100&limit=100")
+        self.assertEqual(manifest["total"], len(files))
+        self.assertEqual([row["name"] for row in manifest["files"]], list(files)[100:200])
+        for row in manifest["files"]:
+            self.assertEqual(row["sha256"], hashlib.sha256(files[row["name"]]).hexdigest())
         output = self.call(completed_tar['download'].removeprefix('/api/process'), raw=True)
         with tarfile.open(fileobj=io.BytesIO(output), mode='r:gz') as archive:
             self.assertEqual(archive.getnames(), list(files))
             for name, payload in files.items():
                 with archive.extractfile(name) as member:
                     self.assertEqual(member.read(), payload)
+
+        damaged_job = self.call('/jobs', {'uploads': uploads, 'operation': 'compress', 'target': 'tar'},
+                                'POST', timeout=60)
+        path = self.service.store.folder(owner, uploads[-1]) / "input"
+        payload = path.read_bytes()
+        path.write_bytes(bytes([payload[0] ^ 1]) + payload[1:])
+        failed = self.execute(damaged_job)
+        self.assertEqual(failed["state"], "failed")
+        self.assertFalse(failed["downloadAvailable"])
+        self.assert_status(410, lambda: self.call(f"/jobs/{failed['id']}/manifest?limit=1"))
 
     def test_batch_admission_rechecks_an_upload_deleted_after_hashing(self):
         from processor.server import detect

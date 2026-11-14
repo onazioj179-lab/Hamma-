@@ -52,7 +52,7 @@ completed job. The browser reads those rows by cursor, and existing inline
 manifests remain readable. The staged 201-file ZIP test checks three manifest
 pages against the downloaded archive's order and member digests. The
 container smoke checks the same manifest before and after recreation.
-Archive creation still holds per-member verification data in memory, and
+ZIP creation still holds per-member verification data in memory, and
 the legacy full-manifest route still returns the whole list. Use the
 pre-upgrade snapshot for rollback because earlier versions cannot read the
 new manifest rows. Windows bsdtar 3.8.9
@@ -122,6 +122,21 @@ tested Windows code page. When inbox tar lacks the XZ write filter, the fixture
 compresses its PAX archive with Python XZ before HAMMA verifies and extracts it.
 
 ## Load and retention verification — 2026-11-13
+
+Paged uploaded TAR jobs now use a temporary SQLite registry for member paths
+and verification digests. They hash each payload while packing, compare it to
+the admitted digest, and publish manifest rows only after verifying the
+archive. The HTTP regression checks member bytes, a manifest page, and rejection
+of a same-size input mutation after admission.
+
+A Windows TAR.GZ worker-path comparison used 5,000 unique archive names and
+156.25 MiB of payload from 64 repeated deterministic source files. An
+independent read verified every member. Traced peak Python allocations fell
+from 4.35 MiB to 1.97 MiB compared with the in-memory registry using the same
+writer. Packing and internal verification took 85.45 and 94.16 seconds
+respectively. Tracing excludes SQLite, native memory, and OS caches. ZIP
+metadata, browser-side selection memory, and large HTTP transfer tests remain
+open.
 
 On Windows 11 with Python 3.13.14 and SHANTE 0.1.0, the loopback
 `processor.mixed_workload` completed 28 jobs across four owners and 24

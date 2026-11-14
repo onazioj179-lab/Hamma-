@@ -566,6 +566,8 @@ def run_job(root, owner, job_id, limits, isolated=False):
     ctx = Context(directory, limits, report)
     output_extension = {H264_TARGET: "mp4", OFFICE_PDF: "pdf"}.get(job["target"], job["target"])
     output = directory / ("output." + output_extension)
+    tar_manifest = None
+    tar_spool = None
     try:
         current = store.patch(owner, "job", job_id, expected_states=ACTIVE,
                               state="processing", started=started, error=None)
@@ -576,10 +578,12 @@ def run_job(root, owner, job_id, limits, isolated=False):
         if isolated and sys.platform == "linux":
             restrict_worker_sockets()
         manifest = []
+        streamed_tar = (job.get("inputMode") == "upload-pages"
+                        and job["operation"] == "compress" and job["target"].startswith("tar"))
         def verified_inputs():
             for upload in store.iter_job_inputs(owner, job):
                 upload["path"] = str(store.folder(owner, upload["id"]) / "input")
-                if not upload.get("directory"):
+                if not streamed_tar and not upload.get("directory"):
                     ctx.check()
                     original = file_digest(Path(upload["path"]), ctx)
                     if original["size"] != upload["size"] or original["sha256"] != upload["sha256"]:
@@ -620,8 +624,13 @@ def run_job(root, owner, job_id, limits, isolated=False):
             account_index()  # settle WAL accounting after the manifest writer closes
             job['inputSize'] = indexed['inputBytes']
         elif job["operation"] == "compress":
+            if streamed_tar:
+                from .indexed_archive import UploadTarManifest
+                tar_spool = tempfile.TemporaryDirectory(prefix="tar-manifest-", dir=directory)
+                tar_manifest = UploadTarManifest(Path(tar_spool.name) / "manifest.sqlite3")
             manifest = compress(inputs, output, job["target"], ctx,
-                                zip_profile=job.get("zipProfile", "balanced"), zip_comment=job.get("zipComment", ""))
+                                zip_profile=job.get("zipProfile", "balanced"), zip_comment=job.get("zipComment", ""),
+                                tar_manifest=tar_manifest)
         elif job["operation"] == "extract":
             item = inputs[0]
             manifest = extract(Path(item["path"]), item["name"], output, ctx, job["recursive"],
@@ -686,6 +695,10 @@ def run_job(root, owner, job_id, limits, isolated=False):
         store.patch(owner, "job", job_id, expected_states=ACTIVE, state=state, error=message, errorInfo=failure, finished=time.time(), duration=time.time() - started, downloadAvailable=False)
         output.unlink(missing_ok=True)
     finally:
+        if tar_manifest is not None:
+            tar_manifest.close()
+        if tar_spool is not None:
+            tar_spool.cleanup()
         shutil.rmtree(directory / "expanded", ignore_errors=True)
         for part in directory.glob("audio-*.*"):
             part.unlink(missing_ok=True)

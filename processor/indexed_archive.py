@@ -4,7 +4,7 @@ No ZIP scalability claim: Python's ZIP central directory remains memory backed.
 Every recorded input must be representable and verified, or the job fails.
 """
 import bz2
-from contextlib import contextmanager, nullcontext
+from contextlib import closing, contextmanager, nullcontext
 from functools import lru_cache
 import gzip
 import hashlib
@@ -175,6 +175,41 @@ class DigestReader:
         self.ctx.bytes += len(data)
         self.ctx.report(processed=self.ctx.bytes, entries=self.ctx.count)
         return data
+
+
+class UploadTarManifest:
+    """Temporary disk-backed path registry and verification rows for uploaded TARs."""
+
+    def __init__(self, database):
+        self.database = database
+        self.count = 0
+        self.manifest = ArchiveManifest(self)
+        self.manifest.begin()
+
+    @contextmanager
+    def connect(self):
+        with closing(sqlite3.connect(self.database)) as db, db:
+            yield db
+
+    def checkpoint(self):
+        pass  # The private spool uses SQLite's default rollback journal.
+
+    def append(self, row):
+        self.manifest.add(self.count + 1, row["name"], row.get("directory", False),
+                          row["size"], row.get("sha256"))
+        self.count += 1
+
+    def __len__(self):
+        return self.count
+
+    def __iter__(self):
+        self.manifest.close(success=True)
+        for row in self.manifest.rows():
+            yield {"name": row["name"], "size": row["size"],
+                   **({"directory": True} if row["directory"] else {"sha256": row["sha256"]})}
+
+    def close(self):
+        self.manifest.close()
 
 
 def compress_index(index, output, target, ctx):
