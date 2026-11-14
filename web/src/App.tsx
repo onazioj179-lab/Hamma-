@@ -193,7 +193,7 @@ export default function App() {
         </nav>
         <div className="sidebar-bottom">
           <button
-            className={`sidebar-utility ${view === 'settings' && section !== 'about' ? 'selected' : ''}`}
+            className="sidebar-utility"
             onClick={() => openSettings('general')}
             aria-current={view === 'settings' && section !== 'about' ? 'page' : undefined}
           >
@@ -201,7 +201,7 @@ export default function App() {
             <span>Settings</span>
           </button>
           <button
-            className={`sidebar-utility ${view === 'settings' && section === 'about' ? 'selected' : ''}`}
+            className="sidebar-utility"
             onClick={() => openSettings('about')}
             aria-current={view === 'settings' && section === 'about' ? 'page' : undefined}
           >
