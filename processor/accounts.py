@@ -19,10 +19,12 @@ class AccountError(Exception):
 
 def plan(tier, limits):
     registered = tier == 'free'
+    # Leave room for a second workspace and processor output.
+    storage_share = max(0, (limits['storage'] - limits['expanded']) // 2)
     return {'tier': 'free' if registered else 'guest', 'historyRecords': 1000 if registered else 500,
             'maxQueuedJobs': 200 if registered else 100, 'maxConcurrentJobs': 2 if registered else 1,
             'maxUploadFiles': limits['files'], 'maxInputBytes': limits['input'],
-            'maxStorageBytes': limits['storage']}
+            'maxStorageBytes': storage_share}
 
 
 def username(value):

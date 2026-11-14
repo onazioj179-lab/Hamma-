@@ -32,6 +32,21 @@ its history row; older SPK records contain metadata only. Overview includes
 retained processor jobs and browser SPK records, with measured compression savings.
 Each visitor has a separate session and history.
 
+To use a retained processor result in another operation, open **Files & History**
+and choose the **Use in workspace** plus button beside its download. HAMMA adds
+the result to the current project without transferring it through the browser.
+The input keeps the original result's expiration time. HAMMA uses a hard link
+where supported and makes a verified local copy when the filesystem cannot link
+the result and has enough free space.
+
+Local HTTP clients can use the same handoff with
+`POST /api/process/jobs/{jobId}/reuse`. Send `X-Hamma-Request: 1`, the same
+session cookie used to create the job, and a JSON object with an existing
+`projectId` (defaults to `default`). The processor uses the output filename
+unless you supply a project-relative `name`. Pass the returned `upload` ID
+in the next job's `uploads` array. Repeating the handoff for the same job
+and project returns the existing input while the output is available.
+
 Logs: `.hamma-data/server.err.log`. Startup state: `.hamma-data/launcher.json`.
 The launcher uses `.hamma-data/lan-test` to preserve the existing LAN job store.
 

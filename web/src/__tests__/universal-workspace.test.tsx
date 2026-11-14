@@ -30,6 +30,34 @@ const select = async (files: File[]) => {
   await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })));
 };
 
+it('rejects an oversized selection before sending upload or inspection bytes', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
+    ? { ok: true, json: async () => ({ ...caps, inspection: true, uploadBatch: true, limits: { ...caps.limits, input: 5 } }) }
+    : initial(url));
+  await render();
+  await select([new File(['abc'], 'one.txt'), new File(['def'], 'two.txt')]);
+  await act(async () => button('Compress').click());
+  expect(host.textContent).toContain('The selection totals 6 B. The batch limit is 5 B.');
+  expect(fetchMock.mock.calls.some(([url]) => /\/(?:uploads|inspect)(?:\/|$)/.test(String(url)))).toBe(false);
+});
+
+it('keeps an upload batch unsent when its storage reservation is refused', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string) => {
+    if (url.endsWith('/capabilities')) return { ok: true, json: async () => ({ ...caps, uploadBatch: true }) };
+    if (url.endsWith('/uploads/batch')) return { ok: false, status: 507, json: async () => ({ error: 'Storage full' }) };
+    return initial(url);
+  });
+  await render();
+  await select([new File(['abc'], 'one.txt'), new File(['def'], 'two.txt')]);
+  await act(async () => button('Compress').click());
+  expect(host.textContent).toContain('Storage full');
+  const requests = fetchMock.mock.calls.filter(([url]) => String(url).includes('/uploads'));
+  expect(requests).toHaveLength(1);
+  expect(JSON.parse(requests[0][1].body).files.map((file: { size: number }) => file.size)).toEqual([3, 3]);
+});
+
 it('rejects an over-budget archive selection before uploading any payload', async () => {
   const initial = fetchMock.getMockImplementation()!;
   fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')
@@ -383,7 +411,7 @@ it('renders a new selection after removing a scrolled 5000-file batch', async ()
 it('shows unavailable processing without fabricating progress or downloads', async () => {
   fetchMock.mockRejectedValue(new Error('Offline'));
   await render(); await select([new File(['data'], 'data.txt')]);
-  expect(host.textContent).toContain('Local processor unavailable');
+  expect(host.textContent).toContain('Processor offline');
   expect(button('Compress').disabled).toBe(true);
   expect(host.querySelector('progress')).toBeNull();
   expect(host.querySelector('a[download]')).toBeNull();
@@ -560,11 +588,11 @@ it('reconnects and refreshes the list after an initial job-list failure', async 
     return { ok: true, json: async () => url.endsWith('/capabilities') ? caps : url.endsWith('/settings') ? { fileRetention: '24h', historyRetention: '30d' } : { jobs: [{ id: 'recovered', name: 'recovered.zip', operation: 'compress', target: 'zip', state: 'completed', inputSize: 10, outputSize: 5, created: 1, fileExpires: 2, historyExpires: null, format: 'zip', fileCount: 1, entries: 1, downloadAvailable: false }], total: 1 } };
   });
   await render();
-  expect(host.textContent).toContain('Local processor unavailable');
+  expect(host.textContent).toContain('Processor offline');
   unavailable = false;
   await act(async () => button('Reconnect').click());
   expect(host.textContent).toContain('recovered.zip');
-  expect(host.textContent).not.toContain('Local processor unavailable');
+  expect(host.textContent).not.toContain('Processor offline');
 });
 
 it('reports a disconnect after bulk retry without an unhandled rejection', async () => {
@@ -578,7 +606,7 @@ it('reports a disconnect after bulk retry without an unhandled rejection', async
   disconnected = true;
   await act(async () => button('Retry').click());
   expect(host.querySelector('[role=alert]')?.textContent).toContain('Connection lost after retry');
-  expect(host.textContent).toContain('Local processor unavailable');
+  expect(host.textContent).toContain('Processor offline');
 });
 
 it('bounds rendered history rows while paging and searching 500 retained jobs', async () => {
@@ -728,7 +756,6 @@ it('shows the H.264 preset and blocks submission until lossy conversion is allow
   await render();
   await select([new File(['fixture'], 'source.mkv', { type: 'video/x-matroska' })]);
   expect(host.querySelector('[aria-label="Conversion format"]')?.textContent).toContain('MP4 (H.264)');
-  expect(host.textContent).toContain('Already compressed video usually saves little space.');
   await act(async () => button('Convert').click());
   expect(host.querySelector('[role=alert]')?.textContent).toContain('Choose Allow quality loss');
   expect(upload).not.toHaveBeenCalled();

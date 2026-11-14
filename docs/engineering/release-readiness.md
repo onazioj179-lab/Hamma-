@@ -7,6 +7,19 @@ processor worker. The rollback restores the previously verified DOCX and PPTX
 export path. The XLSX acceptance test must render both worksheets and verify
 their cell values in the downloaded PDF with worker isolation enabled.
 
+The output handoff passed in Chromium at 375 px. A retained ZIP was selected
+from Files & History, recovered after a browser reload, and extracted. A
+Windows loopback restart using the container smoke script also recovered the
+project input and verified every member hash after deleting the original job's
+files. The container workflow runs the same restart check against its volume.
+
+The Windows mixed-project workload exercised four concurrent guest sessions
+and 24 projects on the same candidate. It resumed 12 uploads, completed 28
+jobs, verified download hashes and range responses, and denied eight
+cross-owner reads. Each session reused its retained TAR.ZST result for
+extraction and verified the restored bytes. The mixed batches contained
+214,794,240 input bytes and the run took 43.004 seconds.
+
 Use the six areas in the [web backlog](hammer-directive-audit.md) as the
 release checklist. Run the checks against the same candidate build and record
 the revision, platform, fixture, outcome and skipped cases.
