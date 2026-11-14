@@ -91,15 +91,40 @@ export async function request<T>(path: string, { timeoutMs = 30000, ...init }: P
 export const jsonRequest = <T>(path: string, data: unknown, method = 'POST', init: ProcessorRequest = {}) =>
   request<T>(path, { ...init, method, headers: { 'Content-Type': 'application/json', ...init.headers }, body: JSON.stringify(data) });
 
+/** Replay only operations with a stable server-side identity. */
+export async function retryJobRequest<T>(send: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    signal.throwIfAborted();
+    try {
+      return await send();
+    } catch (error) {
+      const retryable = error instanceof ProcessorError
+        ? [408, 500, 502, 503, 504].includes(error.status)
+          || (error.status === 429 && error.retryAfterSeconds === 1)
+        : error instanceof TypeError;
+      const delay = error instanceof ProcessorError ? error.retryAfterSeconds : undefined;
+      if (signal.aborted || !retryable || attempt >= 2 || (delay ?? 0) > 3) throw error;
+      await new Promise<void>((resolve, reject) => {
+        const cancel = () => { clearTimeout(timer); reject(signal.reason); };
+        const timer = setTimeout(() => {
+          signal.removeEventListener('abort', cancel);
+          resolve();
+        }, Math.max(250 * 2 ** attempt, (delay ?? 0) * 1000));
+        signal.addEventListener('abort', cancel, { once: true });
+      });
+    }
+  }
+}
+
 export const randomId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
 
 export async function stageJobSelection(projectId: string, uploads: string[], signal: AbortSignal) {
   const selectionId = randomId();
   for (let offset = 0; offset < uploads.length; offset += 100) {
     const page = uploads.slice(offset, offset + 100);
-    const saved = await jsonRequest<{ offset: number }>(
+    const saved = await retryJobRequest(() => jsonRequest<{ offset: number }>(
       `/job-selections/${selectionId}`, { projectId, offset, uploads: page }, 'PUT', { signal },
-    );
+    ), signal);
     if (saved.offset !== offset + page.length) throw new Error('The processor did not save the full selection page.');
   }
   return { selectionId, selectionCount: uploads.length };
