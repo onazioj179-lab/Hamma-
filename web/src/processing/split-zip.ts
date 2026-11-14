@@ -1,4 +1,7 @@
-import { BlobReader, BlobWriter, SplitDataReader, SplitDataWriter, ZipReader, ZipWriter, type Entry } from '@zip.js/zip.js';
+import {
+  BlobReader, BlobWriter, ERR_INVALID_AUTHENTICATION_CODE, ERR_INVALID_CRC32, ERR_INVALID_PASSWORD,
+  SplitDataReader, SplitDataWriter, ZipReader, ZipWriter, type Entry,
+} from '@zip.js/zip.js';
 import { checkZipPaths, readVerifiedZipEntry } from './encrypted-zip';
 
 const maxBytes = 128 * 1024 * 1024;
@@ -8,7 +11,7 @@ const volumeName = /^(.*)\.z(\d{2,3})$/i;
 export const zipVolumeSizes = [1, 8, 32] as const;
 type Input = { name: string; file: Blob | null; directory: boolean };
 
-export async function createSplitZip(inputs: Input[], volumeMiB: number, signal: AbortSignal) {
+export async function createSplitZip(inputs: Input[], volumeMiB: number, signal: AbortSignal, password?: string) {
   if (!zipVolumeSizes.some(size => size === volumeMiB)) throw new Error('Choose a supported volume size.');
   const volumeSize = volumeMiB * 1024 * 1024;
   const total = inputs.reduce((sum, input) => sum + (input.file?.size ?? 0), 0);
@@ -31,7 +34,10 @@ export async function createSplitZip(inputs: Input[], volumeMiB: number, signal:
   for (const [index, input] of inputs.entries()) {
     signal.throwIfAborted();
     await writer.add(names[index], input.file ? new BlobReader(input.file) : undefined,
-      { level: 0, directory: input.directory, signal });
+      {
+        level: 0, directory: input.directory, signal,
+        ...(password && !input.directory ? { password, encryptionStrength: 3 } : {}),
+      });
   }
   await writer.close();
   const blobs = await Promise.all(volumes.map(volume => volume.getData()));
@@ -45,7 +51,14 @@ export async function createSplitZip(inputs: Input[], volumeMiB: number, signal:
           entry.uncompressedSize !== (inputs[index].file?.size ?? 0)) {
         throw new Error('The ZIP volume set failed verification.');
       }
-      if (!entry.directory) await entry.getData(new WritableStream<Uint8Array>(), { checkCrc32: true, signal });
+      if (!entry.directory) {
+        if (password ? !entry.encrypted || entry.zipCrypto || entry.extraFieldAES?.strength !== 3 : entry.encrypted) {
+          throw new Error('The ZIP volume set uses unexpected encryption.');
+        }
+        await entry.getData(new WritableStream<Uint8Array>(), {
+          password, checkAuthenticationCode: true, checkCrc32: true, signal,
+        });
+      }
     }
   } finally {
     await reader.close();
@@ -77,7 +90,7 @@ export function orderZipVolumes(files: File[]) {
   return ordered;
 }
 
-export async function joinSplitZip(files: File[], signal: AbortSignal) {
+export async function joinSplitZip(files: File[], signal: AbortSignal, password?: string) {
   const ordered = orderZipVolumes(files);
   const end = ordered[ordered.length - 1];
   const tail = new DataView(await end.slice(-65557).arrayBuffer());
@@ -99,7 +112,7 @@ export async function joinSplitZip(files: File[], signal: AbortSignal) {
     let expanded = 0;
     for await (const entry of reader.getEntriesGenerator()) {
       signal.throwIfAborted();
-      if (entries.length === count || entry.encrypted || entry.symlink ||
+      if (entries.length === count || entry.symlink || (entry.encrypted && entry.directory) ||
           !Number.isSafeInteger(entry.uncompressedSize) || entry.uncompressedSize < 0 ||
           (expanded += entry.uncompressedSize) > maxBytes) {
         throw new Error('The split ZIP contains unsupported entries or exceeds the 128 MiB output limit.');
@@ -107,6 +120,9 @@ export async function joinSplitZip(files: File[], signal: AbortSignal) {
       entries.push(entry);
     }
     if (entries.length !== count) throw new Error('The ZIP directory entry count is invalid.');
+    if (!password && entries.some(entry => entry.encrypted)) {
+      throw new Error('Enter the password for this split ZIP.');
+    }
     checkZipPaths(entries.map(entry => entry.filename));
     const writer = new ZipWriter(new BlobWriter('application/zip'), { useWebWorkers: false });
     for (const entry of entries) {
@@ -115,12 +131,18 @@ export async function joinSplitZip(files: File[], signal: AbortSignal) {
         await writer.add(entry.filename, undefined, { directory: true, signal });
         continue;
       }
-      const blob = await readVerifiedZipEntry(entry, signal);
+      const blob = await readVerifiedZipEntry(entry, signal, entry.encrypted ? password : undefined);
       await writer.add(entry.filename, new BlobReader(blob), { level: 0, signal });
     }
     const output = await writer.close();
     signal.throwIfAborted();
     return output;
+  } catch (error) {
+    if (error instanceof Error &&
+        [ERR_INVALID_PASSWORD, ERR_INVALID_AUTHENTICATION_CODE, ERR_INVALID_CRC32].includes(error.message)) {
+      throw new Error(password ? 'The password is incorrect or the ZIP data is damaged.' : 'The ZIP data is damaged.');
+    }
+    throw error;
   } finally {
     await reader.close();
   }
