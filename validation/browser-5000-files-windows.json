@@ -1,0 +1,21 @@
+{
+  "revision": "9639a8acfc6587812ecbc8d82a945c793c9f7784",
+  "viewport": "1280x900 bulk, 390x780 interactive",
+  "browser": "Chromium 148.0.7778.96",
+  "inputBytes": 50388992,
+  "uniqueFiles": 5000,
+  "bytesPerRegularFile": 8192,
+  "resumedOffset": 8388608,
+  "uploadRequests": 5002,
+  "peakChromiumJsHeapBytes": 66337924,
+  "selectedSeconds": 22.399207399999984,
+  "smallSeconds": 10.403838400000009,
+  "chunksWhenSmallCompleted": 42,
+  "queuedSeconds": 947.6286484000001,
+  "elapsedSeconds": 1131.5479375999998,
+  "manifestPages": 50,
+  "archiveBytes": 41665506,
+  "verifiedFiles": 5000,
+  "recoveryMode": "pause",
+  "apiErrors": []
+}
