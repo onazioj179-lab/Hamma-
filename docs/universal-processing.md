@@ -96,6 +96,14 @@ quality. Tests decode WAV/FLAC and compare PCM bytes with the source. Conversion
 verifies readable streams and durations; other conversions are not certified
 bit-identical. Lossy formats are disclosed in Options.
 
+## Split ZIP volumes
+
+Use **Create split ZIP volumes** with an optional AES-256 password. To open
+a split ZIP, select all numbered volumes and the final .zip, then choose
+**Join split ZIP volumes**. Enter the original password for an AES or
+ZipCrypto set. Joining produces a regular, unencrypted ZIP in the browser.
+Split ZIPs support up to 128 volumes, 1,000 entries and 128 MiB of file data.
+
 ## Integrity and privacy
 
 - Copies use 1 MiB buffers. Archives are read back and verified against source
