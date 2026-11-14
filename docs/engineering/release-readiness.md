@@ -2,6 +2,11 @@
 
 ## Remaining web release acceptance
 
+XLSX-to-PDF remains open. The Linux container's XLSX export failed inside the
+processor worker. The rollback restores the previously verified DOCX and PPTX
+export path. The XLSX acceptance test must render both worksheets and verify
+their cell values in the downloaded PDF with worker isolation enabled.
+
 Use the six areas in the [web backlog](hammer-directive-audit.md) as the
 release checklist. Run the checks against the same candidate build and record
 the revision, platform, fixture, outcome and skipped cases.
@@ -47,8 +52,10 @@ completed job. The browser reads those rows by cursor, and existing inline
 manifests remain readable. The staged 201-file ZIP test checks three manifest
 pages against the downloaded archive's order and member digests. The
 container smoke checks the same manifest before and after recreation.
-Archive creation still holds per-member verification data in memory, and
-the legacy full-manifest route still returns the whole list. Use the
+Archive creation can still hold per-member verification data in memory.
+The legacy full-manifest route serializes rows from a single SQLite snapshot,
+spills large responses to a temporary file, and releases the snapshot before
+sending the response. The browser continues to request cursor pages. Use the
 pre-upgrade snapshot for rollback because earlier versions cannot read the
 new manifest rows. Windows bsdtar 3.8.9
 verified TAR.ZST in both directions, including nested paths, an empty file,

@@ -482,8 +482,7 @@ export function UniversalWorkspace({ visible, screen, onHistory, onOverview, spk
     (!singleSource.inspection || singleSource.inspection.error || singleSource.inspection.format === 'zip') &&
     /\.(docx|xlsx|pptx)$/i.test(singleSource.name);
   const canInspectOffice = capability?.officeInspection && officeSource;
-  const officePdfFormats = capability?.officePdfFormats ?? (capability?.officePdf ? ['docx', 'pptx'] : []);
-  const canExportOffice = officeSource && officePdfFormats.includes(singleSource.name.split('.').pop()!.toLowerCase());
+  const canExportOffice = capability?.officePdf && officeSource && /\.(docx|pptx)$/i.test(singleSource.name);
   const canRenderPdf = capability?.pdfPages && singleSource && !singleSource.directory &&
     (signature === 'pdf' || !signature && /\.pdf$/i.test(singleSource.name));
   const conversionTarget = actions.conversions.includes(conversion) ? conversion : actions.conversions[0];

@@ -77,7 +77,8 @@ class ServerTests(unittest.TestCase):
                 for length in lengths:
                     client.putheader("Content-Length", length)
                 client.endheaders(b"{}")
-                client.sock.shutdown(socket.SHUT_WR)
+                if len(lengths) == 1:
+                    client.sock.shutdown(socket.SHUT_WR)
                 with client.getresponse() as response:
                     self.assertEqual(response.status, 400)
         self.assertIn("id", self.upload())
@@ -555,6 +556,20 @@ class ServerTests(unittest.TestCase):
         self.assert_status(410, lambda: self.call(path))
         self.service.cleanup()
         self.assertEqual(self.service.store.full_paged_manifest(owner, job['id']), [])
+
+    def test_full_manifest_spills_large_responses_and_preserves_legacy_json(self):
+        job = self.job()
+        owner = self.service.store.list(kind="job")[0][0]
+        entries = [{"name": f"{i:04d}-世界.txt", "size": 1, "sha256": "a" * 64} for i in range(250)]
+        self.service.store.patch(owner, "job", job["id"], state="completed",
+                                 downloadAvailable=True, sha256="b" * 64,
+                                 manifest_entries=entries)
+        with patch("processor.server.BLOCK", 1024):
+            with self.client.open(self.base + f"/jobs/{job['id']}/manifest", timeout=10) as response:
+                body = response.read()
+                self.assertGreater(len(body), 1024)
+                self.assertEqual(int(response.headers["Content-Length"]), len(body))
+        self.assertEqual(json.loads(body), {"id": job["id"], "sha256": "b" * 64, "files": entries})
 
     def test_existing_inline_manifest_keeps_its_full_and_paged_responses(self):
         job = self.job()
@@ -1060,23 +1075,6 @@ class ServerTests(unittest.TestCase):
             self.assertFalse(failed['downloadAvailable'])
             plain = self.upload(b'not an Office archive', 'fake.docx')
             self.assert_status(400, lambda: self.job(plain, operation='convert', target='office-pdf'))
-            workbook = self.upload(office_fixture('xlsx', extra={'xl/connections.xml': b'fixture'}), 'linked.xlsx')
-            rejected = self.execute(self.job(workbook, operation='convert', target='office-pdf'))
-            self.assertIn('active or embedded Office content', rejected['error'])
-            self.assertFalse(rejected['downloadAvailable'])
-
-    def test_spreadsheet_export_requires_calc(self):
-        from processor.tests.office_fixture import office_fixture
-
-        def office_tools(suffix=None):
-            return None if suffix == '.xlsx' else ('helper', 'pdfinfo')
-
-        with patch('processor.server.office_tools', side_effect=office_tools):
-            capabilities = self.call('/capabilities')
-            self.assertTrue(capabilities['officePdf'])
-            self.assertEqual(capabilities['officePdfFormats'], ['docx', 'pptx'])
-            workbook = self.upload(office_fixture('xlsx'), 'report.xlsx')
-            self.assert_status(400, lambda: self.job(workbook, operation='convert', target='office-pdf'))
 
     def test_pdf_pages_render_in_order_and_reject_invalid_input(self):
         from processor.pdf_pages import pdf_tools

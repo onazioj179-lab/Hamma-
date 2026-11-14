@@ -83,13 +83,11 @@ def restrict_filesystem(executable, source, output_dir):
         for path in ('/etc/ld.so.cache', '/dev/urandom'):
             if os.path.exists(path):
                 permit(path, read_file)
-        executable_name = Path(executable).name
-        office = executable_name in ('hamma-office-pdf', 'soffice.bin')
-        if executable_name == 'pdftoppm' or office:
+        if Path(executable).name in ('pdftoppm', 'hamma-office-pdf'):
             for path in ('/etc/fonts', '/usr/share/fontconfig', '/usr/share/fonts', '/usr/local/share/fonts'):
                 if os.path.isdir(path):
                     permit(path, read_file | read_dir)
-        if office and os.path.isdir('/etc/libreoffice'):
+        if Path(executable).name == 'hamma-office-pdf' and os.path.isdir('/etc/libreoffice'):
             permit('/etc/libreoffice', read_file | read_dir)
         permit('/dev/null', read_file | write_file)
         if output_dir:
@@ -110,7 +108,7 @@ if __name__ == '__main__':
         environment = {'LANG': 'C.UTF-8', 'PATH': os.defpath}
         if output_dir:
             environment['TMPDIR'] = output_dir
-            if Path(executable).name in ('hamma-office-pdf', 'soffice.bin'):
+            if Path(executable).name == 'hamma-office-pdf':
                 environment.update(HOME=output_dir, XDG_CACHE_HOME=output_dir, SAL_USE_VCLPLUGIN='svp')
         os.execve(executable, [executable, *arguments], environment)
     except (OSError, RuntimeError) as error:

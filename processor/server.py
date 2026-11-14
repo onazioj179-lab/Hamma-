@@ -51,8 +51,7 @@ from .catalog import FileCatalog
 from .capabilities import action_registry, inspect_headers, media_targets, single_file_archives
 from .file_parts import PART_SIZES, join_file, split_file
 from .pdf_pages import TARGET as PDF_PAGES, pdf_tools, render_pdf
-from .office_pdf import (INPUT_LIMIT as OFFICE_INPUT_LIMIT, RENDERER_LIBRARIES,
-                         TARGET as OFFICE_PDF, convert_office, office_tools)
+from .office_pdf import TARGET as OFFICE_PDF, INPUT_LIMIT as OFFICE_INPUT_LIMIT, SUFFIXES as OFFICE_SUFFIXES, convert_office, office_tools
 from .media_policy import H264_TARGET
 from .oauth import OAuth
 
@@ -398,13 +397,39 @@ class Store:
             """, (owner, job_id, after, after + limit)).fetchall()
         return metadata, [{**json.loads(row['entry']), 'id': row['position'] + 1} for row in rows]
 
-    def full_manifest(self, owner, job_id):
-        record = self.get(owner, "job", job_id)
-        if not record or not record.get("downloadAvailable") or record["fileExpires"] <= time.time():
-            raise HTTPError(410, "Verified manifest unavailable")
-        if record.get("manifestStorage") == "paged":
-            return self.full_paged_manifest(owner, job_id)
-        return record.get("manifest", [])
+    def write_full_manifest(self, owner, job_id, output):
+        """Serialize a consistent manifest before sending anything to the client."""
+        with self.connect() as db:
+            db.execute("BEGIN")
+            record = db.execute("""
+                SELECT json_extract(data,'$.inputMode') AS mode,
+                       json_extract(data,'$.manifestStorage') AS storage,
+                       json_extract(data,'$.downloadAvailable') AS available,
+                       json_extract(data,'$.fileExpires') AS expires,
+                       json_extract(data,'$.sha256') AS sha256
+                FROM records WHERE owner=? AND kind='job' AND id=?
+            """, (owner, job_id)).fetchone()
+            if record is None:
+                raise HTTPError(404, "Job unavailable")
+            if not record["available"] or (record["expires"] or 0) <= time.time():
+                raise HTTPError(410, "Verified manifest unavailable")
+            if record["mode"] == "directory-index":
+                return False
+            if record["storage"] == "paged":
+                rows = db.execute("""SELECT data FROM job_manifest_entries
+                    WHERE owner=? AND job_id=? ORDER BY position""", (owner, job_id))
+            else:
+                rows = db.execute("""SELECT member.value
+                    FROM records, json_each(records.data,'$.manifest') AS member
+                    WHERE owner=? AND kind='job' AND records.id=?""", (owner, job_id))
+            header = json.dumps({"id": job_id, "sha256": record["sha256"]})
+            output.write((header[:-1] + ', "files":[').encode())
+            separator = b""
+            for (entry,) in rows:
+                output.write(separator + entry.encode("utf-8"))
+                separator = b","
+            output.write(b"]}")
+            return True
 
     def full_paged_manifest(self, owner, job_id):
         with self.connect() as db:
@@ -1124,6 +1149,23 @@ def handler(service):
             if self.command != "HEAD":
                 self.wfile.write(data)
 
+        def send_full_manifest(self, job_id):
+            # Spill large responses to disk and release the read transaction
+            # before writing to a potentially slow client.
+            with tempfile.SpooledTemporaryFile(max_size=BLOCK, dir=service.store.root) as body:
+                if not service.store.write_full_manifest(self.owner, job_id, body):
+                    return False
+                size = body.tell()
+                body.seek(0)
+                self.send_response(200)
+                self.headers_common()
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(size))
+                self.end_headers()
+                self.response_started = True
+                shutil.copyfileobj(body, self.wfile, BLOCK)
+                return True
+
         def headers_common(self):
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
@@ -1429,15 +1471,13 @@ def handler(service):
                     raise HTTPError(400, str(error)) from error
             if path == "/api/process/capabilities" and method == "GET":
                 from .native import capability
-                office_formats = [suffix[1:] for suffix in RENDERER_LIBRARIES if office_tools(suffix)]
                 return self.send(200, {"liveJobPolling": True, "groupedWorkflows": True, "projectRecovery": True, "projectZipProfiles": True, "recoverableUploads": True,
                                        "projectSelections": True, "pagedJobSelections": True, "jobRevisions": True,
                                        "draftScope": hashlib.sha256(("hamma-draft:" + self.owner).encode()).hexdigest(),
                                        "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(),
                                        "inspection": True, "zipVerification": True, "tarVerification": True, "streamVerification": True, "zipSelection": True,
                                        "archiveRepack": True, "officeInspection": True, "pdfPages": all(pdf_tools()),
-                                       "officePdf": "docx" in office_formats and "pptx" in office_formats,
-                                       "officePdfFormats": office_formats, "zipComments": True, "zipProfiles": list(ZIP_PROFILES),
+                                       "officePdf": bool(office_tools()), "zipComments": True, "zipProfiles": list(ZIP_PROFILES),
                                        "filePartSizesMiB": list(PART_SIZES),
                                        "actionRegistry": action_registry(), "conversions": media_targets(),
                                        "limits": service.limits, 'plan': self.plan, 'billingEnabled': False, "processing": "local", "version": 1})
@@ -1805,11 +1845,8 @@ def handler(service):
                 if operation == "split" and inputs[0]["size"] <= part_mib * BLOCK:
                     raise HTTPError(400, "Choose a part size smaller than the file")
                 if target == OFFICE_PDF:
-                    suffix = Path(inputs[0]["name"]).suffix.lower()
-                    if inputs[0]["format"] != "zip" or suffix not in RENDERER_LIBRARIES:
-                        raise HTTPError(400, "Choose a DOCX, PPTX or XLSX file")
-                    if not office_tools(suffix):
-                        raise HTTPError(400, "Office PDF export is unavailable for this file type")
+                    if inputs[0]["format"] != "zip" or Path(inputs[0]["name"]).suffix.lower() not in OFFICE_SUFFIXES:
+                        raise HTTPError(400, "Choose a DOCX or PPTX file")
                     if inputs[0]["size"] > OFFICE_INPUT_LIMIT:
                         raise HTTPError(413, "Office files must be 32 MiB or smaller")
 
@@ -1873,6 +1910,8 @@ def handler(service):
                 directory = service.store.folder(self.owner, job_id)
                 query = parse_qs(url.query)
                 if action == "manifest" and method == "GET":
+                    if "limit" not in query and "after" not in query and self.send_full_manifest(job_id):
+                        return
                     after = int(query.get("after", [0])[0])
                     limit = min(1000, max(1, int(query.get("limit", [100])[0])))
                     if not 0 <= after <= 2**63 - 1 - limit:
@@ -1882,10 +1921,6 @@ def handler(service):
                         raise HTTPError(404, "Job unavailable")
                     if not metadata["available"] or (metadata["expires"] or 0) <= time.time():
                         raise HTTPError(410, "Verified manifest unavailable")
-                    paginated = "limit" in query or "after" in query
-                    if not paginated and metadata["mode"] != "directory-index":
-                        return self.send(200, {"id": job_id, "sha256": metadata["sha256"],
-                                               "files": service.store.full_manifest(self.owner, job_id)})
                     if metadata["mode"] == "directory-index":
                         from .indexed_archive import manifest_page
                         files = manifest_page(directory / "discovery.sqlite3", after, limit, lookahead=True)

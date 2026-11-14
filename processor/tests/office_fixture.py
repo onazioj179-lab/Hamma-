@@ -9,7 +9,6 @@ PACKAGE = 'http://schemas.openxmlformats.org/package/2006'
 WORD = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
 SLIDES = 'http://schemas.openxmlformats.org/presentationml/2006/main'
 DRAW = 'http://schemas.openxmlformats.org/drawingml/2006/main'
-SHEET = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 
 
 def relationships(*links):
@@ -45,22 +44,6 @@ def office_fixture(kind, extra=None):
               </a:rPr><a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>'''),
         }
         related = {'ppt/_rels/presentation.xml.rels': relationships(('slide', 'slides/slide1.xml'))}
-    elif kind == 'xlsx':
-        root = 'xl/workbook.xml'
-        parts = {
-            root: ('spreadsheetml.sheet.main', f'''<workbook xmlns="{SHEET}" xmlns:r="{OFFICE}">
-              <sheets><sheet name="Summary" sheetId="1" r:id="rId1"/>
-              <sheet name="Details" sheetId="2" r:id="rId2"/></sheets></workbook>'''),
-        }
-        for index, label in enumerate((text, 'Second worksheet'), 1):
-            parts[f'xl/worksheets/sheet{index}.xml'] = (
-                'spreadsheetml.worksheet', f'''<worksheet xmlns="{SHEET}">
-                <cols><col min="1" max="1" width="30" customWidth="1"/></cols>
-                <sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>{label}</t></is></c>
-                <c r="B1"><v>{4100 + index}</v></c></row></sheetData></worksheet>''',
-            )
-        related = {'xl/_rels/workbook.xml.rels': relationships(
-            ('worksheet', 'worksheets/sheet1.xml'), ('worksheet', 'worksheets/sheet2.xml'))}
     else:
         raise ValueError(kind)
 

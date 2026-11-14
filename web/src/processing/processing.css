@@ -6,7 +6,7 @@
 .universal-drop h2 { font-size: 21px; font-weight: 550; letter-spacing: -.6px; margin: 0 0 8px; }
 .universal-drop p { color: rgb(var(--muted)); margin: 0 0 24px; }
 .universal-drop .button-row { justify-content: center; }
-.processor-notice { display: flex; align-items: center; gap: 16px; justify-content: space-between; background: rgb(var(--card-elevated)); border: 1px solid rgb(var(--border)); padding: 16px 20px; border-radius: 12px; margin-bottom: 20px; overflow-wrap: anywhere; }
+.processor-notice { display: flex; align-items: center; gap: 16px; justify-content: space-between; background: rgb(var(--card-elevated)); border: 1px solid rgb(var(--border)); padding: 16px 20px; border-radius: var(--radius-panel); margin-bottom: 20px; overflow-wrap: anywhere; }
 .processor-notice p { font-size: 13px; margin: 5px 0; color: rgb(var(--muted)); }
 .processor-notice summary, .processing-options summary, .job-details summary { cursor: pointer; color: rgb(var(--muted)); font-size: 12px; }
 .processor-notice code { overflow-wrap: anywhere; }
@@ -38,7 +38,7 @@
 .zip-inspection-list small { color: rgb(var(--muted)); }
 .zip-comment-preview { overflow-wrap: anywhere; white-space: pre-wrap; }
 .conversion-select { margin-left: auto; display: flex; gap: 8px; align-items: center; color: rgb(var(--muted)); font-size: 12px; }
-.universal-workspace select { background: rgb(var(--card)); color: rgb(var(--foreground)); border: 1px solid rgb(var(--border)); border-radius: 8px; padding: 8px 10px; min-height: 36px; }
+.universal-workspace select { background: rgb(var(--card)); color: rgb(var(--foreground)); border: 1px solid rgb(var(--border)); border-radius: var(--radius-pill); padding: 8px 10px; min-height: 36px; }
 .processing-options { margin: 18px 0 28px; }
 .options-grid { display: flex; gap: 20px; flex-wrap: wrap; padding-top: 16px; align-items: center; }
 .options-grid > label:not(.selection-label) { display: flex; flex-direction: column; gap: 7px; min-width: 140px; }
@@ -59,7 +59,7 @@
 .processing-job { padding: 16px 18px 12px; border-bottom: 1px solid rgb(var(--border)); }
 .processing-job:last-child { border: 0; }
 .processing-job-line { display: flex; align-items: center; gap: 12px; }
-.job-glyph { width: 34px; height: 34px; border-radius: 9px; background: rgb(var(--card-elevated)); display: grid; place-items: center; flex-shrink: 0; color: rgb(var(--muted)); }
+.job-glyph { width: 34px; height: 34px; border-radius: var(--radius-pill); background: rgb(var(--card-elevated)); display: grid; place-items: center; flex-shrink: 0; color: rgb(var(--muted)); }
 .job-glyph.done { color: rgb(var(--accent)); background: rgb(var(--accent) / .07); }
 .processing-job-name { flex: 1; min-width: 0; }
 .processing-job-name strong { font-size: 13px; font-weight: 500; display: block; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; }
@@ -104,7 +104,7 @@
 
 .project-toolbar { display:flex; flex-wrap:wrap; align-items:end; gap:12px; margin-bottom:16px; }
 .project-toolbar label { display:grid; gap:6px; flex:1; min-width:160px; max-width:320px; font-size:12px; }
-.project-summary { display:grid; gap:10px; padding:16px; margin:12px 0; border:1px solid rgb(var(--border)); border-radius:12px; }
+.project-summary { display:grid; gap:10px; padding:16px; margin:12px 0; border:1px solid rgb(var(--border)); border-radius:var(--radius-panel); }
 .workflow-groups { display:grid; gap:12px; padding:14px 12px; grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr)); }
 .workflow-groups > label, .workflow-quality { display:grid; gap:6px; min-width:0; font-size:12px; }
 .workflow-groups small { color:rgb(var(--muted)); }
