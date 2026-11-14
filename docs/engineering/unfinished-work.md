@@ -4,7 +4,7 @@ The [HAMMA web backlog](hammer-directive-audit.md#hamma-web-backlog) tracks
 release acceptance. See [release readiness](release-readiness.md) for completed
 checks. The broader product backlog is below.
 
-1. Expand previews and add safe duplicate-output reuse, persistent workflow
+1. Expand previews and add persistent workflow
    presets, browser folder change detection, revision history, and workflow
    routes.
 2. Extend the processing planner, project concurrency, upload pipelining,

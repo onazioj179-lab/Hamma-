@@ -77,7 +77,8 @@ class ServerTests(unittest.TestCase):
                 for length in lengths:
                     client.putheader("Content-Length", length)
                 client.endheaders(b"{}")
-                client.sock.shutdown(socket.SHUT_WR)
+                if len(lengths) == 1:
+                    client.sock.shutdown(socket.SHUT_WR)
                 with client.getresponse() as response:
                     self.assertEqual(response.status, 400)
         self.assertIn("id", self.upload())
@@ -228,6 +229,80 @@ class ServerTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as raised:
             function()
         self.assertEqual(raised.exception.code, status, raised.exception.read().decode())
+
+    def test_completed_output_can_be_reused_after_original_is_deleted(self):
+        original = self.job(self.upload(b"retained bytes", "original.txt"))
+        path = "/jobs/" + original["id"] + "/reuse"
+        self.call("/projects/default", {}, "PUT")
+        self.assert_status(410, lambda: self.call(path, {"name": "original.zip"}, "POST"))
+        original = self.execute(original)
+        body = {"name": original["outputName"]}
+        source = self.call(path, {}, "POST")
+        self.assertEqual(source["name"], original["outputName"])
+        self.assertEqual(self.call(path, body, "POST"), source)
+        upload_path = "/uploads/" + source["upload"]
+        self.assert_status(409, lambda: self.call(upload_path, b"x", "PUT",
+                                                   {"Upload-Offset": str(source["size"])}, raw=True))
+        retained = self.call(original["download"].removeprefix("/api/process"), raw=True)
+        self.assertEqual(hashlib.sha256(retained).hexdigest(), original["sha256"])
+        self.assertEqual(self.call("/projects/default/inputs")["sources"][0]["id"], source["id"])
+        other = build_opener(HTTPCookieProcessor(CookieJar()))
+        self.call("/projects/default", {}, "PUT", client=other)
+        self.assert_status(404, lambda: self.call(path, body, "POST", client=other))
+        self.call("/jobs/" + original["id"] + "/files", method="DELETE")
+        self.assert_status(410, lambda: self.call(path, body, "POST"))
+        extracted = self.job({"id": source["upload"]}, operation="extract", recoverable=True)
+        extracted = self.execute(extracted)
+        self.assertEqual(extracted["state"], "completed")
+        with zipfile.ZipFile(io.BytesIO(self.call(extracted["download"].removeprefix("/api/process"), raw=True))) as archive:
+            self.assertEqual(archive.read("original.txt"), b"retained bytes")
+        self.assertEqual(self.call("/projects/default/inputs")["sources"], [])
+
+    def test_output_reuse_can_retry_after_link_failure_without_leaking_upload(self):
+        original = self.execute(self.job(self.upload(b"retained bytes", "original.txt")))
+        path = "/jobs/" + original["id"] + "/reuse"
+        self.call("/projects/default", {}, "PUT")
+        body = {"name": original["outputName"]}
+        before = self.service.store.count(kind="upload")
+        with patch("processor.server.os.link", side_effect=OSError("link unavailable")):
+            self.assert_status(507, lambda: self.call(path, body, "POST"))
+        self.assertEqual(self.service.store.count(kind="upload"), before)
+        self.assertEqual(self.call("/projects/default/inputs")["sources"], [])
+        source = self.call(path, body, "POST")
+        self.assertEqual(source, self.call(path, body, "POST"))
+        self.assertEqual(self.service.store.count(kind="upload"), before + 1)
+
+    def test_reuse_respects_project_limit_when_pending_selections_fill_it(self):
+        original = self.execute(self.job(self.upload(b"retained bytes", "original.txt")))
+        self.call("/projects/default", {}, "PUT")
+        selection = {"id": "1" * 32, "name": "pending.txt", "size": 1, "directory": False}
+        path = "/projects/default/inputs"
+        self.call(path, {"selections": [selection]}, "PUT")
+        before = self.service.store.count(kind="upload")
+        with patch.dict(self.service.projects.limits, {"files": 1}):
+            self.assert_status(413, lambda: self.call("/jobs/" + original["id"] + "/reuse",
+                                                       {"name": original["outputName"]}, "POST"))
+        self.assertEqual(self.service.store.count(kind="upload"), before)
+        self.assertEqual(self.call(path + "?includeSelections=1")["sources"][0]["id"], selection["id"])
+
+    def test_output_reuse_verifies_copy_when_links_are_unsupported(self):
+        original = self.execute(self.job(self.upload(b"copy fixture", "original.txt")))
+        path = "/jobs/" + original["id"] + "/reuse"
+        self.call("/projects/default", {}, "PUT")
+        owner, job = self.service.store.list()[0]
+        output = self.service.store.folder(owner, job["id"]) / job["outputFile"]
+        original_bytes = output.read_bytes()
+        output.write_bytes(b"x" * len(original_bytes))
+        with patch("processor.server.os.link", side_effect=OSError(errno.ENOTSUP, "link unavailable")):
+            before = self.service.store.count(kind="upload")
+            self.assert_status(409, lambda: self.call(path, {}, "POST"))
+            self.assertEqual(self.service.store.count(kind="upload"), before)
+            output.write_bytes(original_bytes)
+            source = self.call(path, {}, "POST")
+        self.call("/jobs/" + original["id"] + "/files", method="DELETE")
+        extracted = self.execute(self.job({"id": source["upload"]}, operation="extract", recoverable=True))
+        with zipfile.ZipFile(io.BytesIO(self.call(extracted["download"].removeprefix("/api/process"), raw=True))) as archive:
+            self.assertEqual(archive.read("original.txt"), b"copy fixture")
 
     def test_restart_preparation_is_instance_bound_and_keeps_queued_jobs_intact(self):
         queued = self.job()
@@ -1510,8 +1585,11 @@ class ServerTests(unittest.TestCase):
         with patch('processor.server.available_memory', return_value=0):
             self.service.tick()
         self.assertEqual(self.call('/jobs/' + job['id'])['state'], 'queued')
+        stalled = self.call('/jobs/live')
+        self.assertTrue(stalled['waitingForMemory'])
         with patch('processor.server.available_memory', return_value=2 * 1024**3):
             self.service.tick()
+        self.assertFalse(self.call('/jobs/live?revision=' + stalled['revision'])['waitingForMemory'])
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             self.service.tick()

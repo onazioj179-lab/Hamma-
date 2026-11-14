@@ -65,12 +65,15 @@ it('uses one live request for progress and reloads retained rows when the revisi
 it('refreshes download links on the processor clock and reuses unchanged idle rows', async () => {
   let records = [{ ...job('retained', 1), downloadAvailable: true, fileExpires: 123, download: '/signed' }];
   let now = 100;
+  let waitingForMemory = false;
   const fetch = vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('/jobs/live')
-    ? { revision: 'first', now, jobs: [] } : { jobs: records, total: records.length } }));
+    ? { revision: 'first', now, jobs: [], waitingForMemory } : { jobs: records, total: records.length } }));
   vi.stubGlobal('fetch', fetch);
   const signal = new AbortController().signal;
   const initial = await refreshJobHistory(null, signal);
   expect(await refreshJobHistory(initial, signal)).toBe(initial);
+  waitingForMemory = true;
+  expect((await refreshJobHistory(initial, signal)).waitingForMemory).toBe(true);
   now = 123;
   records = [{ ...records[0], downloadAvailable: false, download: '' }];
   const expired = await refreshJobHistory(initial, signal);

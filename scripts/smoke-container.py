@@ -111,8 +111,15 @@ def check(base, state_path=None, after_restart=False, after_restore=False):
         _, data = download("compress", "zip", [state["upload"]])
         with ZipFile(BytesIO(data)) as archive:
             assert archive.read("resume.txt") == b"start after restart"
+        recovered = call("/api/process/projects/default/inputs")["sources"]
+        assert any(source["upload"] == state["reused"] for source in recovered)
+        call("/api/process/jobs/" + job["id"] + "/files", method="DELETE")
+        _, chained = download("extract", "zip", [state["reused"]], recoverable=True)
+        with ZipFile(BytesIO(chained)) as archive:
+            assert {name: hashlib.sha256(archive.read(name)).hexdigest()
+                    for name in archive.namelist()} == dict(state["manifest"])
         operation = "Backup restore" if after_restore else "Restart"
-        print(f"{operation} preserved retention, the signed download, and the upload checkpoint.")
+        print(f"{operation} preserved retention, the signed download, the upload checkpoint, and a reusable output.")
         return
 
     page = call("/", raw=True)
@@ -167,6 +174,10 @@ def check(base, state_path=None, after_restart=False, after_restore=False):
     assert joined == original
     assert_owner_only(joined_job)
     if state_path:
+        call("/api/process/projects/default", b"{}", "PUT", {"Content-Type": "application/json"})
+        reused = post("/api/process/jobs/" + restored_job["id"] + "/reuse",
+                      {"name": restored_job["outputName"]})
+        assert reused["uploaded"] == len(restored) and reused["inspection"]["extract"]
         settings = {"historyRetention": "30d", "fileRetention": "7d"}
         call("/api/process/settings", json.dumps(settings).encode(), "PUT",
              {"Content-Type": "application/json"})
@@ -187,6 +198,7 @@ def check(base, state_path=None, after_restart=False, after_restore=False):
                                           "download": restored_job["download"],
                                           "sha256": restored_job["sha256"],
                                           "manifest": manifest,
+                                          "reused": reused["upload"],
                                           "upload": source["id"]}), encoding="utf-8")
     print("Container served the web build and verified PDF pages, TAR.ZST, and split/join.")
 

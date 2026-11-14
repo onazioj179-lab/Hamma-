@@ -33,6 +33,7 @@
 
 .history-views {
   display: inline-flex;
+  flex-wrap: wrap;
   max-width: 100%;
   gap: 4px;
 }

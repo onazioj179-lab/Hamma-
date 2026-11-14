@@ -141,9 +141,10 @@ def run(base):
                 with tarfile.open(fileobj=BytesIO(data), mode='r:gz') as archive:
                     assert [(name, archive.extractfile(name).read()) for name in archive.getnames()] == samples
             else:
-                archive_id = call('/api/process/uploads', {'name': batch['outputName'], 'size': len(data)}, 'POST')['id']
-                put('/api/process/uploads/' + archive_id, data)
-                _, restored = finish(submit(project, 'extract', 'zip', [archive_id]))
+                source = call('/api/process/jobs/' + batch['id'] + '/reuse',
+                              {'projectId': project, 'name': batch['outputName']}, 'POST')
+                assert source['uploaded'] == len(data)
+                _, restored = finish(submit(project, 'extract', 'zip', [source['upload']]))
                 with ZipFile(BytesIO(restored)) as archive:
                     assert [(name, archive.read(name)) for name in archive.namelist()] == samples
             timings.append({'target': target, 'inputBytes': sum(len(payload) for _, payload in samples),
@@ -184,6 +185,7 @@ def run(base):
             'resumedBytes': OWNERS * ROUNDS * 12 * MIB,
             'mixedBatchInputBytes': sum(item['inputBytes'] for run in runs for item in run),
             'foreignAccessDenied': OWNERS * 2, 'sha256AndRangeVerified': True,
+            'chainedOutputsVerified': OWNERS,
             'seconds': round(time.monotonic() - started, 3), 'runs': runs}
 
 
