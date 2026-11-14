@@ -77,7 +77,8 @@ class ServerTests(unittest.TestCase):
                 for length in lengths:
                     client.putheader("Content-Length", length)
                 client.endheaders(b"{}")
-                client.sock.shutdown(socket.SHUT_WR)
+                if len(lengths) == 1:
+                    client.sock.shutdown(socket.SHUT_WR)
                 with client.getresponse() as response:
                     self.assertEqual(response.status, 400)
         self.assertIn("id", self.upload())
