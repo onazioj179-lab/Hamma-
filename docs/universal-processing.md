@@ -120,6 +120,11 @@ can reserve up to half the configured storage after one output allowance
 upload chunks can be in flight for one workspace. Retrying a saved selection
 reuses its reservation and resumes from the committed offset.
 
+After reopening a project, use **Reconnect original files** or **Reconnect
+original folder** to restore saved selections in one step. HAMMA matches
+relative paths and sizes, and verifies saved bytes before resuming partial
+uploads. Use **Select original** on a single row if the relative path differs.
+
 The processor also counts input bytes for active and paused jobs. Each workspace
 can queue twice its concurrent worker allowance in maximum-size jobs (16 GiB
 for a guest and 32 GiB for a free account at the default input limit). Repeated

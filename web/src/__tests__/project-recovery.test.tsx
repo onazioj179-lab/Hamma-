@@ -166,7 +166,7 @@ it.each([false, true])('verifies saved bytes before resuming (SubtleCrypto=%s)',
     return initial(url, init);
   });
   await render();
-  expect(host.textContent).toContain('continue 1 upload');
+  expect(host.textContent).toContain('1 file needs the original');
   await act(async () => compress().click());
   expect(jobAttempts).toBe(0);
   const picker = host.querySelector<HTMLInputElement>('[aria-label="Select original file for resume.txt"]')!;
@@ -186,6 +186,33 @@ it.each([false, true])('verifies saved bytes before resuming (SubtleCrypto=%s)',
   expect(writer).toMatch(/^[a-f0-9]{32}$/);
   expect(jobAttempts).toBe(1);
   expect(chunkWrites).toBe(1);
+});
+
+it('reconnects saved files in bulk without adding duplicate sources', async () => {
+  caps.draftScope = 'test-owner';
+  await render();
+  const original = new File(['abc'], 'resume.txt');
+  const input = host.querySelector<HTMLInputElement>('[aria-label="Add files to queue"]')!;
+  Object.defineProperty(input, 'files', { value: [original] });
+  await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })));
+  await act(async () => root.unmount()); root = createRoot(host);
+  await render();
+  const picker = host.querySelector<HTMLInputElement>('[aria-label="Reconnect original files"]')!;
+  const choose = async (files: File[]) => {
+    Object.defineProperty(picker, 'files', { value: files, configurable: true });
+    await act(async () => picker.dispatchEvent(new Event('change', { bubbles: true })));
+  };
+  await choose([original, new File(['xyz'], 'resume.txt')]);
+  expect(host.textContent).toContain('No original files matched');
+  expect(compress().disabled).toBe(true);
+  await choose([original, new File(['def'], 'unrelated.txt')]);
+  expect(host.textContent).toContain('Reconnected 1 original file.');
+  expect(host.querySelectorAll('[aria-label="Select resume.txt"]')).toHaveLength(1);
+  expect(host.querySelector('[aria-label="Select unrelated.txt"]')).toBeNull();
+  rejectJob = false;
+  await act(async () => compress().click());
+  expect(chunkWrites).toBe(1);
+  expect(jobAttempts).toBe(1);
 });
 
 it('restores an unstarted selection and requires the original before uploading', async () => {
@@ -360,8 +387,8 @@ it('merges unstarted selections with partial and completed uploads across recove
     await render();
     expect(cursors).toEqual(['', sources[99].id]);
     expect(host.textContent).toContain('Recovered 104 uploaded files.');
-    expect(host.textContent).toContain('Select the original files for 1 saved selection.');
-    expect(host.textContent).toContain('Select the original files to continue 1 upload.');
+    expect(host.textContent).toContain('2 files need the original before processing can continue.');
+    expect(host.querySelector('[aria-label="Reconnect original folder"][webkitdirectory]')).toBeTruthy();
     expect(host.querySelector('[aria-label="Select original file for partial.txt"]')).not.toBeNull();
     expect(host.querySelectorAll('.source-row').length).toBeLessThan(106);
     expect(compress().disabled).toBe(true);
