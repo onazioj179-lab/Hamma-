@@ -16,7 +16,7 @@ automatically full acceptance of a feature in the new directive.
 | Multiple projects | PARTIAL | Owner-scoped settings/empty projects and recovery inputs persisted; simultaneous browser submissions and broader controls pending |
 | Fair scheduling | PARTIAL | Existing project fairness tests; broad starvation/load tests pending |
 | Upload/processing overlap | PARTIAL | Independent conversions queue per upload; grouped archives wait |
-| Progressive downloads | PARTIAL | Verified individual jobs; bulk browser download behavior unverified |
+| Progressive downloads | PARTIAL | Streams up to 50 completed processor results as one ZIP. Bulk ZIP transfers restart from the beginning after interruption. |
 | Compression preview | NOT STARTED | No validated bounded estimate workflow |
 | Duplicate-aware processing | PARTIAL | Catalog identifies duplicates; output reuse pending |
 | Smart routes | NOT STARTED | No validated general DAG runner |
