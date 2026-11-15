@@ -120,6 +120,12 @@ can reserve up to half the configured storage after one output allowance
 upload chunks can be in flight for one workspace. Retrying a saved selection
 reuses its reservation and resumes from the committed offset.
 
+The processor also counts input bytes for active and paused jobs. Each workspace
+can queue twice its concurrent worker allowance in maximum-size jobs (16 GiB
+for a guest and 32 GiB for a free account at the default input limit). Repeated
+jobs on the same upload count individually. A completed or cancelled job
+releases its queue allowance.
+
 ## Integrity and privacy
 
 - Copies use 1 MiB buffers. Archives are read back and verified against source
