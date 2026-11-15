@@ -600,6 +600,57 @@ class ServerTests(unittest.TestCase):
         self.assertNotIn("outputFile", job)
         self.assertNotIn(str(self.service.store.root), json.dumps(job))
 
+    def test_result_bundle_streams_exact_outputs_with_distinct_names_and_owner_scope(self):
+        jobs = [
+            self.execute(self.job(self.upload(data, name=name)))
+            for name, data in [("Report.txt", b"first"), ("report.txt", b"second"),
+                               ("report (2).txt", b"third"), ("世界.txt", b"fourth")]
+        ]
+        ids = [job["id"] for job in jobs]
+        selection = {"jobIds": ids}
+        url = self.call("/jobs/bundle", selection, "POST")["download"]
+        unauthorized = build_opener(HTTPCookieProcessor(CookieJar()))
+        self.assert_status(410, lambda: self.call("/jobs/bundle", selection, "POST", client=unauthorized))
+        self.assert_status(403, lambda: self.call(url.removeprefix("/api/process"), client=unauthorized))
+        self.assert_status(403, lambda: self.call(url.replace(",".join(ids), ",".join(reversed(ids))).removeprefix("/api/process")))
+        with self.client.open(self.base.removesuffix("/api/process") + url, timeout=15) as response:
+            self.assertEqual(response.headers["Content-Type"], "application/zip")
+            self.assertEqual(response.headers["Transfer-Encoding"], "chunked")
+            self.assertIn("hamma-results.zip", response.headers["Content-Disposition"])
+            with zipfile.ZipFile(io.BytesIO(response.read())) as bundle:
+                self.assertEqual(bundle.namelist(), ["Report.zip", "report (3).zip", "report (2).zip", "世界.zip"])
+                self.assertIsNone(bundle.testzip())
+                for member, job in zip(bundle.infolist(), jobs, strict=True):
+                    self.assertEqual(member.compress_type, zipfile.ZIP_STORED)
+                    self.assertEqual(hashlib.sha256(bundle.read(member)).hexdigest(), job["sha256"])
+        self.assertEqual(len(self.call("/jobs")["jobs"]), len(jobs))
+
+    def test_result_bundle_rejects_invalid_selections_and_removal_after_preflight(self):
+        job = self.execute(self.job())
+        job_id = job["id"]
+        for ids in ([], [job_id, job_id], [None], ["wrong"], [f"{i:032x}" for i in range(51)]):
+            with self.subTest(ids=ids):
+                self.assert_status(400, lambda: self.call("/jobs/bundle", {"jobIds": ids}, "POST"))
+        selection = {"jobIds": [job_id]}
+        url = self.call("/jobs/bundle", selection, "POST")["download"].removeprefix("/api/process")
+        self.call(f"/jobs/{job_id}/files", method="DELETE")
+        self.assert_status(410, lambda: self.call(url))
+        self.assert_status(410, lambda: self.call("/jobs/bundle", selection, "POST"))
+
+    def test_result_bundle_closes_incomplete_transfer_on_storage_corruption(self):
+        job = self.execute(self.job())
+        owner, record = self.service.store.list(kind="job")[0]
+        path = self.service.store.folder(owner, job["id"]) / record["outputFile"]
+        original = path.read_bytes()
+        url = self.call("/jobs/bundle", {"jobIds": [job["id"]]}, "POST")["download"].removeprefix("/api/process")
+        path.write_bytes(bytes([original[0] ^ 1]) + original[1:])
+        with self.assertLogs("hamma.processor", level="ERROR"):
+            with self.assertRaises(IncompleteRead):
+                self.call(url, raw=True)
+        path.write_bytes(original)
+        with zipfile.ZipFile(io.BytesIO(self.call(url, raw=True))) as bundle:
+            self.assertEqual(bundle.read(job["outputName"]), original)
+
     def test_download_range_seeks_beyond_four_gib(self):
         job = self.job()
         owner = self.service.store.list(kind="job")[0][0]

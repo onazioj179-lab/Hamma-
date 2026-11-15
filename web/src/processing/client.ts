@@ -5,6 +5,7 @@ export interface Capability {
   projectZipProfiles?: boolean;
   projectRecovery?: boolean;
   outputReuse?: boolean;
+  resultBundleLimit?: number;
   recoverableUploads?: boolean;
   uploadBatch?: boolean;
   uploadAvailableBytes?: number;

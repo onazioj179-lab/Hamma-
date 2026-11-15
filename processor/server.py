@@ -54,6 +54,7 @@ from .pdf_pages import TARGET as PDF_PAGES, pdf_tools, render_pdf
 from .office_pdf import TARGET as OFFICE_PDF, INPUT_LIMIT as OFFICE_INPUT_LIMIT, SUFFIXES as OFFICE_SUFFIXES, convert_office, office_tools
 from .media_policy import H264_TARGET
 from .oauth import OAuth
+from .result_bundle import BUNDLE_NAME, MAX_RESULTS, ChunkedOutput, member_names, write_bundle
 
 LOG = logging.getLogger("hamma.processor")
 TERMINAL = ("completed", "failed", "cancelled", "interrupted")
@@ -215,6 +216,39 @@ class Store:
         with self.connect() as db:
             row = db.execute("SELECT data FROM records WHERE id=? AND owner=? AND kind=?", (record_id, owner, kind)).fetchone()
         return json.loads(row[0]) if row else None
+
+    def bundle_results(self, owner, ids):
+        placeholders = ",".join("?" for _ in ids)
+        with self.connect() as db:
+            rows = db.execute(f"""
+                SELECT id,json_extract(data,'$.outputFile') AS file,
+                       json_extract(data,'$.outputName') AS name,
+                       json_extract(data,'$.outputSize') AS size,
+                       json_extract(data,'$.sha256') AS sha256
+                FROM records WHERE owner=? AND kind='job' AND id IN ({placeholders})
+                    AND json_extract(data,'$.state')='completed'
+                    AND json_extract(data,'$.downloadAvailable')=1
+                    AND json_extract(data,'$.fileExpires')>?
+            """, (owner, *ids, time.time())).fetchall()
+        by_id = {row["id"]: row for row in rows}
+        if len(by_id) != len(ids):
+            raise HTTPError(410, "A selected result is unavailable. Refresh the list and try again.")
+        results = []
+        for job_id in ids:
+            row = by_id[job_id]
+            if not row["file"] or not row["name"] or row["size"] is None or not row["sha256"]:
+                raise HTTPError(410, "A selected result is unavailable. Refresh the list and try again.")
+            path = self.folder(owner, job_id) / row["file"]
+            try:
+                info = path.stat()
+            except FileNotFoundError:
+                info = None
+            if info is None or not stat.S_ISREG(info.st_mode) or info.st_size != row["size"]:
+                raise HTTPError(410, "A selected result is unavailable. Refresh the list and try again.")
+            results.append((path, row))
+        # Validate every member name before committing to a download response.
+        names = member_names([row["name"] for _, row in results])
+        return [(path, row, name) for (path, row), name in zip(results, names, strict=True)]
 
     def iter_job_inputs(self, owner, record):
         if record.get("inputMode") != "upload-pages":
@@ -818,6 +852,7 @@ class Service:
         self.running = {}
         self.upload_chunks = Counter()
         self.admitting_owners = set()
+        self.downloading_bundles = set()
         self.restart_until = 0
         self.waiting_for_memory = False
         self.stop = threading.Event()
@@ -1729,7 +1764,7 @@ def handler(service):
                     upload_available = service.upload_capacity(self.owner, self.plan)
                 return self.send(200, {"uploadBatch": True, "uploadAvailableBytes": upload_available,
                                        "liveJobPolling": True, "groupedWorkflows": True, "projectRecovery": True,
-                                       "outputReuse": True, "projectZipProfiles": True, "recoverableUploads": True,
+                                       "resultBundleLimit": MAX_RESULTS, "outputReuse": True, "projectZipProfiles": True, "recoverableUploads": True,
                                        "projectSelections": True, "pagedJobSelections": True, "jobRevisions": True,
                                        "draftScope": hashlib.sha256(("hamma-draft:" + self.owner).encode()).hexdigest(),
                                        "archives": archive_formats(), "nativeEngine": capability(), "singleFileArchives": single_file_archives(),
@@ -2151,6 +2186,19 @@ def handler(service):
                     service.store.trim_history(self.owner, limit=self.plan['historyRecords'])
                 LOG.info("Job queued: %s %s", record["id"], operation)
                 return self.send(202, service.public(self.owner, record))
+            if path == "/api/process/jobs/bundle":
+                if method == "POST":
+                    ids = self.bundle_ids(self.json_body(limit=4096).get("jobIds"))
+                    with service.lock:
+                        if self.owner in service.downloading_bundles:
+                            raise HTTPError(429, "A ZIP download is already running for this workspace")
+                    service.store.bundle_results(self.owner, ids)
+                    expires = int(time.time()) + 300
+                    selection = ",".join(ids)
+                    token = service.sign(f"bundle:{self.owner}:{expires}:{selection}")
+                    return self.send(200, {"download": f"{path}?jobs={selection}&expires={expires}&token={token}"})
+                if method == "GET":
+                    return self.download_bundle(parse_qs(url.query))
             if path == "/api/process/jobs/live" and method == "GET":
                 now = time.time()
                 revision, jobs = service.store.live_jobs(self.owner, now)
@@ -2284,6 +2332,47 @@ def handler(service):
                         shutil.copyfileobj(stream, self.wfile, BLOCK)
                 return
             raise HTTPError(404, "Not found")
+
+        @staticmethod
+        def bundle_ids(ids):
+            if (not isinstance(ids, list) or not 1 <= len(ids) <= MAX_RESULTS
+                    or any(not isinstance(job_id, str) or not re.fullmatch(r"[a-f0-9]{32}", job_id) for job_id in ids)
+                    or len(set(ids)) != len(ids)):
+                raise HTTPError(400, f"Choose up to {MAX_RESULTS} distinct results for one ZIP.")
+            return ids
+
+        def download_bundle(self, query):
+            selection = query.get("jobs", [""])[0]
+            ids = self.bundle_ids(selection.split(","))
+            expires = query.get("expires", [""])[0]
+            token = query.get("token", [""])[0]
+            if (not re.fullmatch(r"[0-9]{1,12}", expires) or int(expires) <= time.time()
+                    or not re.fullmatch(r"[a-f0-9]{64}", token)
+                    or not hmac.compare_digest(service.sign(f"bundle:{self.owner}:{expires}:{selection}"), token)):
+                raise HTTPError(403, "Download link expired or unavailable. Prepare the ZIP again.")
+            if self.request_version != "HTTP/1.1":
+                raise HTTPError(505, "A ZIP download requires HTTP/1.1.")
+            with service.lock:
+                if self.owner in service.downloading_bundles:
+                    raise HTTPError(429, "A ZIP download is already running for this workspace")
+                service.downloading_bundles.add(self.owner)
+            try:
+                results = service.store.bundle_results(self.owner, ids)
+                self.protocol_version = "HTTP/1.1"
+                self.send_response(200)
+                self.headers_common()
+                self.send_header("Connection", "close")
+                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Disposition", f'attachment; filename="{BUNDLE_NAME}"')
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                output = ChunkedOutput(self.wfile)
+                write_bundle(output, results)
+                # A failed stream closes without this terminator so the browser marks it incomplete.
+                output.finish()
+            finally:
+                with service.lock:
+                    service.downloading_bundles.discard(self.owner)
 
         def download(self, path, name, checksum):
             if not path.is_file():

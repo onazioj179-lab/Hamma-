@@ -30,6 +30,46 @@ const select = async (files: File[]) => {
   await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })));
 };
 
+it('downloads the selected processor results through one ZIP link and lets preparation be retried', async () => {
+  const initial = fetchMock.getMockImplementation()!;
+  const jobs = ['first', 'second', 'third'].map((name, index) => ({
+    id: String(index + 1).padStart(32, '0'), name: `${name}.txt`, outputName: `${name}.zip`,
+    state: 'completed', operation: 'compress', target: 'zip', download: `/result/${name}`,
+    downloadAvailable: true, created: index, inputSize: 12, outputSize: 10,
+  }));
+  let unavailable = true;
+  fetchMock.mockImplementation(async (url: string) => {
+    if (url.endsWith('/capabilities')) return { ok: true, json: async () => ({ ...caps, resultBundleLimit: 50 }) };
+    if (url.includes('/jobs?')) return { ok: true, json: async () => ({ jobs, total: jobs.length }) };
+    if (url.endsWith('/jobs/bundle')) return unavailable
+      ? { ok: false, status: 410, json: async () => ({ error: 'A selected result is unavailable.' }) }
+      : { ok: true, json: async () => ({ download: '/api/process/jobs/bundle?token=signed' }) };
+    return initial(url);
+  });
+  const downloads: [string | null, string][] = [];
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+    downloads.push([this.getAttribute('href'), this.download]);
+  });
+
+  await render('history');
+  expect(button('Download page ZIP (3)')).toBeTruthy();
+  await act(async () => {
+    host.querySelector<HTMLInputElement>('[aria-label="Select job first.txt"]')!.click();
+    host.querySelector<HTMLInputElement>('[aria-label="Select job second.txt"]')!.click();
+  });
+  await act(async () => button('Download selected ZIP (2)').click());
+  expect(host.querySelector('[role=alert]')?.textContent).toContain('A selected result is unavailable.');
+  expect(downloads).toEqual([]);
+
+  unavailable = false;
+  await act(async () => button('Download selected ZIP (2)').click());
+  const attempts = fetchMock.mock.calls.filter(([url]) => url === '/api/process/jobs/bundle');
+  expect(attempts.map(([, init]) => JSON.parse(init.body))).toEqual([
+    { jobIds: [jobs[1].id, jobs[0].id] }, { jobIds: [jobs[1].id, jobs[0].id] },
+  ]);
+  expect(downloads).toEqual([['/api/process/jobs/bundle?token=signed', 'hamma-results.zip']]);
+});
+
 it('rejects an oversized selection before sending upload or inspection bytes', async () => {
   const initial = fetchMock.getMockImplementation()!;
   fetchMock.mockImplementation(async (url: string) => url.endsWith('/capabilities')

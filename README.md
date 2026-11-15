@@ -32,6 +32,11 @@ its history row; older SPK records contain metadata only. Overview includes
 retained processor jobs and browser SPK records, with measured compression savings.
 Each visitor has a separate session and history.
 
+In **Files & History**, choose **Download page ZIP** for the available processor
+results on the current page, or select individual results and choose
+**Download selected ZIP**. Each ZIP holds up to 50 outputs. Browser SPK results
+have their own download buttons.
+
 To use a retained processor result in another operation, open **Files & History**
 and choose the **Use in workspace** plus button beside its download. HAMMA adds
 the result to the current project without transferring it through the browser.
