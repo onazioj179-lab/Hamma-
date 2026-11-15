@@ -2,6 +2,18 @@
 
 ## Remaining web release acceptance
 
+The [5,000-file Chromium run](../../validation/browser-5000-files-windows.json)
+selected and uploaded 50,388,992 bytes through the Windows web workspace,
+paused the first upload, resumed at 8 MiB, then independently verified every
+downloaded ZIP member and all 50 manifest pages. A second workspace verified its
+small ZIP in 10.40 seconds while the bulk upload was still active. Total time
+from selection through verification was 1,131.55 seconds. Sampled Chromium
+JavaScript heap reached 66,337,924 bytes. The run used a disposable loopback
+processor configured for 100,000 API requests per minute and excludes native
+browser memory and whole-process RSS. A near-limit browser transfer under the
+default rate policy remains open.
+
+
 The browser opens single-volume legacy ZipCrypto archives. A libarchive
 fixture verifies exact bytes in the unlocked download and rejects a wrong
 password and modified ciphertext. ZIP inspection shows bounded file-comment

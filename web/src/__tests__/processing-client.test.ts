@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { randomId, requestId, upload, request, type Source } from '../processing/client';
+import { randomId, requestId, upload, request, retryJobRequest, stageJobSelection, type Source } from '../processing/client';
 
 afterEach(() => vi.unstubAllGlobals());
 const response = (value: unknown, ok = true) => ({ ok, json: async () => value });
@@ -140,4 +140,30 @@ it('cancels retry backoff before issuing another upload request', async () => {
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
   } finally { vi.useRealTimers(); }
+});
+
+
+it('replays a lost selection-page response with the same ID, content and offset', async () => {
+  const fetch = vi.fn().mockResolvedValueOnce(response({ offset: 100 }))
+    .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    .mockResolvedValueOnce(response({ offset: 101 }));
+  vi.stubGlobal('fetch', fetch);
+  const uploads = Array.from({ length: 101 }, (_, index) => index.toString(16).padStart(32, '0'));
+  const staged = await stageJobSelection('default', uploads, new AbortController().signal);
+  expect(staged.selectionCount).toBe(101);
+  expect(fetch).toHaveBeenCalledTimes(3);
+  expect(fetch.mock.calls[1][0]).toBe('/api/process/job-selections/' + staged.selectionId);
+  expect(fetch.mock.calls[2][0]).toBe(fetch.mock.calls[1][0]);
+  expect(fetch.mock.calls[2][1].body).toBe(fetch.mock.calls[1][1].body);
+  expect(JSON.parse(fetch.mock.calls[2][1].body).offset).toBe(100);
+});
+
+it('honors cancellation while waiting to replay a submission', async () => {
+  const send = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+  const controller = new AbortController();
+  const pending = retryJobRequest(send, controller.signal);
+  await Promise.resolve();
+  controller.abort();
+  await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  expect(send).toHaveBeenCalledOnce();
 });

@@ -15,7 +15,7 @@ import { SelectField } from '../ui/SelectField';
 import { ConfirmAction, type ConfirmationRequest } from '../ui/ConfirmAction';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowDownToLine, ArrowRightLeft, Check, ChevronLeft, ChevronRight, Download, File, FileArchive, FolderPlus, History, Loader2, Pause, Play, Plus, RefreshCw, Search, ShieldCheck, Trash2, X } from 'lucide-react';
-import { activeJob, jsonRequest, reserveUploadBatch, stageJobSelection, ProcessorError, request, requestId, randomId, upload, type Capability, type Job, type Retention, type Source } from '../../processing/client';
+import { activeJob, jsonRequest, reserveUploadBatch, retryJobRequest, stageJobSelection, ProcessorError, request, requestId, randomId, upload, type Capability, type Job, type Retention, type Source } from '../../processing/client';
 import { formatFileSize } from '../../utils/fileHelpers';
 import { accountChanging } from '../../processing/account';
 import { directoryPicker, droppedSources, readFolder } from '../../processing/folders';
@@ -634,22 +634,25 @@ export function UniversalWorkspace({ visible, screen, onHistory, onWorkspace, on
             : compression ? [generation, projectId, group.sources.map(source => source.id), group.operation, group.target, ...Object.values(profiles), ...(archiveComment ? [['zipComment', archiveComment]] : [])]
             : [generation, projectId, sourcesByUpload.get(uploads[0]), group.operation, group.target, nested, conversionOptions, ...(zipIndexes ? [zipIndexes] : []), ...Object.values(splitOptions)];
           const pagedSelection = capability.pagedJobSelections && uploads.length > 100;
-          const jobInputs = pagedSelection
-            ? await stageJobSelection(projectId, uploads, controller.signal)
-            : { uploads };
           if (pagedSelection) {
             setUploadStatus(null);
             setCheckingSelection(true);
           }
           try {
-            await jsonRequest('/jobs', { ...(projectId === 'default' ? {} : { projectId }), ...jobInputs, operation: group.operation,
+            const jobInputs = pagedSelection
+              ? await stageJobSelection(projectId, uploads, controller.signal)
+              : { uploads };
+            const body = { ...(projectId === 'default' ? {} : { projectId }), ...jobInputs, operation: group.operation,
               target: group.target, ...(!compression ? { recursive: nested } : {}), ...conversionOptions, ...profiles, ...selection, ...splitOptions,
               ...(archiveComment ? { zipComment: archiveComment } : {}),
-              ...(capability.projectRecovery ? { recoverable: true } : { requestId: await requestId(identity) }) }, 'POST', {
+              ...(capability.projectRecovery ? { recoverable: true } : { requestId: await requestId(identity) }) };
+            const send = () => jsonRequest('/jobs', body, 'POST', {
               signal: controller.signal,
               // Hashing a full selection can exceed the normal request timeout.
               timeoutMs: pagedSelection ? Math.max(30000, Math.min(900000, capability.limits.seconds * 1000)) : undefined,
             });
+            if (pagedSelection) await retryJobRequest(send, controller.signal);
+            else await send();
           } finally {
             if (pagedSelection) setCheckingSelection(false);
           }
